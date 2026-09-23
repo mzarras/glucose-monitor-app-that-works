@@ -16,13 +16,13 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 
 | WS | Agent | Branch / worktree | State | Review | Merged to `integration` |
 |---|---|---|---|---|---|
-| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | dispatched | — | — |
-| WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (4195211, 71b6c1a): 77 + 35 tests, 98.2% / 96.7% cov; applying D25 | pending | — |
-| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (9e7cc08): 134 tests, 99.7% cov, 90 d in 4.9 ms release; fixing review items | **PASS** (0 blockers; M1 biased count/streak deltas, M2 flaky perf gate → fixing) | — |
-| WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | dispatched | — | — |
-| WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | dispatched | — | — |
-| WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (346d4e2): 46 tests, 97.8% cov; fixing review minors | **PASS** (0 blockers; M1 heartbeat → Phase 2 must-do; M2 decided D21) | — |
-| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (8e4889c): 96 tests, 90.3% cov | in review | — |
+| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (6da2eae): 106 tests, 99% cov Messages/; fixing review | **FAIL** (B1 unsolicited auth status accepted; B2 `currentSession` vs D28) → fixing | — |
+| WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (7aa1ef6): 83 + 38 tests; fixing M1 (D33) + minors | **PASS** (0 blockers) | — |
+| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (a332581): 146 tests, 99.75% cov; fixing N1 (today's lows during an overnight low) | **PASS** (delta PASS) | — |
+| WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (d1f946c): 161 tests, 99.6% cov; fixing review + AlarmKit (D26) | **FAIL** (B1 clock rollback hides urgent low / extends snooze) → fixing | — |
+| WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | done (3287a14): 61 + 52 tests, 132 previews, 26 screenshots; fixing review | **FAIL** (B1 hero truncates / LOW disappears at accessibility sizes; M1 future-dated reading current; M2 Now chart not scrubbable; M3 DEBUG banner hidden in onboarding) → fixing | — |
+| WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (cbf5619): 62 tests, 97.8% cov | **PASS** (after 2 fix rounds) | **yes** — 9305a72; gates build+tests+safety (S2–S6) PASS on merged result |
+| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (8e4889c): 96 tests, 90.3% cov; fixing review | **FAIL** (B1 Nightscout alarms silent at LOW → D29 disclosure; M1 Clarity order) → fixing | — |
 
 ### Merge flow
 
@@ -65,6 +65,8 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D29 | **Nightscout LOW = sgv 39** (displays "LOW"). Nightscout's own web/push alarms ignore 39 and auto-send "All Clear" (cgm-remote-monitor 15.0.8 `simplealarms.js:21`, `bgnow.js:96`, `notifications.js:52,151-152`); `docs/following.md` states this plainly and makes LoopFollow (alarms on 39) the required follower app for anyone relying on alarms. HIGH = 401. | Michael, 2026-09-23 (WS7 review B1). |
 | D30 | **Dexcom Share LOW/HIGH = 39/401** (not withheld), to be verified with a real follower in §11 step 4a (Dexcom Follow shows LOW/HIGH and alarms); revert to withholding if it doesn't. | Michael, 2026-09-23 (WS7 evidence: LoopKit's Share reader treats < 40 / > 400 as below/above range). |
 | D31 | G7 raw glucose 0, 0x0FFF and 0xFFFE are "no value" (withheld, logged, surfaced) — never LOW/HIGH; other raw < 40 → LOW, > 400 → HIGH (G7SensorKit mapping). No real LOW/HIGH G7 packet exists in any reference: capturing one is a §11 item before relying on HIGH → 401 in closed loop. | WS1 review M1: a misread packet would otherwise become HIGH and reach Trio as 401. |
+| D32 | Design tokens: light `high` #C58A2B → **#B07B26** (the §7.1 value is 2.64:1 on the background, fails 3:1) and `veryHigh` #8A5A12 → **#754D0F** (keeps the step between them); dark values unchanged; dark accents #4BAA7E, #D57B53, #6A92C8, #EDE8DE. Recorded in `docs/design-tokens.md`. | §7.1 requires WCAG AA; WS5's contrast test, accepted by the WS5 reviewer. |
+| D33 | Stores also reject (whole batch) non-finite trend rates (`.nonFiniteTrendRate`, never rewritten to nil) and readings dated later than the store clock + `LiveReadingGate.futureTolerance` (`.futureDated`); `insert` returns readings exactly as passed. Importers skip future-dated rows (counted). | WS2 review M1: rewriting NaN → nil let a parse-fault reading pass the gate downstream; reviewer's contract note on future-dated rows becoming the current value. |
 
 ## Discrepancies with HANDOFF (resolved)
 
@@ -93,6 +95,8 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Signal loss must be derived from reading age, never from `SensorState` (G7Kit suppresses connecting/authenticating after the first sensor state; WS1 review minor 8).
 - Hosted (simulator) Keychain round-trip tests for G7Kit and NightscoutKit credential stores (WS1 review M3, WS7): accessibility `AfterFirstUnlock`, not synchronizable.
 - Trio heartbeat: WS1 assessed it as low risk (Trio subscribes to Receive_Authentication only, never writes); implement per `docs/trio-bridge.md` "Heartbeat wiring".
+
+- TrioBridge follow-ups (WS6 re-review r1/r2, minor): doc note that after a relaunch a leftover ended-session payload is replaced only by the next write; a named test for a sensor stopped early before grace end.
 
 ## §11 on-device checklist additions (collected from reviews; goes into docs/setup.md in Phase 3)
 
