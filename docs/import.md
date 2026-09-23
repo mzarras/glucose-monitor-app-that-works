@@ -119,13 +119,19 @@ either side).
      (E or L) within that tolerance is used; if neither is, the row is rejected
      (`rejectedAmbiguousLocalTime`). File order plays no part, so an export that lists the two
      passes interleaved is still placed correctly.
-  2. **Only without transmitter-time evidence** (no transmitter time, or no comparable known row):
-     chronological file order, with P = the nearest earlier known instant — no earlier row → E;
-     E not before P → E (E equal to P means the same reading listed twice: a duplicate, not a new
-     reading an hour away, S1); L not before P → L (second pass); otherwise rejected as out of
-     order. Known limitation of this fallback: with a gap covering the whole first pass, a
-     second-pass reading lands an hour early.
+  2. **A row with a transmitter time but no comparable known row** (e.g. a new sensor whose only
+     rows sit inside the repeated hour after a data gap) is rejected: its clock cannot be tied to
+     an instant, and file order could place it an hour off.
+  3. **Only rows with no transmitter time at all** use chronological file order, with P = the
+     nearest earlier known instant: no earlier row → rejected; E and L both not before P → E if
+     E is at most 10 min after P (continuous 5-minute data; E equal to P is the same reading
+     listed twice — a duplicate, not a new reading an hour away, S1), otherwise rejected (across
+     a gap either pass fits); only L not before P → L (second pass); neither → rejected (out of
+     order).
 
+  No instant is assumed: a placed row matches the transmitter clock, or is the only candidate
+  consistent with chronological order, or continues the sequence within 10 min. Everything else
+  is rejected and counted (`rejectedAmbiguousLocalTime`).
   So two readings at the same wall-clock time, one per pass, get two instants and two ids.
 
 ## Resume and idempotency

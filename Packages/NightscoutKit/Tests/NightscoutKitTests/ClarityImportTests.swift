@@ -102,13 +102,17 @@ final class ClarityImportTests: XCTestCase {
         XCTAssertEqual(atOneThirty.map(\.date), [Fixtures.date("2025-11-02T05:30:00Z"), Fixtures.date("2025-11-02T06:30:00Z")])
         XCTAssertEqual(Set(atOneThirty.map(\.id)).count, 2)
 
-        // The same with nothing between the two passes: the transmitter clock (3600 s apart) decides.
+        // The same with nothing between the two passes: the transmitter clock decides, measured
+        // from the 00:55 row (86400 s) — 01:30 EDT at +2100 s, 01:30 EST at +5700 s.
         let adjacent = try ClarityExportParser.parse(export([
+            ("2025-11-02T00:55:00", "117", "86400"),
             ("2025-11-02T01:30:00", "108", "88500"),
             ("2025-11-02T01:30:00", "99", "92100"),
         ]), timeZone: Self.newYork, now: ClarityImportTests.now)
-        XCTAssertEqual(adjacent.readings.map(\.date), [Fixtures.date("2025-11-02T05:30:00Z"), Fixtures.date("2025-11-02T06:30:00Z")])
-        XCTAssertEqual(Set(adjacent.readings.map(\.id)).count, 2)
+        XCTAssertEqual(adjacent.readings.map(\.date), [
+            Fixtures.date("2025-11-02T04:55:00Z"), Fixtures.date("2025-11-02T05:30:00Z"), Fixtures.date("2025-11-02T06:30:00Z"),
+        ])
+        XCTAssertEqual(Set(adjacent.readings.map(\.id)).count, 3)
     }
 
     /// Rows with an explicit transmitter ID (timestamp, value, transmitter time, transmitter ID).
@@ -168,26 +172,64 @@ final class ClarityImportTests: XCTestCase {
         XCTAssertEqual(result.rejectedAmbiguousLocalTime, 1)
     }
 
-    func test_S3_clarityTransmitterTimeFromAnotherTransmitterIsNotEvidence() throws {
-        // A different transmitter's clock cannot be compared; file order applies (second pass here).
+    func test_S3_clarityTransmitterTimeWithoutComparableAnchorIsRejected() throws {
+        // Reviewer n2: the old sensor (SYNTH1) stops at 00:55 EDT; a new sensor (OTHER2) starts
+        // during the second pass (01:00/01:05 EST = 06:00Z/06:05Z) and its only rows sit inside
+        // the repeated hour. File order would place them at 05:00Z/05:05Z — five minutes after the
+        // previous row, so no gap check helps — an hour early. Its clock cannot be tied to an
+        // instant (SYNTH1's clock is not comparable), so the rows are rejected and counted.
         let result = try ClarityExportParser.parse(export(rows: [
-            ("2025-11-02T01:55:00", "104", "90000", "SYNTH1"),
+            ("2025-11-02T00:55:00", "104", "86400", "SYNTH1"),
             ("2025-11-02T01:00:00", "103", "300", "OTHER2"),
+            ("2025-11-02T01:05:00", "101", "600", "OTHER2"),
         ]), timeZone: Self.newYork, now: ClarityImportTests.now)
-        XCTAssertEqual(result.readings.map(\.date), [Fixtures.date("2025-11-02T05:55:00Z"), Fixtures.date("2025-11-02T06:00:00Z")])
+        XCTAssertEqual(result.readings.map(\.date), [Fixtures.date("2025-11-02T04:55:00Z")])
+        XCTAssertEqual(result.rejectedAmbiguousLocalTime, 2)
+    }
+
+    func test_S3_clarityFileOrderWithoutTransmitterTimeNeedsContinuousData() throws {
+        // No transmitter times at all: 5-minute rows through both passes are placed by file order.
+        var rows: [(String, String, String)] = []
+        for minute in stride(from: 50, through: 55, by: 5) { rows.append((String(format: "2025-11-02T00:%02d:00", minute), "120", "")) }
+        for minute in stride(from: 0, through: 55, by: 5) { rows.append((String(format: "2025-11-02T01:%02d:00", minute), "121", "")) }  // EDT
+        for minute in stride(from: 0, through: 10, by: 5) { rows.append((String(format: "2025-11-02T01:%02d:00", minute), "122", "")) }  // EST
+        let result = try ClarityExportParser.parse(export(rows), timeZone: Self.newYork, now: ClarityImportTests.now)
+        let expected = stride(from: 0, to: 17 * 300, by: 300).map { Fixtures.date("2025-11-02T04:50:00Z").addingTimeInterval(TimeInterval($0)) }
+        XCTAssertEqual(result.readings.map(\.date), expected, "04:50Z … 05:55Z, then 06:00Z … 06:10Z")
+        XCTAssertEqual(result.rejectedAmbiguousLocalTime, 0)
+
+        // Across a data gap both passes fit the order: rejected, not guessed.
+        let gap = try ClarityExportParser.parse(export([
+            ("2025-11-02T00:30:00", "120", ""),
+            ("2025-11-02T01:40:00", "121", ""),
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
+        XCTAssertEqual(gap.readings.map(\.date), [Fixtures.date("2025-11-02T04:30:00Z")])
+        XCTAssertEqual(gap.rejectedAmbiguousLocalTime, 1)
+
+        // With no earlier row there is nothing to order against: rejected.
+        let first = try ClarityExportParser.parse(export([("2025-11-02T01:40:00", "121", "")]), timeZone: Self.newYork, now: ClarityImportTests.now)
+        XCTAssertTrue(first.readings.isEmpty)
+        XCTAssertEqual(first.rejectedAmbiguousLocalTime, 1)
     }
 
     func test_S3_clarityRepeatedRowWithoutEvidenceIsADuplicateNotANewReading() throws {
-        // Same local time, same transmitter time (or none): one reading listed twice. It must not be
-        // turned into a second reading an hour later (S1).
-        for transmitterTimes in [("88500", "88500"), ("", "")] {
-            let result = try ClarityExportParser.parse(export([
-                ("2025-11-02T01:30:00", "108", transmitterTimes.0),
-                ("2025-11-02T01:30:00", "108", transmitterTimes.1),
-            ]), timeZone: Self.newYork, now: ClarityImportTests.now)
-            XCTAssertEqual(result.readings.map(\.date), [Fixtures.date("2025-11-02T05:30:00Z")])
-            XCTAssertEqual(result.duplicateRows, 1)
-        }
+        // One reading listed twice must not become a second reading an hour later (S1).
+        // With transmitter times: same clock value → same instant → duplicate id.
+        let withClock = try ClarityExportParser.parse(export([
+            ("2025-11-02T00:55:00", "117", "86400"),
+            ("2025-11-02T01:30:00", "108", "88500"),
+            ("2025-11-02T01:30:00", "108", "88500"),
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
+        XCTAssertEqual(withClock.readings.map(\.date), [Fixtures.date("2025-11-02T04:55:00Z"), Fixtures.date("2025-11-02T05:30:00Z")])
+        XCTAssertEqual(withClock.duplicateRows, 1)
+        // Without transmitter times: the repeat continues the sequence at the same instant.
+        let withoutClock = try ClarityExportParser.parse(export([
+            ("2025-11-02T00:55:00", "117", ""),
+            ("2025-11-02T01:00:00", "108", ""),
+            ("2025-11-02T01:00:00", "108", ""),
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
+        XCTAssertEqual(withoutClock.readings.map(\.date), [Fixtures.date("2025-11-02T04:55:00Z"), Fixtures.date("2025-11-02T05:00:00Z")])
+        XCTAssertEqual(withoutClock.duplicateRows, 1)
     }
 
     func test_S3_clarityOutOfOrderAmbiguousTimeIsRejected() throws {
@@ -212,13 +254,14 @@ final class ClarityImportTests: XCTestCase {
     }
 
     func test_S3_clarityDSTInAnotherTimeZone() throws {
-        // Europe/London 2025-10-26: 01:00–01:59 happens as BST (UTC+1) then GMT (UTC+0).
+        // Europe/London 2025-10-26: 01:00–01:59 happens as BST (UTC+1) then GMT (UTC+0). Transmitter
+        // times (seconds from the 00:55 row) place the ambiguous rows.
         let london = TimeZone(identifier: "Europe/London")!
         let result = try ClarityExportParser.parse(export([
-            ("2025-10-26T00:55:00", "100", ""),
-            ("2025-10-26T01:30:00", "101", ""),
-            ("2025-10-26T01:10:00", "102", ""),
-            ("2025-10-26T02:00:00", "103", ""),
+            ("2025-10-26T00:55:00", "100", "1000"),
+            ("2025-10-26T01:30:00", "101", "3100"),   // +35 min → 00:30Z (BST)
+            ("2025-10-26T01:10:00", "102", "5500"),   // +75 min → 01:10Z (GMT)
+            ("2025-10-26T02:00:00", "103", "8500"),
         ]), timeZone: london, now: ClarityImportTests.now)
         XCTAssertEqual(result.readings.map(\.date), [
             Fixtures.date("2025-10-25T23:55:00Z"), Fixtures.date("2025-10-26T00:30:00Z"),

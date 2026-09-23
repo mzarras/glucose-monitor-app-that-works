@@ -2,8 +2,8 @@
 
 Michael is replacing the Dexcom app on his phone with **Sensor**, an open-source app that talks to
 his Dexcom G7 directly. When the Dexcom app goes, Dexcom stops receiving his readings, so Sensor
-uploads them itself. You can follow in any of the three ways below; nothing changes on your side
-unless you want it to.
+uploads them itself. You can follow in any of the three ways below. **If you rely on alarms for
+lows, you must switch to LoopFollow (section 2).**
 
 ## 1. Nightscout website (to look, not to be alarmed)
 
