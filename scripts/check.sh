@@ -39,6 +39,13 @@ SIM_DD="$ROOT/.derived/sim"
 SPM_CHECKOUTS="$ROOT/.derived/SourcePackages"
 mkdir -p "$LOGS"
 
+# Fresh build trees are ~0.5–1 GB per run; keep only the logs unless asked (KEEP_BUILD_DIRS=1).
+cleanup_build_dirs() {
+    [ "${KEEP_BUILD_DIRS:-}" = "1" ] && return
+    rm -rf "$BUILD_DD" "$LOGS"/spm-*
+}
+trap cleanup_build_dirs EXIT
+
 FAILURES=0
 SUMMARY=""
 
@@ -280,14 +287,27 @@ gate_safety() {
         pass "S6: validateAllowingReplay only in GlucoseCore, AlertEngine, App"
     fi
 
-    # S6: non-test code outside ReplayKit that constructs .replay/.mock readings must be DEBUG-only.
+    # S6: non-test code outside ReplayKit that constructs .replay/.mock readings must sit inside an
+    # `#if DEBUG` block (tracked per line through nested #if/#else/#endif; an #else branch of
+    # `#if DEBUG` is not guarded).
+    files="$(grep -rlE 'source: *\.(replay|mock)' Packages/*/Sources App/Sources Widgets/Sources 2>/dev/null \
+        | grep -vE '^Packages/(ReplayKit|GlucoseCore)/Sources/')"
     unguarded=""
-    for f in $(grep -rlE 'source: *\.(replay|mock)' Packages/*/Sources App/Sources Widgets/Sources 2>/dev/null \
-        | grep -vE '^Packages/(ReplayKit|GlucoseCore)/Sources/'); do
-        grep -q '#if DEBUG' "$f" || unguarded="$unguarded $f"
-    done
+    if [ -n "$files" ]; then
+        unguarded="$(awk '
+            FNR == 1 { depth = 0 }
+            /^[[:space:]]*#if[[:space:]]+DEBUG[[:space:]]*($|\/\/|&&)/ { depth++; st[depth] = 1; next }
+            /^[[:space:]]*#if/                  { depth++; st[depth] = 0; next }
+            /^[[:space:]]*#(else|elseif)/       { if (depth > 0) st[depth] = 0; next }
+            /^[[:space:]]*#endif/               { if (depth > 0) depth--; next }
+            /source:[[:space:]]*\.(replay|mock)/ {
+                guarded = 0
+                for (i = 1; i <= depth; i++) if (st[i] == 1) guarded = 1
+                if (!guarded) printf "%s:%d ", FILENAME, FNR
+            }' $files)"
+    fi
     if [ -n "$unguarded" ]; then
-        fail "S6: .replay/.mock readings constructed outside #if DEBUG in:$unguarded"
+        fail "S6: .replay/.mock readings constructed outside #if DEBUG at: $unguarded"
     else
         pass "S6: .replay/.mock construction outside ReplayKit is DEBUG-guarded"
     fi

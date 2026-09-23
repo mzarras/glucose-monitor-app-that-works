@@ -3,6 +3,14 @@
 import Foundation
 
 /// Persistent reading storage as seen by the rest of the app.
+///
+/// Two roles, never mixed (S1, S6):
+/// - **production** — the app's database. Stores only `.sensor` and `.imported` readings. `insert`
+///   throws `GlucoseReadingRepositoryError.sourceNotAllowed` for `.replay`/`.mock`, and opening a
+///   production store deletes any `.replay`/`.mock` rows (defence against a DEBUG build having
+///   written them to the same App Group database).
+/// - **replay** (DEBUG only) — a separate in-memory store or separate file used while a ReplayKit
+///   source runs. Stores only `.replay`/`.mock` readings and throws for anything else.
 public protocol GlucoseReadingRepository: Sendable {
     /// Insert-or-ignore keyed by `id` (S3 dedupe): inserting the same readings again changes nothing.
     ///
@@ -23,12 +31,18 @@ public protocol GlucoseReadingRepository: Sendable {
     /// Readings with `start <= date < end`, ascending by date.
     func readings(from start: Date, to end: Date) async throws -> [GlucoseReading]
 
-    /// The most recent reading by `date` whose source is not `.imported` — i.e. `.sensor` (or, in a
-    /// DEBUG replay database, `.replay`/`.mock`). The current value, its age, the delta, staleness
-    /// (S5 missed readings) and the widget snapshot all use this, never an imported reading
-    /// (S6: imported history is for charts and stats only).
+    /// The most recent live reading by `date`: the latest `.sensor` reading in a production store,
+    /// or the latest `.replay`/`.mock` reading in a DEBUG replay store — never `.imported`.
+    /// The current value, its age, the delta, staleness (S5 missed readings) and the widget
+    /// snapshot all use this (S6: imported history is for charts and stats only).
     func latestLiveReading() async throws -> GlucoseReading?
 
     /// A new stream per call. Yields once after every committed write that changed stored rows.
     func changes() -> AsyncStream<Void>
+}
+
+/// Errors every repository implementation uses for contract violations.
+public enum GlucoseReadingRepositoryError: Error, Sendable, Equatable {
+    /// The reading's source is not allowed in this store's role (see `GlucoseReadingRepository`).
+    case sourceNotAllowed(ReadingSource)
 }
