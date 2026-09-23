@@ -18,7 +18,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 |---|---|---|---|---|---|
 | WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | dispatched | — | — |
 | WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | dispatched | — | — |
-| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | dispatched | — | — |
+| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (9e7cc08): 134 tests, 99.7% cov, 90 d in 4.9 ms release | in review | — |
 | WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | dispatched | — | — |
 | WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | dispatched | — | — |
 | WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (346d4e2): 46 tests, 97.8% cov | in review | — |
@@ -58,6 +58,10 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D22 | No Trio patch. Michael selects Trio's existing **xDrip4iOS** CGM source. "Trio not consuming for 15 min" is not detectable (Trio writes nothing to the group) and is not built; bridge write failures still alert. Single upload: Trio → Nightscout → "Allow Uploading" ON, "Upload Glucose" OFF (this also stops Trio uploading manual fingersticks). | Michael, 2026-09-23 (WS6 findings, `docs/trio-bridge.md`). |
 
 ## Discrepancies with HANDOFF (resolved)
+
+- Level-2 hypo event end (WS3): HANDOFF §6 ends both levels after ≥ 15 min ≥ 70; some consensus-derived sources end level 2 at ≥ 54. Implemented per HANDOFF; one-constant change if Michael prefers the other (pending reviewer's citation check).
+- CV target: HANDOFF "≤ 36%" kept (consensus tables print "<36%"; differs only at exactly 36.0).
+- Trends "prior period" = the same number of calendar days before the current period (1 D = today so far vs all of yesterday), matching §7.3's "vs yesterday" wording; GMI shown when the period touches ≥ 14 local calendar dates.
 
 - Mockups are in `designs/`, not `design/`.
 - Trends mockup shows a 7/14/30/90 D selector, a forecast line (Now), and an "In range after runs" row; §7.3/§7.5/§6 win: 1/3/7/14/30/90 D, no forecast, after-runs row hidden until v1.1.
