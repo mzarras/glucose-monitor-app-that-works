@@ -1,0 +1,248 @@
+[
+  {
+    "_id": "fixture0025",
+    "type": "sgv",
+    "sgv": 80,
+    "dateString": "2026-01-10T14:55:00.000Z",
+    "direction": "Flat",
+    "device": "synthetic-fixture"
+  },
+  {
+    "_id": "fixture0024",
+    "type": "sgv",
+    "sgv": 75,
+    "date": 1768056600000,
+    "dateString": "2026-01-10T14:50:00.000Z",
+    "direction": "SingleUp",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0023",
+    "type": "sgv",
+    "sgv": 58,
+    "date": 1768056300000,
+    "dateString": "2026-01-10T14:45:00.000Z",
+    "direction": "SingleUp",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0022",
+    "type": "sgv",
+    "sgv": 44,
+    "date": 1768056000000,
+    "dateString": "2026-01-10T14:40:00.000Z",
+    "direction": "SingleUp",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0021",
+    "type": "sgv",
+    "sgv": 10,
+    "date": 1768055700000,
+    "dateString": "2026-01-10T14:35:00.000Z",
+    "direction": "NOT COMPUTABLE",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0020",
+    "type": "sgv",
+    "sgv": 39,
+    "date": 1768055400000,
+    "dateString": "2026-01-10T14:30:00.000Z",
+    "direction": "NOT COMPUTABLE",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0019",
+    "type": "sgv",
+    "sgv": 42,
+    "date": 1768055100000,
+    "dateString": "2026-01-10T14:25:00.000Z",
+    "direction": "FortyFiveDown",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0018",
+    "type": "sgv",
+    "sgv": 50,
+    "date": 1768054800000,
+    "dateString": "2026-01-10T14:20:00.000Z",
+    "direction": "SingleDown",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0017",
+    "type": "sgv",
+    "sgv": 61,
+    "date": 1768054500000,
+    "dateString": "2026-01-10T14:15:00.000Z",
+    "direction": "SingleDown",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0016",
+    "type": "sgv",
+    "sgv": 72,
+    "date": 1768054200000,
+    "dateString": "2026-01-10T14:10:00.000Z",
+    "direction": "SingleDown",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0015",
+    "type": "sgv",
+    "sgv": 84,
+    "date": 1768053900000,
+    "dateString": "2026-01-10T14:05:00.000Z",
+    "direction": "SingleDown",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0014",
+    "type": "sgv",
+    "sgv": 96,
+    "date": 1768053600000,
+    "dateString": "2026-01-10T14:00:00.000Z",
+    "direction": "FortyFiveDown",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0013",
+    "type": "cal",
+    "slope": 850.5,
+    "intercept": 32000,
+    "scale": 1,
+    "date": 1768036560000,
+    "dateString": "2026-01-10T09:16:00.000Z",
+    "device": "synthetic-fixture"
+  },
+  {
+    "_id": "fixture0012",
+    "type": "sgv",
+    "sgv": 287.6,
+    "date": 1768036500000,
+    "dateString": "2026-01-10T09:15:00.000Z",
+    "direction": "FortyFiveDown",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0011",
+    "type": "sgv",
+    "sgv": 301,
+    "date": 1768036200000,
+    "dateString": "2026-01-10T09:10:00.000Z",
+    "direction": "SingleDown",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0010",
+    "type": "sgv",
+    "sgv": 362,
+    "date": 1768034100000,
+    "dateString": "2026-01-10T08:35:00.000Z",
+    "direction": "SingleDown",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0009",
+    "type": "mbg",
+    "mbg": 377,
+    "date": 1768033920000,
+    "dateString": "2026-01-10T08:32:00.000Z",
+    "device": "synthetic-meter"
+  },
+  {
+    "_id": "fixture0007",
+    "type": "sgv",
+    "sgv": 380,
+    "date": 1768033800000,
+    "dateString": "2026-01-10T08:30:00.000Z",
+    "direction": "SingleDown",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0008",
+    "type": "sgv",
+    "sgv": 380,
+    "date": 1768033800000,
+    "dateString": "2026-01-10T08:30:00.000Z",
+    "direction": "SingleDown",
+    "device": "second-uploader",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0006",
+    "type": "sgv",
+    "sgv": 396,
+    "date": 1768033500000,
+    "dateString": "2026-01-10T08:25:00.000Z",
+    "direction": "FortyFiveDown",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0005",
+    "type": "sgv",
+    "sgv": 401,
+    "date": 1768033200000,
+    "dateString": "2026-01-10T08:20:00.000Z",
+    "direction": "Flat",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0004",
+    "type": "sgv",
+    "sgv": 401,
+    "date": 1768032900000,
+    "dateString": "2026-01-10T08:15:00.000Z",
+    "direction": "FortyFiveUp",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0003",
+    "type": "sgv",
+    "sgv": 389,
+    "date": 1768032600000,
+    "dateString": "2026-01-10T08:10:00.000Z",
+    "direction": "FortyFiveUp",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0002",
+    "type": "sgv",
+    "sgv": 371,
+    "date": 1768032300000,
+    "dateString": "2026-01-10T08:05:00.000Z",
+    "direction": "SingleUp",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  },
+  {
+    "_id": "fixture0001",
+    "type": "sgv",
+    "sgv": 352,
+    "date": 1768032000000,
+    "dateString": "2026-01-10T08:00:00.000Z",
+    "direction": "SingleUp",
+    "device": "synthetic-fixture",
+    "utcOffset": 0
+  }
+]
