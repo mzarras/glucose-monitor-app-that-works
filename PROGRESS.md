@@ -16,13 +16,13 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 
 | WS | Agent | Branch / worktree | State | Review | Merged to `integration` |
 |---|---|---|---|---|---|
-| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (65787e4): 127 tests, 99.04% cov Messages/; B1/B2/M1–M3 + minors fixed, Mbed TLS J-PAKE KATs | FAIL → fixed; delta re-review running | — |
-| WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (7aa1ef6): 83 + 38 tests; fixing M1 (D33) + minors | **PASS** (0 blockers) | — |
+| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (65787e4): 127 tests; fixing N1/N2 | FAIL → fixed; delta **FAIL** (N1 one terminal-state packet ends the session forever while status shows Active) → fixing | — |
+| WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (a1f0c6c): 92 + 39 tests, 98.2% / 97.3% cov | **PASS** (after 2 fix rounds) | **yes** — 3b51811 (+ a4a782e store compile-out gate); gates PASS on merged result |
 | WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (de6da6b): 150 tests, 99.88% cov, 90 d in 5.8 ms release | **PASS** (after 2 fix rounds) | **yes** — 3002c9d; gates build+tests+safety PASS on merged result |
 | WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (5ed31bb): 200 tests; fixing AlarmKit reschedule blocker | FAIL → B1/M1 closed; delta **FAIL** (AlarmKit reschedule cancels the due urgent-low repeat) → fixing | — |
 | WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | done (3287a14): 61 + 52 tests, 132 previews, 26 screenshots; fixing review | **FAIL** (B1 hero truncates / LOW disappears at accessibility sizes; M1 future-dated reading current; M2 Now chart not scrubbable; M3 DEBUG banner hidden in onboarding) → fixing | — |
 | WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (cbf5619): 62 tests, 97.8% cov | **PASS** (after 2 fix rounds) | **yes** — 9305a72; gates build+tests+safety (S2–S6) PASS on merged result |
-| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (aa48158): 110 tests, 91.85% cov; D29/D30/D33 applied; fixing n1/n2 | **PASS** (delta: 0 blockers, 0 majors) | — |
+| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (a70f3ae): 111 tests, 91.9% cov | **PASS** (after 3 fix rounds) | **yes** — 6113de7; gates PASS on merged result (480 tests, S1–S6) |
 
 ### Merge flow
 
@@ -103,6 +103,9 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Stats wiring (WS3): fetch readings for [period start − 24 h, now) (hypo context); "Today so far → lows" = `level1EventCountOverlappingPeriod`; show the data-sufficiency warning next to GMI.
 
 - AlertEngine wiring (WS4, `docs/alerts.md` §9): add `StopUrgentLowAlarmIntent` in the app target; pass `SystemAlarmAdapter(makeStopIntent:)` to `AlertService`; connect `UrgentLowAlarmIntentBridge.shared`; onboarding step `requestUrgentLowAlarmAuthorization()`; Settings row from `deliveryStatus.urgentLowAlarm`; call `start()`; feed `.reading` only with readings returned by `insert` (after the gate); tick ~1/min in foreground and on every wake; hook `UNUserNotificationCenterDelegate` to `handleNotificationResponse`; DEBUG replay → `acceptsReplayReadings`.
+
+- GlucoseStore: comment in `StoreSchema` that equal-date ordering depends on `rowid` (never run `VACUUM` without reconsidering) (WS2 delta review minor).
+- NightscoutKit: release the old `ReadingUploader` (incl. status-stream tasks) before creating a replacement; surface `QueueFileInUse` as an S5 error (WS7 n3).
 
 ## §11 on-device checklist additions (collected from reviews; goes into docs/setup.md in Phase 3)
 
