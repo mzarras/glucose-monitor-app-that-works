@@ -18,11 +18,11 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 |---|---|---|---|---|---|
 | WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (6da2eae): 106 tests, 99% cov Messages/; fixing review | **FAIL** (B1 unsolicited auth status accepted; B2 `currentSession` vs D28) → fixing | — |
 | WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (7aa1ef6): 83 + 38 tests; fixing M1 (D33) + minors | **PASS** (0 blockers) | — |
-| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (a332581): 146 tests, 99.75% cov; fixing N1 (today's lows during an overnight low) | **PASS** (delta PASS) | — |
+| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (de6da6b): 150 tests, 99.88% cov, 90 d in 5.8 ms release | **PASS** (after 2 fix rounds) | **yes** — 3002c9d; gates build+tests+safety PASS on merged result |
 | WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (d1f946c): 161 tests, 99.6% cov; fixing review + AlarmKit (D26) | **FAIL** (B1 clock rollback hides urgent low / extends snooze) → fixing | — |
 | WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | done (3287a14): 61 + 52 tests, 132 previews, 26 screenshots; fixing review | **FAIL** (B1 hero truncates / LOW disappears at accessibility sizes; M1 future-dated reading current; M2 Now chart not scrubbable; M3 DEBUG banner hidden in onboarding) → fixing | — |
 | WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (cbf5619): 62 tests, 97.8% cov | **PASS** (after 2 fix rounds) | **yes** — 9305a72; gates build+tests+safety (S2–S6) PASS on merged result |
-| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (8e4889c): 96 tests, 90.3% cov; fixing review | **FAIL** (B1 Nightscout alarms silent at LOW → D29 disclosure; M1 Clarity order) → fixing | — |
+| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (aa48158): 110 tests, 91.85% cov; D29/D30/D33 applied | FAIL → fixed; delta re-review running | — |
 
 ### Merge flow
 
@@ -97,6 +97,9 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Trio heartbeat: WS1 assessed it as low risk (Trio subscribes to Receive_Authentication only, never writes); implement per `docs/trio-bridge.md` "Heartbeat wiring".
 
 - TrioBridge follow-ups (WS6 re-review r1/r2, minor): doc note that after a relaunch a leftover ended-session payload is replaced only by the next write; a named test for a sensor stopped early before grace end.
+
+- NightscoutKit wiring (WS7): `try` on uploader factories (one uploader per queue file, enforced); `credentialsChanged()` then `flush()` after saving credentials; `flush()` again after `.alreadyFlushing`; show `rejectedFutureDated` / `skipped[.futureDated]` in import progress.
+- Stats wiring (WS3): fetch readings for [period start − 24 h, now) (hypo context); "Today so far → lows" = `level1EventCountOverlappingPeriod`; show the data-sufficiency warning next to GMI.
 
 ## §11 on-device checklist additions (collected from reviews; goes into docs/setup.md in Phase 3)
 
