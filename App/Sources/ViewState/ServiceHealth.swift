@@ -43,6 +43,25 @@ enum CriticalAlertsStatus: Equatable, Sendable {
     case disabledByUser
 }
 
+/// AlarmKit authorization for the urgent low alarm (PROGRESS D26). On iOS 26+ urgent low and its
+/// repeats ring as a system alarm, on silent and in Focus, even while the app is suspended. Older
+/// iOS has no AlarmKit and uses the D17 path (Time Sensitive notification + in-app audio).
+enum UrgentLowAlarmStatus: Equatable, Sendable {
+    case notDetermined
+    case authorized
+    case denied
+    /// This iOS version has no AlarmKit (before iOS 26).
+    case unavailable
+
+    /// Before AlertEngine reports: "not asked yet" where AlarmKit exists, otherwise unavailable.
+    static var defaultForThisOS: UrgentLowAlarmStatus {
+        if #available(iOS 26.0, *) { return .notDetermined }
+        return .unavailable
+    }
+
+    var isAvailable: Bool { self != .unavailable }
+}
+
 /// Whether the alarm volume is loud enough (PROGRESS D17). Measured by AlertEngine.
 enum AlarmVolumeStatus: Equatable, Sendable {
     case unknown
@@ -63,6 +82,8 @@ struct ServiceHealth: Equatable, Sendable {
     var dexcomShare: UploadStatus
     var notifications: NotificationPermission
     var alarmVolume: AlarmVolumeStatus
+    /// D26: AlarmKit authorization for urgent low.
+    var urgentLowAlarm: UrgentLowAlarmStatus
     /// Set on launch when the app detects it was force-quit; cleared when the user dismisses it.
     var forceQuitGap: ForceQuitGap?
 
@@ -73,6 +94,7 @@ struct ServiceHealth: Equatable, Sendable {
         dexcomShare: .off,
         notifications: .notDetermined,
         alarmVolume: .unknown,
+        urgentLowAlarm: .defaultForThisOS,
         forceQuitGap: nil
     )
 }

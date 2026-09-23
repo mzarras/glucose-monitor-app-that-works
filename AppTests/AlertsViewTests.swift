@@ -36,6 +36,16 @@ final class AlertsViewTests: XCTestCase {
         XCTAssertEqual(model.alerts.row(.low)?.soundOnSilent, false)
     }
 
+    /// D27 / HANDOFF §5: quiet hours silence everything except urgent low — Low and missed
+    /// readings included — and the screen says so plainly.
+    func test_quietHoursSilenceEverythingExceptUrgentLow() {
+        XCTAssertEqual(AlertKind.allCases.filter(\.soundsDuringQuietHours), [.urgentLow])
+        XCTAssertFalse(AlertKind.low.soundsDuringQuietHours)
+        XCTAssertFalse(AlertKind.missedReadings.soundsDuringQuietHours)
+        XCTAssertEqual(AlertsText.quietHoursNote, "Silences all alerts except Urgent low.")
+        XCTAssertEqual(AlertsText.quietHoursSchedule(QuietHours(isEnabled: true, start: TimeOfDay(hour: 22, minute: 0), end: TimeOfDay(hour: 7, minute: 0))), "10 PM – 7 AM")
+    }
+
     func test_thresholdText() {
         XCTAssertEqual(AlertsText.threshold(.glucose(mgdl: 55, isBelow: true, allowed: 50...60)), "≤ 55 mg/dL")
         XCTAssertEqual(AlertsText.threshold(.glucose(mgdl: 250, isBelow: false, allowed: 120...400)), "≥ 250 mg/dL")

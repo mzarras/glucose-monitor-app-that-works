@@ -55,14 +55,16 @@ public struct GlucoseTraceChart: View {
     ///   - domain: the time span shown, e.g. the last 3 hours ending now.
     ///   - accessibilityTitle: first words of the VoiceOver summary, e.g. "Last 3 hours".
     ///   - timeText: clock-time formatter for the scrub callout.
+    ///   - initialScrubDate: previews and screenshots only — start with the finger at this time.
     public init(points: [ChartPoint], domain: ClosedRange<Date>, fingersticks: [FingerstickMarker] = [], options: Options, accessibilityTitle: String,
-                timeText: @escaping @Sendable (Date) -> String = ChartScrub.shortTime) {
+                timeText: @escaping @Sendable (Date) -> String = ChartScrub.shortTime, initialScrubDate: Date? = nil) {
         self.points = points.filter { domain.contains($0.date) }
         self.domain = domain
         self.fingersticks = fingersticks.filter { domain.contains($0.date) }
         self.options = options
         self.accessibilityTitle = accessibilityTitle
         self.timeText = timeText
+        _scrubDate = State(initialValue: initialScrubDate)
     }
 
     private var scrubSelection: ScrubSelection {
@@ -140,15 +142,15 @@ public struct GlucoseTraceChart: View {
                 .fill(isGap ? AnyShapeStyle(Theme.muted) : AnyShapeStyle(Theme.ink))
                 .frame(width: 1, height: plot.height)
                 .position(x: plot.minX + x, y: plot.midY)
-            if case .reading(let point) = selection, let mgdl = point.value.numericMgdl, let y = proxy.position(forY: mgdl) {
+            let pointY: CGFloat? = selection.reading?.value.numericMgdl.flatMap { proxy.position(forY: $0) }.map { plot.minY + $0 }
+            if let pointY {
                 Circle()
                     .fill(Theme.background)
                     .overlay(Circle().stroke(Theme.ink, lineWidth: 2))
                     .frame(width: 11, height: 11)
-                    .position(x: plot.minX + x, y: plot.minY + y)
+                    .position(x: plot.minX + x, y: pointY)
             }
-            ScrubCalloutView(callout: callout)
-                .position(x: min(max(plot.minX + x, plot.minX + 48), plot.maxX - 48), y: plot.minY + 20)
+            PlacedScrubCallout(callout: callout, x: plot.minX + x, plot: plot)
         }
     }
 
@@ -245,6 +247,7 @@ public struct GlucoseTraceChart: View {
                                 Text(verbatim: HourLabel.text(date))
                                     .font(Typography.fixedLabel(size: 10))
                                     .foregroundStyle(Theme.muted)
+                                    .fixedSize()
                             }
                         }
                     }

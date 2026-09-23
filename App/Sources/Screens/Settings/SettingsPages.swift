@@ -243,6 +243,12 @@ struct AlertDeliveryView: View {
                     Button("Open iOS Settings", action: openSystemSettings).buttonStyle(SecondaryButtonStyle())
                 }
                 Hairline()
+                let alarm = SettingsText.urgentLowAlarm(delivery.urgentLowAlarm)
+                statusBlock(title: "Urgent low alarm", status: alarm.status, note: alarm.note, isProblem: delivery.urgentLowAlarm == .denied)
+                if delivery.urgentLowAlarm == .denied {
+                    Button("Open iOS Settings", action: openSystemSettings).buttonStyle(SecondaryButtonStyle())
+                }
+                Hairline()
                 statusBlock(title: "Alarm volume", status: SettingsText.alarmVolume(delivery.alarmVolume),
                             note: "Alarms play at the phone's volume while the app is running, even on silent.",
                             isProblem: { if case .tooLow = delivery.alarmVolume { return true } else { return false } }())

@@ -75,6 +75,8 @@ struct DexcomShareSettings: Equatable, Sendable {
 /// Settings → Alert delivery (PROGRESS D17).
 struct AlertDeliveryStatus: Equatable, Sendable {
     var notifications: NotificationPermission
+    /// D26: urgent low as a system alarm (iOS 26+).
+    var urgentLowAlarm: UrgentLowAlarmStatus
     var criticalAlerts: CriticalAlertsStatus
     var alarmVolume: AlarmVolumeStatus
 }
@@ -148,6 +150,20 @@ enum SettingsText {
             return ("Not available", optional + " If Apple grants the entitlement, switch SENSOR_APP_ENTITLEMENTS (see docs/setup.md) and rebuild.")
         case .disabledByUser:
             return ("Off", optional + " To turn it on: iOS Settings › Notifications › this app › Critical Alerts.")
+        }
+    }
+
+    /// Urgent low alarm (PROGRESS D26).
+    static func urgentLowAlarm(_ status: UrgentLowAlarmStatus) -> (status: String, note: String) {
+        switch status {
+        case .authorized:
+            return ("On", "Urgent low rings as a system alarm, even on silent, in Focus, and while the app is in the background.")
+        case .denied:
+            return ("Off", "Alarms aren't allowed, so urgent low can't ring as a system alarm while the app is in the background. To fix: open iOS Settings for this app and allow Alarms.")
+        case .notDetermined:
+            return ("Not set up", "You'll be asked to allow alarms so urgent low can ring even on silent.")
+        case .unavailable:
+            return ("Not available", "Needs iOS 26 or later. On this iOS, urgent low uses a Time Sensitive notification and rings on silent while the app is running.")
         }
     }
 

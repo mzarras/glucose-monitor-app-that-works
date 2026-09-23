@@ -30,6 +30,10 @@ enum AlertKind: String, CaseIterable, Identifiable, Sendable {
     /// S7 / D17: urgent low always sounds on silent; the others have a per-alert setting.
     var soundOnSilentIsFixed: Bool { self == .urgentLow }
 
+    /// D27 (HANDOFF §5): quiet hours silence every alert except urgent low. There is no per-alert
+    /// quiet-hours setting.
+    var soundsDuringQuietHours: Bool { self == .urgentLow }
+
     var title: String {
         switch self {
         case .urgentLow: return "Urgent low"
@@ -109,7 +113,7 @@ struct TimeOfDay: Equatable, Sendable {
     var minute: Int
 }
 
-/// Silences non-urgent alerts on a schedule. Urgent low always sounds (HANDOFF §5).
+/// Silences every alert except urgent low on a schedule (HANDOFF §5, PROGRESS D27).
 struct QuietHours: Equatable, Sendable {
     var isEnabled: Bool
     var start: TimeOfDay
@@ -156,7 +160,12 @@ enum AlertsText {
     /// Explanation under the urgent low row (S7).
     static let urgentLowNote = "Always on and always sounds, even on silent. It can't be turned off; you can snooze it for up to 30 minutes."
 
-    static let quietHoursNote = "Silences non-urgent alerts. Urgent low always sounds."
+    static let quietHoursNote = "Silences all alerts except Urgent low."
+
+    /// "10 PM – 7 AM"
+    static func quietHoursSchedule(_ quietHours: QuietHours) -> String {
+        "\(time(quietHours.start)) – \(time(quietHours.end))"
+    }
 
     /// "Sound on silent" row detail (D17).
     static let soundOnSilentNote = "Plays the alarm with the ringer switch off while the app is running. Otherwise the alert follows the ringer switch."

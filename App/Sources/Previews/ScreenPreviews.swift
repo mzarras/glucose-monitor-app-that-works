@@ -152,4 +152,42 @@ private enum CalibrationPreviews {
 #Preview("App · light") { RootView(model: AppModel.launch(arguments: [])).environment(\.colorScheme, .light).preferredColorScheme(.light) }
 #Preview("Build banner · dark") { VStack(spacing: 0) { BuildBannerView(banner: BuildBanner.forThisBuild(replayScenario: nil)!); BuildBannerView(banner: BuildBanner.forThisBuild(replayScenario: "slow fall to urgent low")!); Spacer() }.editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
 #Preview("App · dark") { RootView(model: AppModel.launch(arguments: [])).environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+
+// MARK: - D26 alarms, D27 quiet hours, D23 scrubbing
+
+#Preview("Onboarding · alarms · light") { OnboardingContent(state: Fixtures.onboarding(.alarms, at: previewNow), actions: .noop, now: previewNow).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("Onboarding · alarms denied · light") { OnboardingContent(state: { var o = Fixtures.onboarding(.alarms, at: previewNow); o.urgentLowAlarm = .denied; return o }(), actions: .noop, now: previewNow).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("Settings · alert delivery, alarms unavailable · light") { NavigationStack { AlertDeliveryView(delivery: AlertDeliveryStatus(notifications: .authorized, urgentLowAlarm: .unavailable, criticalAlerts: .entitlementNotGranted, alarmVolume: .ok(level: 0.6)), openSystemSettings: {}).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
+#Preview("Alerts · quiet hours on · light") { NavigationStack { PreviewScreen(scheme: .light) { AlertsContent(state: { var a = Fixtures.alerts; a.quietHours.isEnabled = true; return a }(), actions: .noop) } } }
+#Preview("Chart · scrubbing a reading · light") { ScrubPreview(minutesBack: 40).environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("Chart · scrubbing a gap · light") { ScrubPreview(minutesBack: 60 * 10 + 5, window: .twelveHours).environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("Chart · scrubbing LOW · light") { ScrubPreview(minutesBack: 6, scenario: .lowFlag).environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("Onboarding · alarms · dark") { OnboardingContent(state: Fixtures.onboarding(.alarms, at: previewNow), actions: .noop, now: previewNow).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+#Preview("Onboarding · alarms denied · dark") { OnboardingContent(state: { var o = Fixtures.onboarding(.alarms, at: previewNow); o.urgentLowAlarm = .denied; return o }(), actions: .noop, now: previewNow).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+#Preview("Settings · alert delivery, alarms unavailable · dark") { NavigationStack { AlertDeliveryView(delivery: AlertDeliveryStatus(notifications: .authorized, urgentLowAlarm: .unavailable, criticalAlerts: .entitlementNotGranted, alarmVolume: .ok(level: 0.6)), openSystemSettings: {}).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) } }
+#Preview("Alerts · quiet hours on · dark") { NavigationStack { PreviewScreen(scheme: .dark) { AlertsContent(state: { var a = Fixtures.alerts; a.quietHours.isEnabled = true; return a }(), actions: .noop) } } }
+#Preview("Chart · scrubbing a reading · dark") { ScrubPreview(minutesBack: 40).environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+#Preview("Chart · scrubbing a gap · dark") { ScrubPreview(minutesBack: 60 * 10 + 5, window: .twelveHours).environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+#Preview("Chart · scrubbing LOW · dark") { ScrubPreview(minutesBack: 6, scenario: .lowFlag).environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+
+/// The Now chart with the finger held at `minutesBack` minutes before now.
+struct ScrubPreview: View {
+    var minutesBack: Double
+    var window: ChartWindow = .threeHours
+    var scenario: Fixtures.NowScenario = .normal
+
+    var body: some View {
+        let state = Fixtures.now(scenario, at: previewNow)
+        GlucoseTraceChart(
+            points: state.chartPoints,
+            domain: previewNow.addingTimeInterval(-window.duration)...previewNow,
+            options: GlucoseTraceChart.Options(showsAxes: true, hourStride: window.hourStride, scrubbable: true),
+            accessibilityTitle: window.spokenName,
+            initialScrubDate: previewNow.addingTimeInterval(-minutesBack * 60)
+        )
+        .frame(height: 200)
+        .padding(20)
+        .editorialScreen()
+    }
+}
 #endif

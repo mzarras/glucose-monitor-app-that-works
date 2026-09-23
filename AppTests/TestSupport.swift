@@ -25,5 +25,6 @@ let healthy = ServiceHealth(
     dexcomShare: .ok(lastUpload: minutes(-3)),
     notifications: .authorized,
     alarmVolume: .ok(level: 0.8),
+    urgentLowAlarm: .authorized,
     forceQuitGap: nil
 )

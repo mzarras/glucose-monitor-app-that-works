@@ -65,7 +65,7 @@ final class AppModel {
                 trio: TrioSettings(isEnabled: false, status: .off),
                 nightscout: NightscoutSettings(url: "", hasToken: false, uploadEnabled: false, status: .off),
                 dexcomShare: DexcomShareSettings(isEnabled: false, username: "", hasPassword: false, region: .default, status: .off),
-                delivery: AlertDeliveryStatus(notifications: .notDetermined, criticalAlerts: .entitlementNotGranted, alarmVolume: .unknown),
+                delivery: AlertDeliveryStatus(notifications: .notDetermined, urgentLowAlarm: .defaultForThisOS, criticalAlerts: .entitlementNotGranted, alarmVolume: .unknown),
                 lastImport: nil,
                 accent: .default,
                 appearance: .default,

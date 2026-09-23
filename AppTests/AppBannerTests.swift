@@ -19,6 +19,7 @@ final class AppBannerTests: XCTestCase {
         var denied = healthy; denied.notifications = .denied
         var quiet = healthy; quiet.notifications = .provisional
         var volume = healthy; volume.alarmVolume = .tooLow(level: 0.1)
+        var alarm = healthy; alarm.urgentLowAlarm = .denied
         var forceQuit = healthy; forceQuit.forceQuitGap = ForceQuitGap(from: minutes(-300), to: minutes(-210))
 
         let cases: [(String, [AppBanner], AppBanner.Kind, AppBanner.Severity)] = [
@@ -38,6 +39,7 @@ final class AppBannerTests: XCTestCase {
             ("notifications denied", banners(health: denied), .notificationsDisabled, .critical),
             ("notifications provisional", banners(health: quiet), .notificationsDisabled, .critical),
             ("alarm volume too low", banners(health: volume), .alarmVolumeTooLow, .warning),
+            ("urgent low alarm not allowed (D26)", banners(health: alarm), .urgentLowAlarmOff, .warning),
             ("Nightscout upload failing", banners(health: nightscout), .nightscoutUploadFailing, .warning),
             ("Dexcom Share upload failing", banners(health: share), .shareUploadFailing, .warning),
             ("force-quit gap", banners(health: forceQuit), .forceQuitGap, .warning),
@@ -67,6 +69,14 @@ final class AppBannerTests: XCTestCase {
         XCTAssertEqual(banners(.warmingUp(endsAt: minutes(30)), latestAge: nil), [])
         // Once warm-up should be over, silence is a problem again.
         XCTAssertEqual(banners(.warmingUp(endsAt: minutes(-1)), latestAge: nil).map(\.kind), [.missedReadings])
+    }
+
+    func test_urgentLowAlarmNotAvailableIsNotAProblem() {
+        var health = healthy
+        health.urgentLowAlarm = .unavailable
+        XCTAssertEqual(banners(health: health), [], "older iOS falls back to D17; nothing to fix")
+        health.urgentLowAlarm = .notDetermined
+        XCTAssertEqual(banners(health: health), [])
     }
 
     func test_criticalBannersComeFirst() {

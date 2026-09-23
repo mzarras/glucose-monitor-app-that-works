@@ -102,6 +102,8 @@ struct SettingsContent: View {
             SettingsGroup("ALERT DELIVERY") {
                 SettingsLinkRow(title: "Notifications", value: SettingsText.notifications(state.delivery.notifications).status,
                                 route: .alertDelivery, valueIsAlert: state.delivery.notifications == .denied || state.delivery.notifications == .provisional)
+                SettingsLinkRow(title: "Urgent low alarm", value: SettingsText.urgentLowAlarm(state.delivery.urgentLowAlarm).status,
+                                route: .alertDelivery, valueIsAlert: state.delivery.urgentLowAlarm == .denied)
                 SettingsLinkRow(title: "Critical Alerts (optional)", value: SettingsText.criticalAlerts(state.delivery.criticalAlerts).status, route: .alertDelivery)
                 SettingsLinkRow(title: "Alarm volume", value: SettingsText.alarmVolume(state.delivery.alarmVolume), route: .alertDelivery, valueIsAlert: isTooLow(state.delivery.alarmVolume))
             }

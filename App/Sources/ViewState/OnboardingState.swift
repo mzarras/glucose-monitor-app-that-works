@@ -9,11 +9,27 @@ enum OnboardingStep: Int, CaseIterable, Sendable {
     case importHistory
     case removeDexcomApp
     case permissions
+    /// D26: allow AlarmKit alarms for urgent low. Only where AlarmKit exists (iOS 26+).
+    case alarms
     case pairing
     case warmUp
 
-    var next: OnboardingStep? { OnboardingStep(rawValue: rawValue + 1) }
-    var previous: OnboardingStep? { OnboardingStep(rawValue: rawValue - 1) }
+    /// The steps shown, in order: `.alarms` only when AlarmKit is available.
+    static func visibleSteps(alarmsAvailable: Bool) -> [OnboardingStep] {
+        allCases.filter { $0 != .alarms || alarmsAvailable }
+    }
+
+    func next(alarmsAvailable: Bool) -> OnboardingStep? {
+        let steps = Self.visibleSteps(alarmsAvailable: alarmsAvailable)
+        guard let index = steps.firstIndex(of: self), index + 1 < steps.count else { return nil }
+        return steps[index + 1]
+    }
+
+    func previous(alarmsAvailable: Bool) -> OnboardingStep? {
+        let steps = Self.visibleSteps(alarmsAvailable: alarmsAvailable)
+        guard let index = steps.firstIndex(of: self), index > 0 else { return nil }
+        return steps[index - 1]
+    }
 }
 
 enum PermissionState: Equatable, Sendable {
@@ -55,6 +71,8 @@ struct OnboardingState: Equatable, Sendable {
     var bluetooth: PermissionState
     var notifications: NotificationPermission
     var criticalAlerts: CriticalAlertsStatus
+    /// D26: AlarmKit authorization; `.unavailable` hides the Alarms step.
+    var urgentLowAlarm: UrgentLowAlarmStatus
     /// Offer Dexcom Share upload so Dexcom Follow keeps working (D7: on, US preselected).
     var shareUploadEnabled: Bool
     var shareRegion: ShareRegion
@@ -62,12 +80,16 @@ struct OnboardingState: Equatable, Sendable {
     /// For the warm-up countdown on the last step.
     var sensorState: SensorState
 
+    var alarmsAvailable: Bool { urgentLowAlarm.isAvailable }
+    var visibleSteps: [OnboardingStep] { OnboardingStep.visibleSteps(alarmsAvailable: alarmsAvailable) }
+
     static let initial = OnboardingState(
         step: .welcome,
         importProgress: nil,
         bluetooth: .notDetermined,
         notifications: .notDetermined,
         criticalAlerts: .entitlementNotGranted,
+        urgentLowAlarm: .defaultForThisOS,
         shareUploadEnabled: true,
         shareRegion: .default,
         pairing: .idle,

@@ -18,6 +18,7 @@ struct AppBanner: Equatable, Identifiable, Sendable {
         case trioBridgeFailing
         case notificationsDisabled
         case alarmVolumeTooLow
+        case urgentLowAlarmOff
         case nightscoutUploadFailing
         case shareUploadFailing
         case forceQuitGap
@@ -103,6 +104,14 @@ enum AppBanners {
                 title: "Alarm volume is low",
                 detail: "Volume is at \(Int((level * 100).rounded()))%. Alarms may be hard to hear; turn the volume up.",
                 action: .openAlertDeliverySettings, actionTitle: "Alert delivery"))
+        }
+
+        if health.urgentLowAlarm == .denied {
+            banners.append(AppBanner(
+                kind: .urgentLowAlarmOff, severity: .warning,
+                title: "Urgent low alarm is off",
+                detail: "Alarms aren't allowed, so urgent low can't ring as a system alarm while the app is in the background. Allow alarms for this app in iOS Settings.",
+                action: .openAppSettings, actionTitle: "Open Settings"))
         }
 
         if case .failing(let count, let error, _) = health.nightscout {

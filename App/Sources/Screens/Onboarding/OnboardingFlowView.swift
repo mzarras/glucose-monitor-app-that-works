@@ -13,13 +13,15 @@ struct OnboardingActions {
     var startClarityImport: @MainActor (_ file: URL, _ recordedIn: TimeZone) -> Void
     var requestBluetooth: @MainActor () -> Void
     var requestNotifications: @MainActor () -> Void
+    /// D26: AlarmKit authorization (iOS 26+).
+    var requestAlarms: @MainActor () -> Void
     var setShareUpload: @MainActor (_ enabled: Bool, _ username: String, _ password: String, _ region: ShareRegion) -> Void
     var submitPairingCode: @MainActor (String) -> Void
     var finish: @MainActor () -> Void
 
     static var noop: OnboardingActions {
         OnboardingActions(goTo: { _ in }, startNightscoutImport: { _, _, _ in }, startClarityImport: { _, _ in }, requestBluetooth: {},
-                          requestNotifications: {}, setShareUpload: { _, _, _, _ in }, submitPairingCode: { _ in }, finish: {})
+                          requestNotifications: {}, requestAlarms: {}, setShareUpload: { _, _, _, _ in }, submitPairingCode: { _ in }, finish: {})
     }
 }
 
@@ -43,11 +45,11 @@ struct OnboardingContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(verbatim: "STEP \(state.step.rawValue + 1) OF \(OnboardingStep.allCases.count)")
+                Text(verbatim: "STEP \((state.visibleSteps.firstIndex(of: state.step) ?? 0) + 1) OF \(state.visibleSteps.count)")
                     .monoLabel(size: 11)
                     .foregroundStyle(Theme.muted)
                 Spacer()
-                if let previous = state.step.previous, state.step != .warmUp {
+                if let previous = state.step.previous(alarmsAvailable: state.alarmsAvailable), state.step != .warmUp {
                     Button("Back") { actions.goTo(previous) }
                         .buttonStyle(LinkButtonStyle())
                 }
@@ -60,6 +62,7 @@ struct OnboardingContent: View {
                     case .importHistory: ImportStep(state: state, actions: actions)
                     case .removeDexcomApp: RemoveDexcomAppStep(state: state, actions: actions)
                     case .permissions: PermissionsStep(state: state, actions: actions)
+                    case .alarms: AlarmsStep(state: state, actions: actions)
                     case .pairing: PairingStep(state: state, actions: actions)
                     case .warmUp: WarmUpStep(state: state, now: now, finish: actions.finish)
                     }
@@ -261,7 +264,7 @@ struct PermissionsStep: View {
             }
             Text(verbatim: critical.note).font(Typography.body(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
         }
-        Button("Continue") { actions.goTo(.pairing) }
+        Button("Continue") { actions.goTo(state.step.next(alarmsAvailable: state.alarmsAvailable) ?? .pairing) }
             .buttonStyle(PrimaryButtonStyle())
             .disabled(state.bluetooth != .granted)
         if state.bluetooth == .denied {
@@ -291,6 +294,37 @@ struct PermissionsStep: View {
             }
         }
         .frame(minHeight: Layout.minTarget)
+    }
+}
+
+/// D26: urgent low as a system alarm (iOS 26+ only; the step is skipped elsewhere).
+struct AlarmsStep: View {
+    let state: OnboardingState
+    let actions: OnboardingActions
+
+    var body: some View {
+        StepTitle(title: "Urgent low alarm", lead: "Urgent low rings as a system alarm, like a clock alarm: even on silent, in Focus, and while the app is in the background. Other alerts stay notifications.")
+        let text = SettingsText.urgentLowAlarm(state.urgentLowAlarm)
+        HStack {
+            Text(verbatim: "Alarms").font(Typography.body(size: 15, weight: .medium))
+            Spacer()
+            switch state.urgentLowAlarm {
+            case .authorized:
+                Text(verbatim: "ALLOWED").monoLabel(size: 11, medium: true).foregroundStyle(Theme.accent)
+            case .denied:
+                Button("Open Settings", action: SystemSettings.openAppSettings).buttonStyle(LinkButtonStyle())
+            case .notDetermined:
+                Button("Allow", action: actions.requestAlarms).buttonStyle(LinkButtonStyle())
+            case .unavailable:
+                Text(verbatim: "NOT AVAILABLE").monoLabel(size: 11).foregroundStyle(Theme.muted)
+            }
+        }
+        .frame(minHeight: Layout.minTarget)
+        if state.urgentLowAlarm == .denied {
+            FieldMessage(text: text.note)
+        }
+        Button("Continue") { actions.goTo(.pairing) }
+            .buttonStyle(PrimaryButtonStyle())
     }
 }
 

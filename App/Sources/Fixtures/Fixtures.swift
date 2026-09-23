@@ -74,6 +74,7 @@ enum Fixtures {
             dexcomShare: .ok(lastUpload: now.addingTimeInterval(-3 * 60)),
             notifications: .authorized,
             alarmVolume: .ok(level: 0.8),
+            urgentLowAlarm: .authorized,
             forceQuitGap: nil
         )
     }
@@ -143,6 +144,7 @@ enum Fixtures {
         if scenario == .manyProblems {
             health.notifications = .denied
             health.alarmVolume = .tooLow(level: 0.15)
+            health.urgentLowAlarm = .denied
             health.nightscout = .failing(failureCount: 3, lastError: "HTTP 401 Unauthorized.", since: now.addingTimeInterval(-20 * 60))
             health.forceQuitGap = ForceQuitGap(from: now.addingTimeInterval(-5 * 3_600), to: now.addingTimeInterval(-3.5 * 3_600))
         }
@@ -315,7 +317,7 @@ enum Fixtures {
             trio: TrioSettings(isEnabled: true, status: .ok(lastHandoff: now.addingTimeInterval(-3 * 60))),
             nightscout: NightscoutSettings(url: "https://nightscout.example.com", hasToken: true, uploadEnabled: true, status: .ok(lastUpload: now.addingTimeInterval(-3 * 60))),
             dexcomShare: DexcomShareSettings(isEnabled: true, username: "share-user", hasPassword: true, region: .us, status: .ok(lastUpload: now.addingTimeInterval(-3 * 60))),
-            delivery: AlertDeliveryStatus(notifications: .authorized, criticalAlerts: .entitlementNotGranted, alarmVolume: .ok(level: 0.8)),
+            delivery: AlertDeliveryStatus(notifications: .authorized, urgentLowAlarm: .authorized, criticalAlerts: .entitlementNotGranted, alarmVolume: .ok(level: 0.8)),
             lastImport: ImportSummary(origin: .nightscout, readingsImported: 25_412, covered: DateInterval(start: now.addingTimeInterval(-90 * 86_400), end: now.addingTimeInterval(-6 * 86_400)), finishedAt: now.addingTimeInterval(-6 * 86_400)),
             accent: .forest,
             appearance: .system,
@@ -330,7 +332,7 @@ enum Fixtures {
         var state = settings(at: now)
         state.trio.status = .failing(since: now.addingTimeInterval(-18 * 60), message: "App Group write failed")
         state.nightscout.status = .failing(failureCount: 3, lastError: "HTTP 401 Unauthorized", since: now.addingTimeInterval(-20 * 60))
-        state.delivery = AlertDeliveryStatus(notifications: .denied, criticalAlerts: .disabledByUser, alarmVolume: .tooLow(level: 0.15))
+        state.delivery = AlertDeliveryStatus(notifications: .denied, urgentLowAlarm: .denied, criticalAlerts: .disabledByUser, alarmVolume: .tooLow(level: 0.15))
         return state
     }
 
@@ -345,6 +347,10 @@ enum Fixtures {
         case .permissions:
             state.bluetooth = .granted
             state.notifications = .notDetermined
+        case .alarms:
+            state.bluetooth = .granted
+            state.notifications = .authorized
+            state.urgentLowAlarm = .notDetermined
         case .pairing:
             state.bluetooth = .granted
             state.notifications = .authorized

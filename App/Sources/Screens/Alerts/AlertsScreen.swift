@@ -141,10 +141,10 @@ struct QuietHoursSection: View {
             SectionLabel("QUIET HOURS")
             Toggle(isOn: Binding(get: { quietHours.isEnabled }, set: { var q = quietHours; q.isEnabled = $0; setQuietHours(q) })) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: "Quiet hours").font(Typography.body(size: 15, weight: .medium))
+                    Text(verbatim: "Quiet hours · \(AlertsText.quietHoursSchedule(quietHours))").font(Typography.body(size: 15, weight: .medium))
                     Text(verbatim: AlertsText.quietHoursNote)
-                        .font(Typography.body(size: 12))
-                        .foregroundStyle(Theme.muted)
+                        .font(Typography.body(size: 13))
+                        .foregroundStyle(Theme.ink)
                 }
             }
             .frame(minHeight: Layout.minTarget)

@@ -123,3 +123,19 @@ final class ChartScrubTests: XCTestCase {
         XCTAssertNil(ChartScrub.callout(.none, time: time))
     }
 }
+
+final class ScrubCalloutPlacementTests: XCTestCase {
+    func test_calloutSitsBesideTheRuleAndInsideThePlot() {
+        // Room on the right: 8 pt right of the rule.
+        XCTAssertEqual(PlacedScrubCallout.left(ruleX: 100, width: 80, plotWidth: 300), 108)
+        // No room on the right: 8 pt left of the rule.
+        XCTAssertEqual(PlacedScrubCallout.left(ruleX: 280, width: 80, plotWidth: 300), 192)
+        // Wider than either side: pinned to the left edge rather than leaving the plot.
+        XCTAssertEqual(PlacedScrubCallout.left(ruleX: 50, width: 280, plotWidth: 300), 0)
+        // Never covers the rule when it fits on either side.
+        for ruleX in stride(from: CGFloat(0), through: 300, by: 10) {
+            let left = PlacedScrubCallout.left(ruleX: ruleX, width: 90, plotWidth: 300)
+            XCTAssertTrue(left >= ruleX || left + 90 <= ruleX, "rule at \(ruleX) is under the callout")
+        }
+    }
+}

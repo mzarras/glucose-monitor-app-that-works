@@ -60,11 +60,32 @@ final class AppShellTests: XCTestCase {
         XCTAssertEqual(initial.shareRegion, .us, "D7: US preselected")
         XCTAssertEqual(OnboardingStep.allCases.first, .welcome)
         XCTAssertEqual(OnboardingStep.allCases.last, .warmUp)
+        if #available(iOS 26.0, *) {
+            XCTAssertEqual(initial.urgentLowAlarm, .notDetermined)
+        } else {
+            XCTAssertEqual(initial.urgentLowAlarm, .unavailable)
+        }
         XCTAssertEqual(DataRetention.default, .twoYears)
         XCTAssertEqual(AppearancePreference.default, .system)
         XCTAssertNil(AppearancePreference.system.colorScheme)
         let progress = ImportProgress(origin: .nightscout, readingsImported: 12_408, covered: DateInterval(start: minutes(-13 * 1_440), end: t0), isFinished: false, errorMessage: nil)
         XCTAssertEqual(OnboardingText.importProgress(progress, context: testContext), "12,408 readings imported · Sep 10 – Sep 23")
+    }
+
+    /// D26: the Alarms step appears only where AlarmKit exists.
+    func test_alarmsStepOnlyWhenAlarmKitIsAvailable() {
+        XCTAssertEqual(OnboardingStep.visibleSteps(alarmsAvailable: true), [.welcome, .importHistory, .removeDexcomApp, .permissions, .alarms, .pairing, .warmUp])
+        XCTAssertEqual(OnboardingStep.visibleSteps(alarmsAvailable: false), [.welcome, .importHistory, .removeDexcomApp, .permissions, .pairing, .warmUp])
+        XCTAssertEqual(OnboardingStep.permissions.next(alarmsAvailable: true), .alarms)
+        XCTAssertEqual(OnboardingStep.permissions.next(alarmsAvailable: false), .pairing)
+        XCTAssertEqual(OnboardingStep.pairing.previous(alarmsAvailable: false), .permissions)
+        XCTAssertEqual(OnboardingStep.pairing.previous(alarmsAvailable: true), .alarms)
+        XCTAssertNil(OnboardingStep.warmUp.next(alarmsAvailable: true))
+        XCTAssertNil(OnboardingStep.welcome.previous(alarmsAvailable: true))
+        for status in [UrgentLowAlarmStatus.authorized, .denied, .notDetermined, .unavailable] {
+            XCTAssertFalse(SettingsText.urgentLowAlarm(status).note.isEmpty)
+        }
+        XCTAssertTrue(SettingsText.urgentLowAlarm(.unavailable).note.contains("iOS 26"))
     }
 
     func test_settingsText() {

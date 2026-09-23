@@ -61,6 +61,46 @@ final class ScreenshotTests: XCTestCase {
         try render(calibration(.available, large), name: "calibration-big-difference-dark", scheme: .dark)
     }
 
+    @MainActor
+    func test_renderScrubbing() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            let chart = VStack(alignment: .leading, spacing: 24) {
+                scrubChart(.normal, window: .threeHours, minutesBack: 40)
+                scrubChart(.normal, window: .twelveHours, minutesBack: 10 * 60 + 5)
+                scrubChart(.lowFlag, window: .threeHours, minutesBack: 6)
+            }
+            .padding(20)
+            .editorialScreen()
+            try render(chart, name: "now-chart-scrub-\(scheme.name)", scheme: scheme, height: nil)
+            let days = Fixtures.dayTraces(count: 3, now: now)
+            let overlay = DayOverlayChart(days: days, initialScrubHour: 9.25)
+                .frame(width: 350, height: 160)
+                .padding(20)
+                .editorialScreen()
+            try render(overlay, name: "trends-3d-scrub-\(scheme.name)", scheme: scheme, height: nil)
+        }
+    }
+
+    @MainActor
+    private func scrubChart(_ scenario: Fixtures.NowScenario, window: ChartWindow, minutesBack: Double) -> some View {
+        let state = Fixtures.now(scenario, at: now)
+        let zone = Self.newYork
+        return GlucoseTraceChart(
+            points: state.chartPoints,
+            domain: now.addingTimeInterval(-window.duration)...now,
+            options: GlucoseTraceChart.Options(showsAxes: true, hourStride: window.hourStride, scrubbable: true),
+            accessibilityTitle: window.spokenName,
+            timeText: { date in
+                var style = Date.FormatStyle(date: .omitted, time: .shortened)
+                style.timeZone = zone
+                style.locale = Locale(identifier: "en_US")
+                return date.formatted(style)
+            },
+            initialScrubDate: now.addingTimeInterval(-minutesBack * 60)
+        )
+        .frame(width: 350, height: 200)
+    }
+
     // MARK: Widgets
 
     @MainActor

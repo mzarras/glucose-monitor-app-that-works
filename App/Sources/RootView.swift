@@ -112,6 +112,7 @@ struct RootView: View {
             startClarityImport: { _, _ in },
             requestBluetooth: { model.onboarding?.bluetooth = .granted },
             requestNotifications: { model.onboarding?.notifications = .authorized },
+            requestAlarms: { model.onboarding?.urgentLowAlarm = .authorized },
             setShareUpload: { enabled, _, _, region in
                 model.onboarding?.shareUploadEnabled = enabled
                 model.onboarding?.shareRegion = region

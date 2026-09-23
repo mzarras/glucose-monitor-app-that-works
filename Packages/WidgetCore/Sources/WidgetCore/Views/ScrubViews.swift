@@ -80,6 +80,44 @@ public struct ScrubCalloutView: View {
     }
 }
 
+/// The callout placed over a plot, at the top, beside the scrub rule at `x`: to its right when it
+/// fits, otherwise to its left (measured width, so long captions like "below sensor range" never
+/// run off the edge). Beside, not over, so it never hides the rule or the highlighted point.
+public struct PlacedScrubCallout: View {
+    let callout: ScrubCallout
+    let extraLines: [String]
+    /// Rule position, in the same coordinate space as `plot`.
+    let x: CGFloat
+    let plot: CGRect
+
+    public init(callout: ScrubCallout, extraLines: [String] = [], x: CGFloat, plot: CGRect) {
+        self.callout = callout
+        self.extraLines = extraLines
+        self.x = x
+        self.plot = plot
+    }
+
+    /// Left edge of the callout, relative to the plot.
+    static func left(ruleX: CGFloat, width: CGFloat, plotWidth: CGFloat, gap: CGFloat = 8) -> CGFloat {
+        let right = ruleX + gap
+        if right + width <= plotWidth { return right }
+        return max(0, ruleX - gap - width)
+    }
+
+    public var body: some View {
+        Color.clear
+            .frame(width: plot.width, height: plot.height)
+            .overlay(alignment: .topLeading) {
+                ScrubCalloutView(callout: callout, extraLines: extraLines)
+                    .alignmentGuide(.leading) { size in
+                        -Self.left(ruleX: x - plot.minX, width: size.width, plotWidth: plot.width)
+                    }
+                    .alignmentGuide(.top) { _ in -4 }
+            }
+            .position(x: plot.midX, y: plot.midY)
+    }
+}
+
 /// Audio graph / VoiceOver chart description (Swift Charts' accessibilityChartDescriptor).
 /// Numeric readings only, as discrete points (never joined across gaps, S1); LOW/HIGH flags have
 /// no number to sonify and are listed in the summary instead (S4).

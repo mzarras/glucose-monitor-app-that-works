@@ -24,6 +24,7 @@ enum TimeOfDayAxis {
                     Text(verbatim: HourLabel.text(hourOfDay: hour))
                         .font(Typography.fixedLabel(size: 10))
                         .foregroundStyle(Theme.muted)
+                        .fixedSize()
                 }
             }
         }
@@ -102,6 +103,12 @@ struct DayOverlayChart: View {
     let days: [DayTrace]
     @State private var scrubHour: Double?
     @State private var accessibilityReading: ChartPoint?
+
+    /// - Parameter initialScrubHour: previews and screenshots only — start with the finger here.
+    init(days: [DayTrace], initialScrubHour: Double? = nil) {
+        self.days = days
+        _scrubHour = State(initialValue: initialScrubHour)
+    }
 
     private struct Line: Identifiable {
         let id: String
@@ -243,15 +250,15 @@ struct DayOverlayChart: View {
                     .fill(selection.reading == nil ? AnyShapeStyle(Theme.muted) : AnyShapeStyle(Theme.ink))
                     .frame(width: 1, height: plot.height)
                     .position(x: plot.minX + x, y: plot.midY)
-                if let mgdl = selection.reading?.value.numericMgdl, let y = proxy.position(forY: mgdl) {
+                let pointY: CGFloat? = selection.reading?.value.numericMgdl.flatMap { proxy.position(forY: $0) }.map { plot.minY + $0 }
+                if let pointY {
                     Circle()
                         .fill(Theme.background)
                         .overlay(Circle().stroke(Theme.ink, lineWidth: 2))
                         .frame(width: 11, height: 11)
-                        .position(x: plot.minX + x, y: plot.minY + y)
+                        .position(x: plot.minX + x, y: pointY)
                 }
-                ScrubCalloutView(callout: callout, extraLines: otherDaysLines(primary: primary))
-                    .position(x: min(max(plot.minX + x, plot.minX + 56), plot.maxX - 56), y: plot.minY + 28)
+                PlacedScrubCallout(callout: callout, extraLines: otherDaysLines(primary: primary), x: plot.minX + x, plot: plot)
             }
         }
     }
