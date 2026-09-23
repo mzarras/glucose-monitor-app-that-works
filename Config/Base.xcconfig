@@ -1,0 +1,24 @@
+// Shared build settings for every target. Signing values come from Signing.xcconfig,
+// which is gitignored; copy Signing.example.xcconfig to Signing.xcconfig and fill it in.
+// Values below are safe defaults that let the project build unsigned (the §10 gates use
+// CODE_SIGNING_ALLOWED=NO for generic/platform=iOS builds).
+
+APP_DISPLAY_NAME = Sensor
+
+DEVELOPMENT_TEAM =
+BUNDLE_ID_PREFIX = org.example.sensor
+
+// This app's own App Group: SQLite database + widget snapshot live here (HANDOFF §4.5).
+APP_GROUP_ID = group.$(BUNDLE_ID_PREFIX)
+
+// Trio's App Group. Trio's AppGroupSource reads Info.plist key AppGroupID = $(APP_GROUP_ID),
+// which Trio's Config.xcconfig:18 sets to this exact pattern. Both apps must share the Team ID.
+TRIO_APP_GROUP_ID = group.org.nightscout.$(DEVELOPMENT_TEAM).trio.trio-app-group
+
+// Critical Alerts need an Apple-granted entitlement (HANDOFF §4.7). Signing fails if the
+// entitlement is requested before Apple adds it to the team, so it is a switch:
+//   App/Sensor.entitlements                 — Time Sensitive only (default)
+//   App/Sensor+CriticalAlerts.entitlements  — adds com.apple.developer.usernotifications.critical-alerts
+SENSOR_APP_ENTITLEMENTS = App/Sensor.entitlements
+
+#include? "Signing.xcconfig"

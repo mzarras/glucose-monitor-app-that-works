@@ -1,0 +1,18 @@
+// Copy to Config/Signing.xcconfig (gitignored) and fill in.
+
+// 10-character Apple Developer Team ID. Must be the same team that signs your Trio build,
+// otherwise the two apps cannot share Trio's App Group.
+DEVELOPMENT_TEAM = ABCDE12345
+
+// Bundle ID of the app; extensions append a suffix (e.g. .widgets).
+BUNDLE_ID_PREFIX = com.example.sensor
+
+// This app's own App Group (database + widget snapshot).
+APP_GROUP_ID = group.$(BUNDLE_ID_PREFIX)
+
+// Trio's App Group. Leave as-is unless you changed TRIO_APP_GROUP_ID in your Trio build.
+TRIO_APP_GROUP_ID = group.org.nightscout.$(DEVELOPMENT_TEAM).trio.trio-app-group
+
+// Switch to App/Sensor+CriticalAlerts.entitlements once Apple has granted the
+// Critical Alerts entitlement to your team (developer.apple.com → request form).
+SENSOR_APP_ENTITLEMENTS = App/Sensor.entitlements
