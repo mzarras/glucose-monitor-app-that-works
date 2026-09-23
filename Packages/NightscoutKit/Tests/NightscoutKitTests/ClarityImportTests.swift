@@ -187,29 +187,49 @@ final class ClarityImportTests: XCTestCase {
         XCTAssertEqual(result.rejectedAmbiguousLocalTime, 2)
     }
 
-    func test_S3_clarityFileOrderWithoutTransmitterTimeNeedsContinuousData() throws {
-        // No transmitter times at all: 5-minute rows through both passes are placed by file order.
-        var rows: [(String, String, String)] = []
-        for minute in stride(from: 50, through: 55, by: 5) { rows.append((String(format: "2025-11-02T00:%02d:00", minute), "120", "")) }
+    func test_S3_clarityAmbiguousRowWithoutTransmitterTimeIsRejected() throws {
+        // Review n4: without a transmitter time, nothing in the file places a repeated-hour row, so
+        // every such row is rejected and counted; rows outside the hour are unaffected.
+
+        // Continuous 5-minute data through both passes: all 12 + 3 repeated-hour rows rejected.
+        var rows: [(String, String, String)] = [("2025-11-02T00:55:00", "120", "")]
         for minute in stride(from: 0, through: 55, by: 5) { rows.append((String(format: "2025-11-02T01:%02d:00", minute), "121", "")) }  // EDT
         for minute in stride(from: 0, through: 10, by: 5) { rows.append((String(format: "2025-11-02T01:%02d:00", minute), "122", "")) }  // EST
-        let result = try ClarityExportParser.parse(export(rows), timeZone: Self.newYork, now: ClarityImportTests.now)
-        let expected = stride(from: 0, to: 17 * 300, by: 300).map { Fixtures.date("2025-11-02T04:50:00Z").addingTimeInterval(TimeInterval($0)) }
-        XCTAssertEqual(result.readings.map(\.date), expected, "04:50Z … 05:55Z, then 06:00Z … 06:10Z")
-        XCTAssertEqual(result.rejectedAmbiguousLocalTime, 0)
+        rows.append(("2025-11-02T02:00:00", "123", ""))
+        let continuous = try ClarityExportParser.parse(export(rows), timeZone: Self.newYork, now: ClarityImportTests.now)
+        XCTAssertEqual(continuous.readings.map(\.date), [Fixtures.date("2025-11-02T04:55:00Z"), Fixtures.date("2025-11-02T07:00:00Z")])
+        XCTAssertEqual(continuous.rejectedAmbiguousLocalTime, 15)
 
-        // Across a data gap both passes fit the order: rejected, not guessed.
-        let gap = try ClarityExportParser.parse(export([
-            ("2025-11-02T00:30:00", "120", ""),
-            ("2025-11-02T01:40:00", "121", ""),
+        // Gap straddling the transition: the last first-pass reading is 01:20 EDT (05:20Z); the next
+        // is really 01:25 EST (06:25Z), 65 min later. File order would put it at 05:25Z — five
+        // minutes on, an hour early. Rejected instead.
+        let straddling = try ClarityExportParser.parse(export([
+            ("2025-11-02T00:55:00", "120", ""),
+            ("2025-11-02T01:20:00", "110", ""),
+            ("2025-11-02T01:25:00", "95", ""),
         ]), timeZone: Self.newYork, now: ClarityImportTests.now)
-        XCTAssertEqual(gap.readings.map(\.date), [Fixtures.date("2025-11-02T04:30:00Z")])
-        XCTAssertEqual(gap.rejectedAmbiguousLocalTime, 1)
+        XCTAssertEqual(straddling.readings.map(\.date), [Fixtures.date("2025-11-02T04:55:00Z")])
+        XCTAssertEqual(straddling.rejectedAmbiguousLocalTime, 2)
+        XCTAssertFalse(straddling.readings.contains { $0.date == Fixtures.date("2025-11-02T05:25:00Z") })
 
-        // With no earlier row there is nothing to order against: rejected.
-        let first = try ClarityExportParser.parse(export([("2025-11-02T01:40:00", "121", "")]), timeZone: Self.newYork, now: ClarityImportTests.now)
-        XCTAssertTrue(first.readings.isEmpty)
-        XCTAssertEqual(first.rejectedAmbiguousLocalTime, 1)
+        // Interleaved passes (a file sorted by wall-clock time) and a non-chronological file.
+        for order in [["01:00", "01:00", "01:05", "01:05"], ["01:30", "01:05", "01:40", "01:10"]] {
+            let result = try ClarityExportParser.parse(export(
+                [("2025-11-02T00:55:00", "120", "")] + order.map { ("2025-11-02T\($0):00", "121", "") }
+            ), timeZone: Self.newYork, now: ClarityImportTests.now)
+            XCTAssertEqual(result.readings.map(\.date), [Fixtures.date("2025-11-02T04:55:00Z")], "\(order)")
+            XCTAssertEqual(result.rejectedAmbiguousLocalTime, 4, "\(order)")
+        }
+
+        // With a transmitter time and an anchor, the same rows are placed (control).
+        let withClock = try ClarityExportParser.parse(export([
+            ("2025-11-02T00:55:00", "120", "86400"),
+            ("2025-11-02T01:20:00", "110", "87900"),
+            ("2025-11-02T01:25:00", "95", "91800"),
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
+        XCTAssertEqual(withClock.readings.map(\.date), [
+            Fixtures.date("2025-11-02T04:55:00Z"), Fixtures.date("2025-11-02T05:20:00Z"), Fixtures.date("2025-11-02T06:25:00Z"),
+        ])
     }
 
     func test_S3_clarityRepeatedRowWithoutEvidenceIsADuplicateNotANewReading() throws {
@@ -222,18 +242,10 @@ final class ClarityImportTests: XCTestCase {
         ]), timeZone: Self.newYork, now: ClarityImportTests.now)
         XCTAssertEqual(withClock.readings.map(\.date), [Fixtures.date("2025-11-02T04:55:00Z"), Fixtures.date("2025-11-02T05:30:00Z")])
         XCTAssertEqual(withClock.duplicateRows, 1)
-        // Without transmitter times: the repeat continues the sequence at the same instant.
-        let withoutClock = try ClarityExportParser.parse(export([
-            ("2025-11-02T00:55:00", "117", ""),
-            ("2025-11-02T01:00:00", "108", ""),
-            ("2025-11-02T01:00:00", "108", ""),
-        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
-        XCTAssertEqual(withoutClock.readings.map(\.date), [Fixtures.date("2025-11-02T04:55:00Z"), Fixtures.date("2025-11-02T05:00:00Z")])
-        XCTAssertEqual(withoutClock.duplicateRows, 1)
     }
 
     func test_S3_clarityOutOfOrderAmbiguousTimeIsRejected() throws {
-        // 03:00 EST, then a 01:30 that could be 05:30Z or 06:30Z — both before 08:00Z: out of order.
+        // 03:00 EST, then a 01:30 (05:30Z or 06:30Z) with no transmitter time: rejected (n4).
         let result = try ClarityExportParser.parse(export([
             ("2025-11-02T03:00:00", "120", ""),
             ("2025-11-02T01:30:00", "118", ""),

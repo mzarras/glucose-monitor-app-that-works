@@ -121,18 +121,16 @@ either side).
      passes interleaved is still placed correctly.
   2. **A row with a transmitter time but no comparable known row** (e.g. a new sensor whose only
      rows sit inside the repeated hour after a data gap) is rejected: its clock cannot be tied to
-     an instant, and file order could place it an hour off.
-  3. **Only rows with no transmitter time at all** use chronological file order, with P = the
-     nearest earlier known instant: no earlier row → rejected; E and L both not before P → E if
-     E is at most 10 min after P (continuous 5-minute data; E equal to P is the same reading
-     listed twice — a duplicate, not a new reading an hour away, S1), otherwise rejected (across
-     a gap either pass fits); only L not before P → L (second pass); neither → rejected (out of
-     order).
+     an instant.
+  3. **A row with no transmitter time** is rejected. File order cannot decide: a 60–70 min gap
+     straddling the transition, or a file that is not strictly chronological, makes the wrong
+     pass look like the continuation.
 
-  No instant is assumed: a placed row matches the transmitter clock, or is the only candidate
-  consistent with chronological order, or continues the sequence within 10 min. Everything else
-  is rejected and counted (`rejectedAmbiguousLocalTime`).
-  So two readings at the same wall-clock time, one per pass, get two instants and two ids.
+  No instant is assumed: a repeated-hour row is placed only when the transmitter clock, measured
+  from a row whose instant is known, matches one of its two candidates within 60 s. Everything
+  else is rejected and counted (`rejectedAmbiguousLocalTime`). Two readings at the same wall-clock
+  time, one per pass, get two instants and two ids. Real Clarity exports carry transmitter times;
+  at most one hour per year is affected.
 
 ## Resume and idempotency
 

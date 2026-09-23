@@ -2,7 +2,7 @@
 // wall-clock time happened twice: earlier instant E, later instant L). S3: the instant is derived
 // from evidence in the file, never assumed; when the evidence does not decide, the row is rejected.
 //
-// Evidence, strongest first:
+// Rules:
 //
 // 1. Transmitter time (column "Transmitter Time (Long Integer)": seconds on the transmitter's own
 //    clock, which does not jump at DST). Take the nearest row in file order (earlier rows win ties)
@@ -19,21 +19,14 @@
 //    with (e.g. a sensor whose only rows sit inside the repeated hour after a data gap) is
 //    rejected (`rejectedAmbiguousLocalTime`): its clock cannot be tied to an instant.
 //
-// 3. Only rows with no transmitter time at all use file order, which Clarity writes
-//    chronologically. With P = the instant of the nearest earlier known row:
-//       no earlier known row                → rejected
-//       E and L both not before P:
-//         E at most 10 min after P          → E   (continuous 5-minute data, still the first pass;
-//                                                  E equal to P is the same reading listed twice
-//                                                  and becomes a duplicate id, never a new reading
-//                                                  an hour away, S1)
-//         E more than 10 min after P        → rejected: across a data gap either pass fits
-//       only L not before P                 → L   (the clock went back: second pass)
-//       neither                             → rejected: out of order.
+// 3. A row with no transmitter time is rejected (`rejectedAmbiguousLocalTime`). File order cannot
+//    decide: a 60–70 min gap straddling the transition, or a file that is not strictly
+//    chronological, makes the wrong pass look like the continuation (review n4).
 //
-// So no instant is ever assumed: a placed row either matches the transmitter clock, or is the
-// only candidate consistent with the file's chronological order, or (when both are) continues the
-// sequence within 10 min. Everything else is rejected and counted.
+// So no instant is ever assumed: a row in the repeated hour is placed only when the transmitter
+// clock, measured from a row whose instant is known, matches one of its two candidates within
+// 60 s. Everything else is rejected and counted. (Real Clarity exports carry transmitter times;
+// at most one hour of rows per year can be affected.)
 
 import Foundation
 
@@ -78,17 +71,12 @@ struct FallBackHourResolver {
         }
         for index in rows.indices {
             guard case .ambiguous(let earlier, let later) = rows[index].time else { continue }
+            // Rules 1–3: the transmitter clock decides, or nothing does.
             let chosen: Date?
-            if rows[index].transmitterTime != nil {
-                // Rules 1 and 2: the transmitter clock decides, or nothing does.
-                if let expected = expectedByTransmitterTime(index, rows: rows, known: known) {
-                    chosen = [earlier, later].first { abs($0.timeIntervalSince(expected)) <= transmitterTimeTolerance }
-                } else {
-                    chosen = nil
-                }
+            if let expected = expectedByTransmitterTime(index, rows: rows, known: known) {
+                chosen = [earlier, later].first { abs($0.timeIntervalSince(expected)) <= transmitterTimeTolerance }
             } else {
-                // Rule 3: no transmitter time at all.
-                chosen = byFileOrder(earlier: earlier, later: later, previous: known[..<index].last { $0 != nil } ?? nil)
+                chosen = nil
             }
             if let chosen {
                 known[index] = chosen
@@ -110,21 +98,6 @@ struct FallBackHourResolver {
                 return anchorDate.addingTimeInterval(time - anchorTime)
             }
         }
-        return nil
-    }
-
-    /// Largest step from the previous row for which "E continues the sequence" is trusted (rule 3).
-    /// G7 readings are 5 minutes apart; beyond this there is a gap in which either pass could fit.
-    static let maximumContinuousGap: TimeInterval = 10 * 60
-
-    /// Rule 3 (row without a transmitter time): chronological file order, no gaps.
-    private static func byFileOrder(earlier: Date, later: Date, previous: Date?) -> Date? {
-        guard let previous else { return nil }
-        if earlier >= previous {
-            // Both candidates fit the order; only a step of at most 10 min tells them apart.
-            return earlier.timeIntervalSince(previous) <= maximumContinuousGap ? earlier : nil
-        }
-        if later >= previous { return later }
         return nil
     }
 }

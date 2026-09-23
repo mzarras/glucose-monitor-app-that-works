@@ -19,11 +19,10 @@
 // DST (timestamps have no offset, so the caller supplies the time zone they were recorded in):
 //   - Spring forward: a local time inside the skipped hour never happened; the row is rejected and
 //     counted (`rejectedNonexistentLocalTime`).
-//   - Fall back: a local time inside the repeated hour happened twice. The row is placed by its
-//     transmitter time relative to a row whose instant is known, or — only without transmitter
-//     times — by chronological file order; see FallBackHourResolver.swift for the exact rules.
-//     Rows the evidence does not place are rejected (`rejectedAmbiguousLocalTime`). Two readings at
-//     the same wall-clock time, one per pass, get two instants and two ids.
+//   - Fall back: a local time inside the repeated hour happened twice. The row is placed only by
+//     its transmitter time relative to a row whose instant is known (FallBackHourResolver.swift);
+//     rows without that evidence are rejected (`rejectedAmbiguousLocalTime`). Two readings at the
+//     same wall-clock time, one per pass, get two instants and two ids.
 
 import Foundation
 import GlucoseCore
