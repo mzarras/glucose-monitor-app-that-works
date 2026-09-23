@@ -24,10 +24,19 @@ final class ScreenshotTests: XCTestCase {
     private let context = DisplayContext(locale: Locale(identifier: "en_US"), timeZone: ScreenshotTests.newYork)
     private let now = Fixtures.referenceNow
 
+    private var savedTimeZone: TimeZone?
+
     override func setUp() {
         super.setUp()
-        // Chart hour labels use the current zone; pin it so they match the header.
+        // Chart hour labels use the current zone; pin it so they match the header, and restore it
+        // afterwards so no other test sees New York time.
+        savedTimeZone = NSTimeZone.default
         NSTimeZone.default = Self.newYork
+    }
+
+    override func tearDown() {
+        if let savedTimeZone { NSTimeZone.default = savedTimeZone }
+        super.tearDown()
     }
 
     // MARK: Screens
