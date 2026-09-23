@@ -19,10 +19,10 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (6da2eae): 106 tests, 99% cov Messages/; fixing review | **FAIL** (B1 unsolicited auth status accepted; B2 `currentSession` vs D28) → fixing | — |
 | WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (7aa1ef6): 83 + 38 tests; fixing M1 (D33) + minors | **PASS** (0 blockers) | — |
 | WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (de6da6b): 150 tests, 99.88% cov, 90 d in 5.8 ms release | **PASS** (after 2 fix rounds) | **yes** — 3002c9d; gates build+tests+safety PASS on merged result |
-| WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (d1f946c): 161 tests, 99.6% cov; fixing review + AlarmKit (D26) | **FAIL** (B1 clock rollback hides urgent low / extends snooze) → fixing | — |
+| WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (5ed31bb): 200 tests, 99.4% cov; B1/M1 fixed, AlarmKit (D26) built | FAIL → fixed; delta re-review running | — |
 | WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | done (3287a14): 61 + 52 tests, 132 previews, 26 screenshots; fixing review | **FAIL** (B1 hero truncates / LOW disappears at accessibility sizes; M1 future-dated reading current; M2 Now chart not scrubbable; M3 DEBUG banner hidden in onboarding) → fixing | — |
 | WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (cbf5619): 62 tests, 97.8% cov | **PASS** (after 2 fix rounds) | **yes** — 9305a72; gates build+tests+safety (S2–S6) PASS on merged result |
-| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (aa48158): 110 tests, 91.85% cov; D29/D30/D33 applied | FAIL → fixed; delta re-review running | — |
+| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (aa48158): 110 tests, 91.85% cov; D29/D30/D33 applied; fixing n1/n2 | **PASS** (delta: 0 blockers, 0 majors) | — |
 
 ### Merge flow
 
@@ -67,6 +67,7 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D31 | G7 raw glucose 0, 0x0FFF and 0xFFFE are "no value" (withheld, logged, surfaced) — never LOW/HIGH; other raw < 40 → LOW, > 400 → HIGH (G7SensorKit mapping). No real LOW/HIGH G7 packet exists in any reference: capturing one is a §11 item before relying on HIGH → 401 in closed loop. | WS1 review M1: a misread packet would otherwise become HIGH and reach Trio as 401. |
 | D32 | Design tokens: light `high` #C58A2B → **#B07B26** (the §7.1 value is 2.64:1 on the background, fails 3:1) and `veryHigh` #8A5A12 → **#754D0F** (keeps the step between them); dark values unchanged; dark accents #4BAA7E, #D57B53, #6A92C8, #EDE8DE. Recorded in `docs/design-tokens.md`. | §7.1 requires WCAG AA; WS5's contrast test, accepted by the WS5 reviewer. |
 | D33 | Stores also reject (whole batch) non-finite trend rates (`.nonFiniteTrendRate`, never rewritten to nil) and readings dated later than the store clock + `LiveReadingGate.futureTolerance` (`.futureDated`); `insert` returns readings exactly as passed. Importers skip future-dated rows (counted). | WS2 review M1: rewriting NaN → nil let a parse-fault reading pass the gate downstream; reviewer's contract note on future-dated rows becoming the current value. |
+| D34 | AlarmKit details (WS4): precedence Critical Alert > AlarmKit > D17; urgent-low repeat interval 2–5 min (was 1–5) to keep ≥ 60 min of pre-scheduled repeats under iOS's 64 pending-notification limit; alarm title is just "Urgent low" (no value — pre-scheduled repeats would show a stale number, S1); no separate Snooze button (Stop = acknowledge, ≤ 30 min); a backwards clock jump ends an urgent-low snooze (errs loud). | Orchestrator, following WS4's evidence; S1/S7 considerations. |
 
 ## Discrepancies with HANDOFF (resolved)
 
@@ -100,6 +101,8 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 
 - NightscoutKit wiring (WS7): `try` on uploader factories (one uploader per queue file, enforced); `credentialsChanged()` then `flush()` after saving credentials; `flush()` again after `.alreadyFlushing`; show `rejectedFutureDated` / `skipped[.futureDated]` in import progress.
 - Stats wiring (WS3): fetch readings for [period start − 24 h, now) (hypo context); "Today so far → lows" = `level1EventCountOverlappingPeriod`; show the data-sufficiency warning next to GMI.
+
+- AlertEngine wiring (WS4, `docs/alerts.md` §9): add `StopUrgentLowAlarmIntent` in the app target; pass `SystemAlarmAdapter(makeStopIntent:)` to `AlertService`; connect `UrgentLowAlarmIntentBridge.shared`; onboarding step `requestUrgentLowAlarmAuthorization()`; Settings row from `deliveryStatus.urgentLowAlarm`; call `start()`; feed `.reading` only with readings returned by `insert` (after the gate); tick ~1/min in foreground and on every wake; hook `UNUserNotificationCenterDelegate` to `handleNotificationResponse`; DEBUG replay → `acceptsReplayReadings`.
 
 ## §11 on-device checklist additions (collected from reviews; goes into docs/setup.md in Phase 3)
 
