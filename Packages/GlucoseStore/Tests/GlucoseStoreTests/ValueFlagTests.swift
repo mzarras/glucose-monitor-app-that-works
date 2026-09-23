@@ -71,4 +71,50 @@ final class ValueFlagTests: XCTestCase {
             XCTAssertEqual(error.resultCode, .SQLITE_CONSTRAINT)
         }
     }
+
+    // MARK: Numeric range (PROGRESS.md D25)
+
+    func test_S1_storeRefusesNumericValueOutsideSensorRange() async throws {
+        for value in [39, 401, 0] {
+            for implausible in [sensorReading(at: 600, .mgdl(value)), importedReading(at: 3_600, .mgdl(value))] {
+                let store = try GlucoseStore.productionInMemory()
+                // A valid reading in the same call: the whole batch is refused.
+                do {
+                    _ = try await store.insert([sensorReading(at: 0), implausible])
+                    XCTFail("stored \(implausible.source) value \(value)")
+                } catch let error as GlucoseReadingRepositoryError {
+                    XCTAssertEqual(error, .implausibleValue(value))
+                }
+                let count = try await store.summary().readingCount
+                XCTAssertEqual(count, 0, "nothing stored for \(implausible.source) value \(value)")
+            }
+        }
+        #if DEBUG
+        let replay = try GlucoseStore.replay()
+        do {
+            _ = try await replay.insert([replayReading(at: 0, .mgdl(401))])
+            XCTFail("replay store stored 401")
+        } catch let error as GlucoseReadingRepositoryError {
+            XCTAssertEqual(error, .implausibleValue(401))
+        }
+        #endif
+    }
+
+    func test_S1_schemaRejectsNumericValueOutsideSensorRange() async throws {
+        let store = try GlucoseStore.productionInMemory()
+        for value in [39, 401, 0, -5, 4_095] {
+            do {
+                try await store.writer.write { db in
+                    try db.execute(sql: """
+                        INSERT INTO reading (id, date, valueKind, mgdl, trendRate, isBackfill, sourceKind, importOrigin, sensorSerial)
+                        VALUES ('x', 0, 'mgdl', ?, NULL, 0, 'sensor', NULL, 'S')
+                        """, arguments: [value])
+                }
+                XCTFail("schema accepted mgdl \(value)")
+            } catch let error as DatabaseError {
+                XCTAssertEqual(error.resultCode, .SQLITE_CONSTRAINT)
+            }
+        }
+    }
 }
+

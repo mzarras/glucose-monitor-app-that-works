@@ -1,7 +1,7 @@
 // Factories. The role is part of the factory name so it is visible at every call site
 // (GlucoseReadingRepository "Two roles", PROGRESS.md D20):
 //
-//   GlucoseStore.production(at:)       the app's database (App Group container), .sensor/.imported
+//   GlucoseStore.production(at:)       the app's database (app container, D25), .sensor/.imported
 //   GlucoseStore.productionInMemory()  same rules, in memory: tests and SwiftUI previews
 //   GlucoseStore.replay()              DEBUG only, in memory, .replay/.mock
 //   GlucoseStore.replay(at:)           DEBUG only, a separate file, .replay/.mock
@@ -15,13 +15,16 @@ extension GlucoseStore {
     /// any replay/mock rows, and applies `completeUntilFirstUserAuthentication` protection to the
     /// database and its -wal/-shm files (HANDOFF §4.5). The file is not excluded from backup.
     ///
+    /// The app passes a file in its own container (Application Support), not the App Group
+    /// container (PROGRESS.md D25); only the widget snapshot lives in the App Group.
+    ///
     /// `@concurrent` so the migration and file work never run on the caller's actor.
     ///
     /// - Parameters:
-    ///   - observesSuspensionNotifications: passed to GRDB. Turn on when the file is in an App
-    ///     Group container and the app posts `Database.suspendNotification` /
-    ///     `resumeNotification` around suspension (see docs/storage.md, "App Group container and
-    ///     0xDEAD10CC").
+    ///   - observesSuspensionNotifications: passed to GRDB. Not needed in the app's own container
+    ///     (default false). Only a database in a shared (App Group) container needs it, together
+    ///     with `Database.suspendNotification` / `resumeNotification` posted around suspension, to
+    ///     avoid the 0xDEAD10CC termination (docs/storage.md).
     ///   - now: clock for diagnostics and retention; injected in tests.
     @concurrent
     public static func production(

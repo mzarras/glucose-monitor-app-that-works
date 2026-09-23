@@ -23,8 +23,8 @@ public final class GlucoseStore: GlucoseReadingRepository {
     private let broadcaster = ChangeBroadcaster()
 
     /// Migrates, then enforces the role on what is already stored:
-    /// - production: deletes any `.replay`/`.mock` rows (a DEBUG build may have written them to the
-    ///   same file before roles existed) and records how many (S6);
+    /// - production: deletes any `.replay`/`.mock` rows (a DEBUG build from before roles existed may
+    ///   have written them to the same file) and records how many (S6);
     /// - replay: refuses a file that holds `.sensor`/`.imported` rows (it is the wrong file).
     init(
         role: StoreRole,
@@ -46,7 +46,14 @@ public final class GlucoseStore: GlucoseReadingRepository {
         guard unknownMigrations.isEmpty else {
             throw GlucoseStoreError.databaseFromNewerAppVersion(unknownMigrations: unknownMigrations)
         }
+        let removedByV2 = try writer.read { db in try StoreSchema.rowsRemovedByV2(db, migrator: migrator) }
         try migrator.migrate(writer)
+        if removedByV2 > 0 {
+            diagnostics.record(DiagnosticEvent(
+                date: now(), category: .store,
+                message: "Migration \(StoreSchema.v2MgdlRangeCheck) removed \(removedByV2) stored reading(s) with a number outside 40...400 (parse faults, S1)"
+            ))
+        }
 
         switch role {
         case .production:
@@ -89,12 +96,11 @@ public final class GlucoseStore: GlucoseReadingRepository {
     /// See `GlucoseReadingRepository.insert` and `ReadingInsertion.insert` for the rules.
     /// One write transaction per call: either the whole batch is applied or nothing is.
     ///
-    /// Throws `GlucoseReadingRepositoryError.sourceNotAllowed` (and writes nothing) if any reading's
-    /// source is not allowed in this store's role.
+    /// Throws, and writes nothing from the batch, if any reading's source is not allowed in this
+    /// store's role (`sourceNotAllowed`) or any numeric value is outside 40...400
+    /// (`implausibleValue`). See `ReadingInsertion.validate`.
     public func insert(_ readings: [GlucoseReading]) async throws -> [GlucoseReading] {
-        if let refused = readings.first(where: { !role.allows($0.source) }) {
-            throw GlucoseReadingRepositoryError.sourceNotAllowed(refused.source)
-        }
+        try ReadingInsertion.validate(readings, role: role)
         guard !readings.isEmpty else { return [] }
         let outcome = try await writer.write { db in
             try ReadingInsertion.insert(readings, in: db)
@@ -102,6 +108,9 @@ public final class GlucoseStore: GlucoseReadingRepository {
         // Recorded after the commit, so a rolled-back batch never logs conflicts that did not happen.
         for conflict in outcome.conflicts {
             record("Kept stored reading \(conflict.id); a re-delivered copy differed in: \(conflict.differingColumns.joined(separator: ", "))")
+        }
+        if outcome.benignRedeliveryCount > 0 {
+            record("Ignored \(outcome.benignRedeliveryCount) re-delivered reading(s) already stored (differing only in isBackfill and/or by ≤ 2 s in date)")
         }
         if outcome.replacedImportedCount > 0 {
             record("Removed \(outcome.replacedImportedCount) imported reading(s) within ±150 s of new sensor readings")

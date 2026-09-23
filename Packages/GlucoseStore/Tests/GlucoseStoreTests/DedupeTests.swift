@@ -132,4 +132,63 @@ final class DedupeTests: XCTestCase {
         let newlyStored = try await store.insert([])
         XCTAssertEqual(newlyStored, [])
     }
+
+    // MARK: Benign re-deliveries (a backfilled copy of a reading already stored live)
+
+    private func copy(
+        of reading: GlucoseReading, dateShift: TimeInterval = 0, value: GlucoseValue? = nil, trendRate: Double?? = nil,
+        isBackfill: Bool = true, source: ReadingSource? = nil, serial: String? = nil
+    ) -> GlucoseReading {
+        GlucoseReading(
+            id: reading.id, date: reading.date.addingTimeInterval(dateShift), value: value ?? reading.value,
+            trendRate: trendRate ?? reading.trendRate, isBackfill: isBackfill, source: source ?? reading.source,
+            sensorSerial: serial ?? reading.sensorSerial
+        )
+    }
+
+    func test_S3_benignRedeliveriesAreCountedNotLoggedPerReading() async throws {
+        let log = RecordingDiagnosticLog()
+        let store = try GlucoseStore.productionInMemory(diagnostics: log, now: { referenceInstant })
+        let live = [sensorReading(at: 0), sensorReading(at: 300), sensorReading(at: 600)]
+        _ = try await store.insert(live)
+
+        let redelivered = [
+            copy(of: live[0]),                                        // isBackfill only
+            copy(of: live[1], dateShift: 2.0),                        // + date exactly 2 s later
+            copy(of: live[2], dateShift: -1.5, isBackfill: false),    // date only
+        ]
+        let newlyStored = try await store.insert(redelivered)
+
+        XCTAssertEqual(newlyStored, [])
+        let stored = try await store.readings(from: referenceInstant, to: referenceInstant.addingTimeInterval(3_600))
+        XCTAssertEqual(stored, live, "the stored rows are kept as they were")
+        XCTAssertEqual(log.recorded.map(\.message), [
+            "Ignored 3 re-delivered reading(s) already stored (differing only in isBackfill and/or by ≤ 2 s in date)",
+        ])
+    }
+
+    func test_S3_realDifferencesInARedeliveryStillRecordAFullDiagnostic() async throws {
+        let base = sensorReading(at: 300, .mgdl(110), trendRate: 0.2)
+        let cases: [(GlucoseReading, String)] = [
+            (copy(of: base, value: .mgdl(111)), "value, isBackfill"),
+            (copy(of: base, value: .belowRange), "value, isBackfill"),
+            (copy(of: base, trendRate: .some(nil)), "trendRate, isBackfill"),
+            (copy(of: base, trendRate: 0.4, isBackfill: false), "trendRate"),
+            (copy(of: base, dateShift: 2.5), "date, isBackfill"),
+            (copy(of: base, dateShift: -3, isBackfill: false), "date"),
+            (copy(of: base, isBackfill: false, source: .imported(.nightscout)), "source"),
+            (copy(of: base, isBackfill: false, serial: "OTHER"), "sensorSerial"),
+        ]
+        for (redelivery, fields) in cases {
+            let log = RecordingDiagnosticLog()
+            let store = try GlucoseStore.productionInMemory(diagnostics: log)
+            _ = try await store.insert([base])
+            let newlyStored = try await store.insert([redelivery])
+            XCTAssertEqual(newlyStored, [])
+            let latest = try await store.latestLiveReading()
+            XCTAssertEqual(latest, base, "stored row kept (\(fields))")
+            XCTAssertEqual(log.recorded.map(\.message), ["Kept stored reading \(base.id); a re-delivered copy differed in: \(fields)"])
+        }
+    }
 }
+

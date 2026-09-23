@@ -116,6 +116,20 @@ struct ReadingRow: Equatable, Sendable {
         )
     }
 
+    /// True when `other` (a re-delivered copy with the same id) differs from this stored row only
+    /// in `isBackfill` and/or by at most `maximumDateDifference` seconds in date. Value, trend
+    /// rate, source, import origin and serial must be identical.
+    func isBenignRedelivery(of other: ReadingRow, maximumDateDifference: TimeInterval) -> Bool {
+        id == other.id
+            && valueKind == other.valueKind
+            && mgdl == other.mgdl
+            && trendRate == other.trendRate
+            && sourceKind == other.sourceKind
+            && importOrigin == other.importOrigin
+            && sensorSerial == other.sensorSerial
+            && abs(date - other.date) <= maximumDateDifference
+    }
+
     /// Names of the columns whose values differ, for the "same id, different content" diagnostic.
     func differingColumns(from other: ReadingRow) -> [String] {
         var names: [String] = []

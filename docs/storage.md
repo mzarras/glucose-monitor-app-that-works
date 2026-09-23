@@ -28,24 +28,39 @@ A store has one role for its whole life; the two roles never share a database.
 | `GlucoseStore.replay()` — `#if DEBUG` | replay, memory | `.replay`, `.mock` | newest `.replay`/`.mock` |
 | `GlucoseStore.replay(at:)` — `#if DEBUG` | replay, separate file | `.replay`, `.mock` | newest `.replay`/`.mock` |
 
-- `insert` checks every reading's source before writing. If any is not allowed in the role, it
-  throws `GlucoseReadingRepositoryError.sourceNotAllowed(source)` and stores nothing from the batch.
+- `insert` checks the whole batch before writing (`ReadingInsertion.validate`). If any reading's
+  source is not allowed in the role it throws `GlucoseReadingRepositoryError.sourceNotAllowed(source)`;
+  if any numeric value is outside `GlucoseValue.sensorReportableRange` (40...400) it throws
+  `GlucoseReadingRepositoryError.implausibleValue(value)` (both roles, PROGRESS D25: such a number
+  can only come from a parse fault and would otherwise reach charts and stats, S1). Either way
+  nothing from the batch is stored.
 - Opening a **production** store deletes any `replay`/`mock` rows (a DEBUG build from before roles
-  existed could have written them to the same App Group file) and records a `DiagnosticEvent`
+  existed could have written them to the same file) and records a `DiagnosticEvent`
   (`"Removed N replay/mock reading(s) from the production database on open (S6)"`).
 - Opening a **replay** store on a file that contains `sensor`/`imported` rows throws
   `GlucoseStoreError.replayStoreFileContainsLiveData(rowCount:)` and changes nothing, so the
   production file can never be opened as a replay store by mistake.
 - The replay role, both replay factories and their tests are compiled only in DEBUG.
 
-## Schema (migration `v1-create-reading`)
+## Schema
+
+Migrations (append-only; `StoreSchema.swift`):
+
+| Migration | Change |
+|---|---|
+| `v1-create-reading` | the `reading` table and its two indexes |
+| `v2-mgdl-range-check` | PROGRESS D25: `mgdl` must be 40...400. SQLite cannot add a CHECK to an existing table, so v2 rebuilds it the standard way (create `reading_v2`, copy, drop, rename, recreate the indexes; https://www.sqlite.org/lang_altertable.html#otheralter). Rows with a number outside 40...400 are not copied; the store records `Migration v2-mgdl-range-check removed N stored reading(s) with a number outside 40...400 (parse faults, S1)`. |
+
+Current schema (after v2):
 
 ```sql
 CREATE TABLE reading (
     id TEXT NOT NULL PRIMARY KEY,          -- GlucoseReading.id: the S3 dedupe key
     date REAL NOT NULL,                    -- UTC instant, seconds since 2001-01-01T00:00:00Z
     valueKind TEXT NOT NULL CHECK (valueKind IN ('mgdl', 'belowRange', 'aboveRange')),
-    mgdl INTEGER CHECK ((valueKind = 'mgdl') = (mgdl IS NOT NULL)),
+    mgdl INTEGER
+        CHECK ((valueKind = 'mgdl') = (mgdl IS NOT NULL))
+        CHECK (mgdl IS NULL OR mgdl BETWEEN 40 AND 400),
     trendRate REAL,                        -- mg/dL/min as reported; NULL = not reported
     isBackfill INTEGER NOT NULL CHECK (isBackfill IN (0, 1)),
     sourceKind TEXT NOT NULL CHECK (sourceKind IN ('sensor', 'imported', 'replay', 'mock')),
@@ -68,6 +83,9 @@ CREATE INDEX reading_sensor_on_date ON reading(date, id) WHERE sourceKind = 'sen
   Readable form in SQL: `datetime(date + 978307200, 'unixepoch')`.
 - **LOW/HIGH are flags** (S4): `valueKind = 'belowRange' | 'aboveRange'` with `mgdl` NULL. The
   CHECK makes a flag with a number (or a number without one) impossible to store.
+- **Numbers are 40...400** (D25): refused by `insert` with `implausibleValue`, and by a CHECK as a
+  backstop (tests `test_S1_storeRefusesNumericValueOutsideSensorRange`,
+  `test_S1_schemaRejectsNumericValueOutsideSensorRange`, `test_migratesAV1DatabaseAddingTheRangeCheck`).
 - **Source and origin are exact** (S6): `sourceKind` + `importOrigin`, both CHECK-constrained. An
   imported row cannot come back as `.sensor`.
 - `trendRate` NaN: SQLite stores NaN as NULL, so the store normalises NaN to nil before storing and
@@ -80,13 +98,22 @@ CREATE INDEX reading_sensor_on_date ON reading(date, id) WHERE sourceKind = 'sen
 
 ## Insert rules (`ReadingInsertion.swift`)
 
-One write transaction per `insert` call. Readings in the call are applied in ascending date order
-(ties by id), so every rule holds inside a batch exactly as across batches.
+First the whole batch is validated (role and 40...400, above); a refused batch writes nothing.
+Then one write transaction per `insert` call. Readings in the call are applied in ascending date
+order (ties by id), so every rule holds inside a batch exactly as across batches.
 
 1. **Same id already stored** → nothing is written; the stored row wins (S3: dedupe by the
-   sensor-reported timestamp, which the id encodes). If the content differs (for example a
-   backfilled copy with a slightly different derived date), a `DiagnosticEvent` names the id and
-   the differing fields: `Kept stored reading <id>; a re-delivered copy differed in: date, isBackfill`.
+   sensor-reported timestamp, which the id encodes).
+   - Differs only in `isBackfill` and/or by ≤ 2 s in `date` (inclusive): a **benign re-delivery**,
+     the expected shape of a G7 backfilled copy of a reading already stored live (the date is
+     re-derived at each connection from the phone clock and a 1-second sensor clock). Counted, and
+     one aggregate diagnostic per `insert` call:
+     `Ignored N re-delivered reading(s) already stored (differing only in isBackfill and/or by ≤ 2 s in date)`.
+   - Any other difference (value, trend rate, source or origin, serial, or a date more than 2 s
+     away): one diagnostic per reading naming the id and fields:
+     `Kept stored reading <id>; a re-delivered copy differed in: value, isBackfill`.
+   - Tests: `test_S3_benignRedeliveriesAreCountedNotLoggedPerReading`,
+     `test_S3_realDifferencesInARedeliveryStillRecordAFullDiagnostic`.
 2. **`.imported`** → skipped when any stored reading of any source lies within ±150 s
    (|Δt| ≤ 150 s, inclusive: exactly 150 s overlaps, 151 s does not). This also drops Nightscout's
    near-duplicates (two uploaders) and the overlap between a Nightscout and a Clarity import.
@@ -134,8 +161,11 @@ synchronous (for previews).
 
 ## File location, protection and backup
 
-- The caller passes the database file URL. The app passes a file in its App Group container
-  (HANDOFF §4.5); the parent directory is created if needed.
+- **Location (PROGRESS D25, deviates from HANDOFF §4.5):** the database lives in the app's own
+  container, e.g. `Application Support/GlucoseStore/readings.sqlite`, not in the App Group
+  container. Only the widget snapshot (WidgetCore, D10) lives in the App Group; that snapshot is
+  what the widget reads while the phone is locked. The caller passes the database file URL; the
+  parent directory is created if needed.
 - On every open the store applies `FileProtectionType.completeUntilFirstUserAuthentication` to the
   database, `-wal` and `-shm` files (after migration, when all three exist; a missing one is
   recorded as a diagnostic). BLE wakes the app in the background while the phone is locked, and
@@ -150,18 +180,17 @@ synchronous (for previews).
 - The database is **not** excluded from backup (test `test_databaseIsNotExcludedFromBackup`);
   it goes into iCloud/device backups. Nightscout is the off-device copy.
 
-### App Group container and 0xDEAD10CC
+### Why not the App Group container (0xDEAD10CC)
 
 iOS terminates an app (`0xDEAD10CC`) that is suspended while holding a file lock on a file in a
-shared container, and SQLite takes such locks. GRDB's documentation (`DatabaseSharing.md`,
-"How to limit the 0xDEAD10CC exception") describes the mitigation: set
-`Configuration.observesSuspensionNotifications` and post `Database.suspendNotification` before the
-app is suspended and `Database.resumeNotification` from every callback that may use the database
-(including BLE background callbacks). `production(at:observesSuspensionNotifications:)` exposes the
-flag; posting the notifications is Phase 2 app wiring. Only this app's process opens the database
-(the widget reads the WidgetCore snapshot, PROGRESS D10), so the database itself does not need to
-be in the App Group container; keeping it in the app's own container would remove this risk
-entirely. See OPEN QUESTIONS in the WS2 report.
+shared container, and SQLite takes such locks. Only this app's process opens the database, so there
+is no reason to put it in a shared container, and in the app's own container the risk does not
+apply. `production(at:observesSuspensionNotifications:)` still exposes GRDB's flag (default
+`false`): it is **not needed** for the app-container location. It would only matter if the database
+were ever moved to a shared container, in which case the app would also have to post
+`Database.suspendNotification` before suspension and `Database.resumeNotification` from every
+callback that may use the database, including BLE background callbacks (GRDB `DatabaseSharing.md`,
+"How to limit the 0xDEAD10CC exception").
 
 ## Retention
 
@@ -226,15 +255,19 @@ pessimistic.
 | `exportCSV` (all rows, 19.0 MB) | 1.05 s | 1.35–1.71 s | 1.46 s |
 | File size (db + wal + shm) | 38.6 MB | | |
 
+Re-measured after migration v2 and the insert-time range check (debug, load ~15): insert 10.2 s,
+90-day query 77 ms, `latestLiveReading()` 0.24 ms, `summary()` 74 ms, export 1.83 s — the same
+range as before.
+
 The test asserts the 90-day query takes < 1 s and the warm `latestLiveReading()` < 50 ms (loose
 bounds so a loaded CI host still passes; the numbers above are what matter). Device numbers are for
 the Phase 3 "90-day dataset performance" pass.
 
 ## Tests
 
-`swift test` in `Packages/GlucoseStore` (77 tests in DEBUG; 68 compile in `-c release`, where the
+`swift test` in `Packages/GlucoseStore` (83 tests in DEBUG; in `-c release` the 8 replay-role tests are compiled out, as the
 replay role does not exist). Safety tests: `test_S1_*` (range queries return stored rows only; the
-replay store refuses sensor/imported), `test_S3_*` (dedupe, same-id conflicts, ordering, ±150 s
+replay store refuses sensor/imported; numbers outside 40...400 refused by insert and schema), `test_S3_*` (dedupe, same-id conflicts vs benign re-deliveries, ordering, ±150 s
 rule both directions incl. 150/151 s, cross-origin, within a batch, backfill), `test_S4_*` (flags
 round-trip and are enforced by CHECK), `test_S6_*` (source/origin round-trip, imported never
 `.sensor`, `latestLiveReading` sensor-only, role refusals, mixed batches rejected whole, purge on

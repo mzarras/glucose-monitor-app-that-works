@@ -11,6 +11,29 @@ enum ReadingInsertion {
     /// inclusive: two readings exactly 150 s apart overlap; 151 s apart do not.
     static let overlapWindow: TimeInterval = 150
 
+    /// How far a re-delivered copy's date may be from the stored one and still count as the same
+    /// delivery. A G7 reading's date is the phone clock at connection time minus the sensor-reported
+    /// session age, re-derived at every connection from a 1-second sensor clock (S3; see
+    /// LiveReadingGate.futureTolerance), so a backfilled copy of a reading already stored live can
+    /// land a second or so away. Inclusive.
+    static let benignDateDifference: TimeInterval = 2
+
+    /// Checks the whole batch before anything is written, so a refused batch stores nothing:
+    /// 1. every source is allowed in the store's role (PROGRESS.md D20);
+    /// 2. every numeric value is inside `GlucoseValue.sensorReportableRange`, 40...400 (D25): a
+    ///    number outside it can only come from a parse fault, and storing it would put it in charts
+    ///    and stats (S1). The schema CHECK (migration v2) enforces the same range as a backstop.
+    static func validate(_ readings: [GlucoseReading], role: StoreRole) throws(GlucoseReadingRepositoryError) {
+        if let refused = readings.first(where: { !role.allows($0.source) }) {
+            throw .sourceNotAllowed(refused.source)
+        }
+        for reading in readings {
+            if case .mgdl(let value) = reading.value, !GlucoseValue.sensorReportableRange.contains(value) {
+                throw .implausibleValue(value)
+            }
+        }
+    }
+
     /// A re-delivered reading whose id is already stored but whose content differs.
     struct Conflict: Sendable, Equatable {
         let id: String
@@ -20,8 +43,12 @@ enum ReadingInsertion {
     struct Outcome: Sendable {
         /// Newly stored readings still present at commit, ascending by date (ties broken by id).
         var inserted: [GlucoseReading] = []
-        /// Same id already stored with different content. The stored row was kept.
+        /// Same id already stored with a real difference (value, trend rate, source, serial, or a
+        /// date more than `benignDateDifference` away). The stored row was kept.
         var conflicts: [Conflict] = []
+        /// Same id already stored, differing only in `isBackfill` and/or by ≤ 2 s in date: the
+        /// expected shape of a backfilled copy of a live reading. The stored row was kept.
+        var benignRedeliveryCount = 0
         /// Imported rows deleted because a sensor reading landed within the overlap window.
         var replacedImportedCount = 0
         /// Imported readings not stored because another reading lies within the overlap window.
@@ -31,8 +58,9 @@ enum ReadingInsertion {
     /// Applies the rules to each reading, in ascending date order (ties by id) so they hold within
     /// one batch exactly as across batches:
     ///
-    /// 1. Same id already stored → nothing is written; the stored row wins. If the content
-    ///    differs, a conflict is reported (S3: dedupe by sensor-reported timestamp).
+    /// 1. Same id already stored → nothing is written; the stored row wins (S3: dedupe by
+    ///    sensor-reported timestamp). A difference only in `isBackfill` and/or ≤ 2 s in date is
+    ///    counted as a benign re-delivery; any other difference is reported as a conflict.
     /// 2. `.imported` → skipped when any stored reading of any source lies within ±150 s.
     /// 3. Otherwise the row is inserted.
     /// 4. `.sensor` → deletes `.imported` rows within ±150 s, including any stored earlier in
@@ -46,7 +74,11 @@ enum ReadingInsertion {
 
         for row in ordered {
             if let stored = try fetchRow(id: row.id, db) {
-                if stored != row {
+                if stored == row {
+                    // Identical re-delivery: nothing to note.
+                } else if stored.isBenignRedelivery(of: row, maximumDateDifference: benignDateDifference) {
+                    outcome.benignRedeliveryCount += 1
+                } else {
                     outcome.conflicts.append(Conflict(id: row.id, differingColumns: stored.differingColumns(from: row)))
                 }
                 continue
