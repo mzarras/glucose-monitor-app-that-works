@@ -138,12 +138,41 @@ final class SensorAlertTests: XCTestCase {
         XCTAssertEqual(h.user(.acknowledge(.low)).ignoringMissedReadings, [.userActionIgnored(.acknowledge(.low))])
     }
 
-    func test_announcementMemoryStaysSmall() {
+    func test_announcementMemoryHoldsOneDatePerKind() {
         let h = EngineHarness()
+        var fired = 0
         for day in 0..<40 {
-            h.send(.sensorState(.gracePeriod(endsAt: Fixtures.t0.addingTimeInterval(Double(day) * 86_400 + 3600))))
+            fired += h.send(.sensorState(.gracePeriod(endsAt: Fixtures.t0.addingTimeInterval(Double(day) * 86_400 + 3600)))).fired.count
         }
-        XCTAssertEqual(h.engine.snapshot.announcedEvents.count, AlertEngineSnapshot.announcedEventsLimit)
+        XCTAssertEqual(fired, 40, "each session's grace period (a day apart) is announced once")
+        XCTAssertEqual(h.engine.snapshot.announcedSessionDates.count, 1)
+    }
+
+    /// Safety review WS4 M1: session dates are derived from the phone clock at each connection, so
+    /// they jitter by a second or so; that must not re-announce.
+    func test_announcementsDoNotRepeatWhenDerivedDatesJitter() {
+        let h = EngineHarness()
+        let expires = h.now.addingTimeInterval(20 * 3600)
+        var expiring = 0
+        for i in 0..<12 {
+            let jitter = TimeInterval(i % 3) - 1   // −1, 0, +1 s
+            let state = SensorState.active(sessionStart: expires.addingTimeInterval(-10 * 86_400 + jitter), expiresAt: expires.addingTimeInterval(jitter))
+            expiring += h.send(.sensorState(state)).fired.filter { $0 == .sensorExpiringIn24Hours }.count
+            h.clock.advance(minutes: 5)
+        }
+        XCTAssertEqual(expiring, 1)
+        var grace = 0
+        for i in 0..<12 {
+            grace += h.send(.sensorState(.gracePeriod(endsAt: h.now.addingTimeInterval(3600 + TimeInterval(i % 2))))).fired
+                .filter { $0 == .sensorGracePeriod }.count
+            h.clock.advance(minutes: 5)
+        }
+        XCTAssertEqual(grace, 1, "grace end jittering (and 'moving' with the clock by minutes) is one session")
+        // A new sensor ten days later is announced again.
+        let next = expires.addingTimeInterval(10 * 86_400)
+        h.clock.set(next.addingTimeInterval(-20 * 3600))
+        XCTAssertEqual(h.send(.sensorState(.active(sessionStart: next.addingTimeInterval(-10 * 86_400), expiresAt: next))).fired
+            .filter { $0 == .sensorExpiringIn24Hours }, [.sensorExpiringIn24Hours])
     }
 }
 
@@ -202,12 +231,13 @@ final class EngineSnapshotTests: XCTestCase {
         let engine = AlertEngine(settings: .defaults, restoring: snapshot, now: Fixtures.t0.addingTimeInterval(60))
         XCTAssertEqual(engine.phase(of: .urgentLow), .snoozed(until: Fixtures.t0.addingTimeInterval(minutes(30))))
 
-        // A snooze stamped in the future (clock moved backwards) is capped at 30 minutes from now.
+        // A snooze stamped in the future (the clock moved backwards) ends at once: how long it has
+        // really lasted is unknowable (review B1; ClockFaultTests).
         var future = AlertEngineSnapshot(start: Fixtures.t0)
         future.episodes[AlertKind.urgentLow.rawValue] = .snoozed(AlertSnooze(
             snoozedAt: Fixtures.t0.addingTimeInterval(7200), until: Fixtures.t0.addingTimeInterval(9000)))
         let skewed = AlertEngine(settings: .defaults, restoring: future, now: Fixtures.t0)
-        XCTAssertEqual(skewed.phase(of: .urgentLow), .snoozed(until: Fixtures.t0.addingTimeInterval(minutes(30))))
+        XCTAssertEqual(skewed.phase(of: .urgentLow), .snoozed(until: Fixtures.t0))
     }
 
     func test_S7_restoredSnoozeFromATamperedFileIsClamped() throws {

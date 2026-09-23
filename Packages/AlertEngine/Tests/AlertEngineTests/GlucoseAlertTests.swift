@@ -24,9 +24,9 @@ final class GlucoseAlertTests: XCTestCase {
         let h = EngineHarness()
         let start = h.now
         h.mgdl(52)
-        h.clock.advance(minutes: 4)
+        h.clock.advance(minutes: 3.5)
         XCTAssertEqual(h.mgdl(50).due, [])
-        h.clock.advance(minutes: 1)
+        h.clock.advance(minutes: 1.5)
         let repeat1 = h.mgdl(49)
         XCTAssertEqual(repeat1.due, [.urgentLow], "the 5-minute repeat plays the in-app sound")
         XCTAssertEqual(repeat1.scheduled(.urgentLow)?.first, start.addingTimeInterval(minutes(10)), "pending repeats roll forward")

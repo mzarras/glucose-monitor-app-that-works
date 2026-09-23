@@ -10,10 +10,15 @@
 #   python3 tools/sounds/generate_sounds.py            # (re)write Resources/Sounds/*.wav
 #   python3 tools/sounds/generate_sounds.py --check    # verify committed files match, exit 1 if not
 #
-# Output format: RIFF WAVE, linear PCM, 16-bit signed, mono, 22 050 Hz. iOS accepts linear PCM in a
-# .wav container for UNNotificationSound (Apple: "UNNotificationSound" — supported formats are
-# Linear PCM, MA4 (IMA/ADPCM), µLaw, aLaw in aiff, wav or caf; must be shorter than 30 s) and
-# AVAudioPlayer plays the same files for the ringer-off path. Every sound here is 2.5–7 s.
+# Output formats, one pair per sound:
+#   alert-<name>.wav  RIFF WAVE, linear PCM, 16-bit signed, mono, 22 050 Hz. For notifications
+#                     (Apple "UNNotificationSound": Linear PCM, MA4 (IMA/ADPCM), µLaw or aLaw in aiff,
+#                     wav or caf; shorter than 30 s) and the in-app AVAudioPlayer (ringer-off path).
+#   alert-<name>.caf  Core Audio Format, Apple IMA4 (IMA/ADPCM, 64 frames in 34 bytes per packet),
+#                     mono, 22 050 Hz, encoded here from the same samples. For AlarmKit system alarms
+#                     (PROGRESS.md D26): Loop verified on hardware that AlarmKit plays bundled IMA4 .caf
+#                     files by name (LoopKit/Loop PR #2520); WAV is unverified there.
+# Every sound here is 2.4–5.2 s.
 #
 # Design rule (the reason this project exists): every sound differs from the others in rhythm AND
 # pitch contour, not just pitch, and none is a constant-pitch train of high square-wave beeps (the
@@ -209,15 +214,96 @@ SOUNDS = [
 
 
 def render(generator):
+    """The sound as 16-bit integer samples, normalised to PEAK."""
     samples = generator() + silence(0.05)
     peak = max(abs(s) for s in samples) or 1.0
     scale = PEAK / peak
-    frames = bytearray()
-    for s in samples:
-        value = int(round(s * scale * 32767))
-        value = max(-32768, min(32767, value))
-        frames += struct.pack("<h", value)
-    return bytes(frames)
+    return [max(-32768, min(32767, int(round(s * scale * 32767)))) for s in samples]
+
+
+def pcm16_le(samples):
+    return b"".join(struct.pack("<h", v) for v in samples)
+
+
+# --- Apple IMA4 (IMA ADPCM) -----------------------------------------------------------------
+# The standard IMA ADPCM step and index tables (IMA Digital Audio Focus and Technical Working
+# Groups, "Recommended Practices for Enhancing Digital Audio Compatibility in Multimedia Systems",
+# rev. 3.00, 1992). Apple's 'ima4' packs each channel into 34-byte packets: a big-endian 16-bit
+# header whose top 9 bits are the predictor (low 7 bits of the predictor are zero) and whose low 7
+# bits are the step index, then 32 bytes holding 64 4-bit codes, earlier sample in the low nibble.
+# (Apple Core Audio Format Specification, "IMA4"; decoders: FFmpeg libavcodec/adpcm.c
+# AV_CODEC_ID_ADPCM_IMA_QT.) The encoder below mirrors the decoder exactly, so its state never
+# drifts from what the player reconstructs; AlertSoundCatalogTests decodes every .caf with Apple's
+# own AVAudioFile and compares it with the .wav.
+IMA_STEPS = [
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66,
+    73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408,
+    449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+    2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630,
+    9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+    32767,
+]
+IMA_INDEX_ADJUST = [-1, -1, -1, -1, 2, 4, 6, 8]
+IMA4_FRAMES_PER_PACKET = 64
+IMA4_BYTES_PER_PACKET = 34
+
+
+def ima4_packets(samples):
+    """Encodes 16-bit samples as Apple IMA4 packets (the last packet padded with zeros)."""
+    padded = list(samples)
+    while len(padded) % IMA4_FRAMES_PER_PACKET:
+        padded.append(0)
+    predictor, index = 0, 0
+    out = bytearray()
+    for start in range(0, len(padded), IMA4_FRAMES_PER_PACKET):
+        # The decoder restarts each packet from the stored 9-bit predictor; do the same.
+        # Keep the top 9 bits: an arithmetic shift rounds towards −∞, exactly like masking the
+        # 16-bit two's-complement value with 0xFF80.
+        header_predictor = (predictor >> 7) << 7
+        predictor = header_predictor
+        out += struct.pack(">H", (header_predictor & 0xFF80) | index)
+        codes = []
+        for sample in padded[start:start + IMA4_FRAMES_PER_PACKET]:
+            step = IMA_STEPS[index]
+            diff = sample - predictor
+            code = 0
+            if diff < 0:
+                code = 8
+                diff = -diff
+            delta = step >> 3
+            if diff >= step:
+                code |= 4
+                diff -= step
+                delta += step
+            if diff >= step >> 1:
+                code |= 2
+                diff -= step >> 1
+                delta += step >> 1
+            if diff >= step >> 2:
+                code |= 1
+                delta += step >> 2
+            predictor = predictor - delta if code & 8 else predictor + delta
+            predictor = max(-32768, min(32767, predictor))
+            index = max(0, min(88, index + IMA_INDEX_ADJUST[code & 7]))
+            codes.append(code)
+        for i in range(0, IMA4_FRAMES_PER_PACKET, 2):
+            out.append(codes[i] | (codes[i + 1] << 4))
+    return bytes(out)
+
+
+def caf_ima4_bytes(samples):
+    """Core Audio Format file (big-endian chunks, Apple CAF spec): 'caff' header, 'desc' chunk
+    (AudioStreamBasicDescription), 'data' chunk (edit count + packets). Constant bit rate, so no
+    packet table is needed; the last packet's zero padding plays as < 3 ms of silence."""
+    packets = ima4_packets(samples)
+    out = b"caff" + struct.pack(">HH", 1, 0)
+    # desc: sample rate (Float64), format 'ima4', flags 0, bytes/packet 34, frames/packet 64,
+    # channels 1, bits/channel 0 (compressed).
+    desc = struct.pack(">d4sIIIII", float(SAMPLE_RATE), b"ima4", 0, IMA4_BYTES_PER_PACKET,
+                       IMA4_FRAMES_PER_PACKET, 1, 0)
+    out += b"desc" + struct.pack(">q", len(desc)) + desc
+    out += b"data" + struct.pack(">q", 4 + len(packets)) + struct.pack(">I", 0) + packets
+    return out
 
 
 def wav_bytes(frames):
@@ -237,24 +323,26 @@ def main():
 
     mismatches = 0
     for name, generator in SOUNDS:
-        data = wav_bytes(render(generator))
-        path = os.path.join(OUTPUT_DIR, name)
-        digest = hashlib.sha256(data).hexdigest()
-        seconds = (len(data) - 44) / 2 / SAMPLE_RATE
-        if args.check:
-            try:
-                with open(path, "rb") as f:
-                    same = f.read() == data
-            except FileNotFoundError:
-                same = False
-            status = "ok" if same else "MISMATCH"
-            mismatches += 0 if same else 1
-            print(f"{status:8} {name:22} {seconds:5.2f} s  sha256 {digest}")
-        else:
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            with open(path, "wb") as f:
-                f.write(data)
-            print(f"wrote    {name:22} {seconds:5.2f} s  sha256 {digest}")
+        samples = render(generator)
+        caf_name = name.replace(".wav", ".caf")
+        for file_name, data in ((name, wav_bytes(pcm16_le(samples))), (caf_name, caf_ima4_bytes(samples))):
+            path = os.path.join(OUTPUT_DIR, file_name)
+            digest = hashlib.sha256(data).hexdigest()
+            seconds = len(samples) / SAMPLE_RATE
+            if args.check:
+                try:
+                    with open(path, "rb") as f:
+                        same = f.read() == data
+                except FileNotFoundError:
+                    same = False
+                status = "ok" if same else "MISMATCH"
+                mismatches += 0 if same else 1
+                print(f"{status:8} {file_name:22} {seconds:5.2f} s  sha256 {digest}")
+            else:
+                os.makedirs(OUTPUT_DIR, exist_ok=True)
+                with open(path, "wb") as f:
+                    f.write(data)
+                print(f"wrote    {file_name:22} {seconds:5.2f} s  sha256 {digest}")
     # Sanity-check the container with the standard library reader.
     if not args.check:
         for name, _ in SOUNDS:

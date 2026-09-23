@@ -34,7 +34,7 @@ extension AlertEngine {
             if condition == .clear {
                 return clearMissedReadings() + ensureMissedReadingsScheduled(from: reference.addingTimeInterval(window), now: now)
             }
-            let slot = Self.latestSlot(anchor: firing.since, interval: window, now: now)
+            let slot = Self.latestSlot(anchor: firing.since, interval: window, now: now.addingTimeInterval(AlertLimits.repeatSlotEarlyTolerance))
             guard slot > firing.lastSoundedAt else {
                 return ensureMissedReadingsScheduled(from: firing.lastSoundedAt.addingTimeInterval(window), now: now)
             }
@@ -78,7 +78,7 @@ extension AlertEngine {
 
     /// `start`, `start + window`, … — the next `scheduledNotificationCount` of those after `now`.
     mutating func scheduleMissedReadings(from start: Date, now: Date) -> [AlertAction] {
-        let dates = Self.futureSlots(anchor: start, interval: missedReadingsWindow, firstIndex: 0, after: now)
+        let dates = Self.futureSlots(anchor: start, interval: missedReadingsWindow, firstIndex: 0, after: now, count: AlertLimits.scheduledNotificationCount)
         let notices = dates.map { makeNotice(.missedReadings, fireDate: $0, now: now) }
         snapshot.missedReadingsScheduledFrom = start
         return [.schedule(.missedReadings, notices)]

@@ -17,7 +17,7 @@ public struct UrgentLowSettings: Sendable, Equatable, Hashable, Encodable {
         didSet { thresholdMgdl = AlertLimits.clamp(thresholdMgdl, to: AlertLimits.urgentLowThresholdMgdl) }
     }
     public var sound: AlertSoundID
-    /// Minutes between repeats while unacknowledged, 1…5 (HANDOFF §4.7). Cannot be turned off.
+    /// Minutes between repeats while unacknowledged, 2…5 (HANDOFF §4.7). Cannot be turned off.
     public var repeatMinutes: Int {
         didSet { repeatMinutes = AlertLimits.clamp(repeatMinutes, to: AlertLimits.urgentLowRepeatMinutes) }
     }

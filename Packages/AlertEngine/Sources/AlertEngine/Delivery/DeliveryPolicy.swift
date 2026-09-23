@@ -1,4 +1,4 @@
-// Which path(s) make an alert audible (HANDOFF §4.7, PROGRESS.md D4 + D17). Pure and total, so
+// Which path(s) make an alert audible (HANDOFF §4.7, PROGRESS.md D4, D17, D26). Pure and total, so
 // every combination is unit-tested.
 //
 // Facts this is built on (sources in docs/alerts.md):
@@ -8,16 +8,25 @@
 //   • An app that is running can play audio with AVAudioSession category `.playback`, which
 //     ignores the switch (xDrip4iOS SoundPlayer.swift:31, Loop CriticalAlertAudioPlayer.swift:104).
 //     The G7 wakes the app about every 5 minutes, which is when reading-driven alerts fire.
+//   • On iOS 26+, an AlarmKit alarm rings on silent and in Focus, even while the app is suspended,
+//     once the user allows alarms (D26; Loop PR #2520).
 //
 // So, for an alert with "Sound on silent" on:
 //   critical authorized              → Critical Alert with our sound. Nothing else needed.
+//   urgent low, alarms available     → system alarm (rings) + Time Sensitive notification with the
+//                                      sound (the visual, with Snooze/Acknowledge). No in-app sound:
+//                                      it would clash with the alarm.
 //   otherwise, app awake (now)       → Time Sensitive notification with the sound (for the ringer-on
 //                                      case and vibration) + in-app `.playback` sound (ringer off).
 //   otherwise, pending notification  → Time Sensitive with the sound: audible only if the ringer is
 //                                      on; vibrates on silent. The documented gap (D17).
 // With "Sound on silent" off: Time Sensitive with the sound (respects the switch).
 // Quiet hours: passive, no sound, no in-app sound — never for urgent low.
-// Urgent low always counts as "Sound on silent" on and is never silenced (S7).
+// Urgent low always counts as "Sound on silent" on and is never silenced (S7). Only urgent low
+// uses system alarms (D26).
+//
+// Critical Alerts win over system alarms when both are available (Loop does the same: it uses
+// AlarmKit only in builds without the entitlement, AlertManager.swift:451-457).
 
 import Foundation
 
@@ -59,15 +68,25 @@ public struct DeliveryDecision: Sendable, Equatable {
     public let notificationSound: NotificationSoundChoice
     /// `nil`: no in-app sound.
     public let inAppSound: InAppSound?
+    /// Also schedule a system alarm (AlarmKit) playing this bundled file. `nil`: no alarm.
+    public let systemAlarmSoundFileName: String?
 
-    /// Orders decisions by how reliably they are heard with the phone on silent.
+    public init(interruption: NotificationInterruption, notificationSound: NotificationSoundChoice,
+                inAppSound: InAppSound?, systemAlarmSoundFileName: String? = nil) {
+        self.interruption = interruption
+        self.notificationSound = notificationSound
+        self.inAppSound = inAppSound
+        self.systemAlarmSoundFileName = systemAlarmSoundFileName
+    }
+
+    /// Orders decisions by how reliably they are heard with the phone on silent: 3 rings on silent
+    /// even while suspended (Critical Alert, system alarm), 2 while awake (in-app sound), 1 only
+    /// with the ringer on, 0 silent.
     public var loudness: Int {
-        switch (interruption, inAppSound) {
-        case (.critical, _): return 3
-        case (_, .some): return 2
-        case (.timeSensitive, nil): return notificationSound == .none ? 0 : 1
-        case (.passive, nil): return 0
-        }
+        if interruption == .critical || systemAlarmSoundFileName != nil { return 3 }
+        if inAppSound != nil { return 2 }
+        if interruption == .timeSensitive && notificationSound != .none { return 1 }
+        return 0
     }
 }
 
@@ -76,7 +95,12 @@ public enum DeliveryPolicy {
     /// must wake someone.
     public static let criticalVolume: Float = 1.0
 
-    public static func decide(for notice: AlertNotice, criticalAlertsEnabled: Bool, timing: DeliveryTiming) -> DeliveryDecision {
+    /// - Parameters:
+    ///   - criticalAlertsEnabled: the user granted Critical Alerts and the build has the entitlement.
+    ///   - systemAlarmsAvailable: iOS 26+ and the user allowed alarms (`SystemAlarmAuthorization.authorized`).
+    public static func decide(
+        for notice: AlertNotice, criticalAlertsEnabled: Bool, systemAlarmsAvailable: Bool, timing: DeliveryTiming
+    ) -> DeliveryDecision {
         let isUrgent = notice.kind == .urgentLow
         // S7, defence in depth: the engine already never silences urgent low and always marks it
         // sound-on-silent; this function does not trust that.
@@ -92,6 +116,14 @@ public enum DeliveryPolicy {
                 interruption: .critical,
                 notificationSound: .critical(fileName: fileName, volume: criticalVolume),
                 inAppSound: nil
+            )
+        }
+        if isUrgent && systemAlarmsAvailable {
+            return DeliveryDecision(
+                interruption: .timeSensitive,
+                notificationSound: .named(fileName: fileName),
+                inAppSound: nil,
+                systemAlarmSoundFileName: AlertSoundCatalog.alarmFileName(notice.sound)
             )
         }
         if soundsOnSilent && timing == .now {

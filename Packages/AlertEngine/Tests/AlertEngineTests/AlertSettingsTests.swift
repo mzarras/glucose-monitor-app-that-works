@@ -127,7 +127,7 @@ final class AlertSettingsTests: XCTestCase {
         u.repeatMinutes = 10
         XCTAssertEqual(u.repeatMinutes, 5, "repeats may be more frequent than 5 min, never less")
         u.repeatMinutes = 0
-        XCTAssertEqual(u.repeatMinutes, 1, "repeating cannot be turned off")
+        XCTAssertEqual(u.repeatMinutes, 2, "repeating cannot be turned off (2-minute floor keeps an hour of repeats within iOS's 64 pending)")
         XCTAssertEqual(AlertSettings.defaults.snoozeMinutes(.urgentLow).map { $0 <= 30 }, true)
     }
 

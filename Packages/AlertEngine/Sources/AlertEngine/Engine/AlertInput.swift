@@ -19,6 +19,11 @@ public enum AlertInput: Sendable, Equatable {
     /// Time has passed. Send on every wake-up and about once a minute while the app is running;
     /// nothing is lost if ticks are late, because pending notifications cover the suspended app.
     case tick
+    /// The app process started (first input after restoring the snapshot). Reconciles what a
+    /// previous process left pending: urgent-low repeats (notifications and system alarms) are
+    /// rebuilt if urgent low is firing and removed otherwise; missed-readings notifications are
+    /// rebuilt. `AlertService.start()` sends it.
+    case launched
     /// Something the user did in the app or on a notification.
     case user(AlertUserAction)
     /// The user changed alert settings.

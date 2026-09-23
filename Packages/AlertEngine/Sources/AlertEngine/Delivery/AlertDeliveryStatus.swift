@@ -63,16 +63,34 @@ public enum DeliveryProblem: Sendable, Equatable {
     case alarmVolumeMuted
     /// The media volume is low (below `AlertLimits.lowAlarmVolume`).
     case alarmVolumeLow(Float)
+    /// iOS 26+: the user has not yet been asked to allow alarms, so urgent low cannot ring as a
+    /// system alarm while the app is suspended (D26).
+    case urgentLowAlarmNotRequested
+    /// iOS 26+: the user refused alarms (Settings → the app → Alarms), so urgent low cannot ring as
+    /// a system alarm while the app is suspended (D26).
+    case urgentLowAlarmDenied
+    /// Scheduling an urgent-low system alarm failed; urgent low fell back to notification +
+    /// in-app sound. Carries the system's error text.
+    case urgentLowAlarmFailed(String)
 }
 
 public struct AlertDeliveryStatus: Sendable, Equatable {
     public var permissions: NotificationPermissionState
     /// System output (media) volume 0…1 when last read; `nil` if unknown.
     public var outputVolume: Float?
+    /// The Settings screen's "Urgent low alarm" row (D26).
+    public var urgentLowAlarm: SystemAlarmAuthorization
+    /// The last urgent-low system alarm scheduling error, if the last attempt failed.
+    public var urgentLowAlarmFailure: String?
 
-    public init(permissions: NotificationPermissionState, outputVolume: Float?) {
+    public init(
+        permissions: NotificationPermissionState, outputVolume: Float?,
+        urgentLowAlarm: SystemAlarmAuthorization = .unavailable, urgentLowAlarmFailure: String? = nil
+    ) {
         self.permissions = permissions
         self.outputVolume = outputVolume
+        self.urgentLowAlarm = urgentLowAlarm
+        self.urgentLowAlarmFailure = urgentLowAlarmFailure
     }
 
     /// Problems, most serious first.
@@ -94,6 +112,14 @@ public struct AlertDeliveryStatus: Sendable, Equatable {
             } else if volume < AlertLimits.lowAlarmVolume {
                 problems.append(.alarmVolumeLow(volume))
             }
+        }
+        switch urgentLowAlarm {
+        case .notDetermined: problems.append(.urgentLowAlarmNotRequested)
+        case .denied: problems.append(.urgentLowAlarmDenied)
+        case .authorized, .unavailable: break
+        }
+        if let failure = urgentLowAlarmFailure {
+            problems.append(.urgentLowAlarmFailed(failure))
         }
         return problems
     }

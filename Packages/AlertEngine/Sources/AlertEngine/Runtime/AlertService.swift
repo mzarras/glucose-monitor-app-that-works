@@ -8,18 +8,24 @@ import GlucoseCore
 public final class AlertService {
     public private(set) var engine: AlertEngine
     public let executor: AlertDeliveryExecutor
-    public private(set) var deliveryStatus: AlertDeliveryStatus
 
     private let clock: AlertClock
     private let center: AlertNotificationCenter
     private let audio: AlertAudioPlaying
+    private let alarms: SystemAlarmScheduling?
     private let onSnapshot: @MainActor (AlertEngineSnapshot) -> Void
     /// The last batch of actions being executed. Each batch waits for the previous one, so a
     /// cancel can never overtake the post it is meant to remove.
     private var lastBatch: Task<Void, Never>?
+    private var permissions = NotificationPermissionState.unknown
+    private var lastOutputVolume: Float?
+    /// The delivery level pending notifications/alarms were last built for. When it changes they
+    /// are rebuilt.
+    private var builtFor: (critical: Bool, alarms: Bool) = (false, false)
 
     /// - Parameters:
     ///   - snapshot: what `onSnapshot` last delivered, or `nil` on first launch.
+    ///   - systemAlarms: AlarmKit (iOS 26+) for urgent low (D26); `nil` to use the D17 path only.
     ///   - onSnapshot: called after every input with the engine state to persist.
     public init(
         settings: AlertSettings,
@@ -28,31 +34,33 @@ public final class AlertService {
         clock: AlertClock,
         notificationCenter: AlertNotificationCenter,
         audio: AlertAudioPlaying,
+        systemAlarms: SystemAlarmScheduling? = nil,
         diagnostics: DiagnosticLog = NullDiagnosticLog(),
         onSnapshot: @escaping @MainActor (AlertEngineSnapshot) -> Void = { _ in }
     ) {
         self.engine = AlertEngine(settings: settings, configuration: configuration, restoring: snapshot, now: clock.now)
-        self.executor = AlertDeliveryExecutor(center: notificationCenter, audio: audio, diagnostics: diagnostics, clock: clock)
-        self.deliveryStatus = AlertDeliveryStatus(permissions: .unknown, outputVolume: nil)
+        self.executor = AlertDeliveryExecutor(center: notificationCenter, audio: audio, alarms: systemAlarms, diagnostics: diagnostics, clock: clock)
         self.clock = clock
         self.center = notificationCenter
         self.audio = audio
+        self.alarms = systemAlarms
         self.onSnapshot = onSnapshot
     }
 
-    /// Call once at launch: registers the notification actions, reads permissions, and evaluates
-    /// (which schedules the missed-readings notifications).
+    /// Call once at launch: registers the notification actions, reads permissions, then
+    /// reconciles what a previous process left pending (urgent-low repeats and alarms, missed
+    /// readings) and evaluates.
     public func start() async {
         await center.registerCategories()
-        _ = await refreshDeliveryStatus()
-        await send(.tick)
+        await send(.launched)
     }
 
-    /// Feeds one input to the engine and performs the resulting actions.
+    /// Feeds one input to the engine and performs the resulting actions. Every input first
+    /// re-reads notification and alarm permissions, so each wake-up — in particular one that
+    /// delivers an urgent low — uses the delivery level the user has now (D4, D26).
     public func send(_ input: AlertInput) async {
-        let actions = engine.handle(input, at: clock.now)
-        onSnapshot(engine.snapshot)
-        await perform(actions)
+        await refreshPermissions()
+        await apply(input)
     }
 
     /// For the app's `UNUserNotificationCenterDelegate` `didReceive` handler.
@@ -63,12 +71,33 @@ public final class AlertService {
 
     /// Onboarding: ask for notification permission, including Critical Alerts (D4).
     public func requestAuthorization() async -> AlertDeliveryStatus {
-        await update(permissions: await center.requestAuthorization())
+        permissions = await center.requestAuthorization()
+        lastOutputVolume = audio.outputVolume
+        await rebuildIfDeliveryLevelChanged()
+        return deliveryStatus
+    }
+
+    /// Onboarding (iOS 26+): ask to allow alarms, so urgent low can ring while suspended (D26).
+    public func requestUrgentLowAlarmAuthorization() async -> AlertDeliveryStatus {
+        _ = await alarms?.requestAuthorization()
+        await rebuildIfDeliveryLevelChanged()
+        return deliveryStatus
     }
 
     /// Settings screen and app foreground: re-read permissions and the media volume (S5).
     public func refreshDeliveryStatus() async -> AlertDeliveryStatus {
-        await update(permissions: await center.permissionState())
+        await refreshPermissions()
+        return deliveryStatus
+    }
+
+    /// Everything the Settings screen shows about whether alerts can be heard (S5).
+    public var deliveryStatus: AlertDeliveryStatus {
+        AlertDeliveryStatus(
+            permissions: permissions,
+            outputVolume: lastOutputVolume,
+            urgentLowAlarm: alarms?.authorization ?? .unavailable,
+            urgentLowAlarmFailure: executor.urgentLowAlarmFailure
+        )
     }
 
     public var settings: AlertSettings { engine.settings }
@@ -86,15 +115,25 @@ public final class AlertService {
         executor.stopPreview()
     }
 
-    private func update(permissions: NotificationPermissionState) async -> AlertDeliveryStatus {
-        let criticalChanged = executor.criticalAlertsEnabled != permissions.criticalAlertsEnabled
+    private func refreshPermissions() async {
+        permissions = await center.permissionState()
+        lastOutputVolume = audio.outputVolume
+        await rebuildIfDeliveryLevelChanged()
+    }
+
+    private func rebuildIfDeliveryLevelChanged() async {
         executor.criticalAlertsEnabled = permissions.criticalAlertsEnabled
-        deliveryStatus = AlertDeliveryStatus(permissions: permissions, outputVolume: audio.outputVolume)
-        if criticalChanged {
-            // Pending notifications were built for the old delivery level; rebuild them.
-            await send(.settings(engine.settings))
-        }
-        return deliveryStatus
+        let now = (critical: permissions.criticalAlertsEnabled, alarms: executor.systemAlarmsAvailable)
+        guard now != builtFor else { return }
+        builtFor = now
+        // Pending notifications (and alarms) were built for the old delivery level; rebuild them.
+        await apply(.settings(engine.settings))
+    }
+
+    private func apply(_ input: AlertInput) async {
+        let actions = engine.handle(input, at: clock.now)
+        onSnapshot(engine.snapshot)
+        await perform(actions)
     }
 
     private func perform(_ actions: [AlertAction]) async {

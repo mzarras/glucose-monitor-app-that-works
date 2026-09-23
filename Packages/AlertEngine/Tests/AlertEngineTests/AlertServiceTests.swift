@@ -10,13 +10,15 @@ final class ServiceHarness {
     let center = FakeNotificationCenter()
     let audio = FakeAudioPlayer()
     let log = RecordingDiagnosticLog()
+    let alarms: FakeSystemAlarms?
     private(set) var snapshots: [AlertEngineSnapshot] = []
     private(set) var service: AlertService!
 
-    init(settings: AlertSettings = .defaults, snapshot: AlertEngineSnapshot? = nil) {
+    init(settings: AlertSettings = .defaults, snapshot: AlertEngineSnapshot? = nil, alarms: FakeSystemAlarms? = nil) {
+        self.alarms = alarms
         service = AlertService(
             settings: settings, restoring: snapshot, configuration: Fixtures.configuration, clock: clock,
-            notificationCenter: center, audio: audio, diagnostics: log,
+            notificationCenter: center, audio: audio, systemAlarms: alarms, diagnostics: log,
             onSnapshot: { [weak self] in self?.snapshots.append($0) }
         )
     }

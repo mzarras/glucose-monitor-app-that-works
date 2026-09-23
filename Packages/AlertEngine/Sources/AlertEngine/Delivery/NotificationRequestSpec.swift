@@ -37,13 +37,14 @@ public enum AlertNotificationIDs {
         prefix + kind.rawValue
     }
 
-    /// The pending notification in `slot` (0 ..< scheduledNotificationCount) for `kind`.
+    /// The pending notification in `slot` (0 ..< maximumScheduledSlots) for `kind`.
     public static func scheduled(_ kind: AlertKind, slot: Int) -> String {
         prefix + kind.rawValue + ".slot\(slot)"
     }
 
+    /// Every pending identifier `kind` could have used, whatever the repeat interval was.
     public static func allScheduled(_ kind: AlertKind) -> [String] {
-        (0..<AlertLimits.scheduledNotificationCount).map { scheduled(kind, slot: $0) }
+        (0..<AlertLimits.maximumScheduledSlots).map { scheduled(kind, slot: $0) }
     }
 
     /// Every identifier this package ever uses for `kind`.

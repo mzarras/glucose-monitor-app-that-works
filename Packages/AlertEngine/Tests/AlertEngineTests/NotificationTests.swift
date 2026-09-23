@@ -7,7 +7,8 @@ final class NotificationRequestTests: XCTestCase {
     func test_identifiersAreFixedAndDistinctPerAlert() {
         XCTAssertEqual(AlertNotificationIDs.immediate(.urgentLow), "sensor.alert.urgentLow")
         XCTAssertEqual(AlertNotificationIDs.scheduled(.urgentLow, slot: 3), "sensor.alert.urgentLow.slot3")
-        XCTAssertEqual(AlertNotificationIDs.all(.missedReadings).count, 13)
+        XCTAssertEqual(AlertNotificationIDs.all(.missedReadings).count, 1 + AlertLimits.maximumScheduledSlots)
+        XCTAssertEqual(AlertLimits.maximumScheduledSlots, 30, "60 min at the 2-minute floor")
         let everything = AlertKind.allCases.flatMap(AlertNotificationIDs.all)
         XCTAssertEqual(Set(everything).count, everything.count)
     }

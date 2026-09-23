@@ -29,7 +29,12 @@ final class FakeNotificationCenter: AlertNotificationCenter {
         return permissions
     }
 
-    func permissionState() async -> NotificationPermissionState { permissions }
+    private(set) var permissionChecks = 0
+
+    func permissionState() async -> NotificationPermissionState {
+        permissionChecks += 1
+        return permissions
+    }
 
     struct AddFailed: Error {}
 
@@ -95,5 +100,46 @@ final class RecordingDiagnosticLog: DiagnosticLog, @unchecked Sendable {
     var messages: [String] {
         lock.lock(); defer { lock.unlock() }
         return storage.map(\.message)
+    }
+}
+
+/// Stands in for AlarmKit: records scheduled alarms by ID, can refuse.
+@MainActor
+final class FakeSystemAlarms: SystemAlarmScheduling {
+    var authorization: SystemAlarmAuthorization = .authorized
+    var authorizationAfterRequest: SystemAlarmAuthorization?
+    /// Fail every schedule call with this error, or only from the n-th call (0-based) if set.
+    var failWith: Error?
+    var failFromCall: Int = 0
+    private(set) var scheduleCalls = 0
+    private(set) var scheduled: [UUID: SystemAlarmRequest] = [:]
+    private(set) var cancelAllCalls = 0
+
+    struct Refused: Error, CustomStringConvertible {
+        var description: String { "maximumLimitReached" }
+    }
+
+    func requestAuthorization() async -> SystemAlarmAuthorization {
+        if let next = authorizationAfterRequest { authorization = next }
+        return authorization
+    }
+
+    func schedule(_ request: SystemAlarmRequest) async throws {
+        defer { scheduleCalls += 1 }
+        if let failWith, scheduleCalls >= failFromCall { throw failWith }
+        scheduled[request.id] = request
+    }
+
+    func cancel(ids: [UUID]) {
+        for id in ids { scheduled[id] = nil }
+    }
+
+    func cancelAll() {
+        cancelAllCalls += 1
+        scheduled = [:]
+    }
+
+    var repeatAlarms: [SystemAlarmRequest] {
+        scheduled.values.filter { $0.id != SystemAlarmIDs.immediate }.sorted { $0.fireDate < $1.fireDate }
     }
 }

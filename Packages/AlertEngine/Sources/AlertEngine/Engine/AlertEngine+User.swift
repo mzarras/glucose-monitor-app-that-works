@@ -1,4 +1,4 @@
-// User actions (acknowledge, snooze, silence) and settings changes.
+// User actions (acknowledge, snooze, silence), settings changes, and the launch reconcile.
 
 import Foundation
 
@@ -52,6 +52,23 @@ extension AlertEngine {
             // Restart the repeat grid from the last sounding with the (possibly new) interval.
             setEpisode(.urgentLow, .firing(AlertFiring(since: firing.lastSoundedAt, lastSoundedAt: firing.lastSoundedAt)))
             actions.append(scheduleUrgentLowRepeats(after: firing.lastSoundedAt, now: now))
+        }
+        return actions
+    }
+
+    /// What a previous process may have left pending cannot be trusted: it may have been killed
+    /// between deciding and removing. Rebuild or remove it from the restored state.
+    mutating func reconcileAfterLaunch(now: Date) -> [AlertAction] {
+        var actions: [AlertAction] = []
+        if case .firing(let firing) = episode(.urgentLow) {
+            actions.append(scheduleUrgentLowRepeats(after: firing.lastSoundedAt, now: now))
+        } else {
+            actions.append(.cancelScheduled(.urgentLow))
+        }
+        if snapshot.missedReadingsScheduledFrom != nil {
+            // Evaluation schedules them again from the restored state.
+            actions.append(.cancelScheduled(.missedReadings))
+            snapshot.missedReadingsScheduledFrom = nil
         }
         return actions
     }

@@ -35,7 +35,7 @@ extension AlertEngine {
             guard remaining > 0 else { return [] }
             if remaining <= 2 * 3600 {
                 // The 2-hour notice makes the 24-hour one redundant; never send both at once.
-                remember(Self.eventID(.sensorExpiringIn24Hours, sessionDate: expiresAt))
+                remember(.sensorExpiringIn24Hours, sessionDate: expiresAt)
                 return announce(.sensorExpiringIn2Hours, sessionDate: expiresAt, now: now)
             }
             if remaining <= 24 * 3600 {
@@ -49,25 +49,27 @@ extension AlertEngine {
         }
     }
 
-    /// Fires a one-off announcement once per session date. A disabled announcement is not
-    /// remembered, so turning it on later in the same window still delivers it.
+    /// Fires a one-off announcement once per sensor session. Session dates are derived from the
+    /// phone clock at each connection (S3), so the same session's expiry or grace end can shift by
+    /// a second or so between connections (safety review WS4 M1). A date within an hour of the one
+    /// already announced for this kind is the same session; a new sensor's dates are days apart.
+    /// A disabled announcement is not remembered, so turning it on later in the window delivers it.
     private mutating func announce(_ kind: AlertKind, sessionDate: Date, now: Date) -> [AlertAction] {
-        let id = Self.eventID(kind, sessionDate: sessionDate)
-        guard settings.isEnabled(kind), !snapshot.announcedEvents.contains(id) else { return [] }
-        remember(id)
+        guard settings.isEnabled(kind), !alreadyAnnounced(kind, sessionDate: sessionDate) else { return [] }
+        remember(kind, sessionDate: sessionDate)
         return [.fire(makeNotice(kind, fireDate: nil, now: now))]
     }
 
-    private mutating func remember(_ id: String) {
-        guard !snapshot.announcedEvents.contains(id) else { return }
-        snapshot.announcedEvents.append(id)
-        if snapshot.announcedEvents.count > AlertEngineSnapshot.announcedEventsLimit {
-            snapshot.announcedEvents.removeFirst(snapshot.announcedEvents.count - AlertEngineSnapshot.announcedEventsLimit)
-        }
+    /// Two dates this close belong to the same sensor session.
+    static let sameSessionTolerance: TimeInterval = 3600
+
+    private func alreadyAnnounced(_ kind: AlertKind, sessionDate: Date) -> Bool {
+        guard let last = snapshot.announcedSessionDates[kind.rawValue] else { return false }
+        return abs(last.timeIntervalSince(sessionDate)) < Self.sameSessionTolerance
     }
 
-    static func eventID(_ kind: AlertKind, sessionDate: Date) -> String {
-        "\(kind.rawValue)@\(Int(sessionDate.timeIntervalSince1970))"
+    private mutating func remember(_ kind: AlertKind, sessionDate: Date) {
+        snapshot.announcedSessionDates[kind.rawValue] = sessionDate
     }
 
     static func isRunning(_ state: SensorState) -> Bool {

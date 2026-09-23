@@ -6,7 +6,8 @@
 //   AlertEngine.swift                  inputs, the per-alert state machine, glucose alerts
 //   AlertEngine+MissedReadings.swift   the pre-scheduled missed-readings alert (S5)
 //   AlertEngine+Sensor.swift           sensor state, sensor announcements
-//   AlertEngine+User.swift             acknowledge / snooze / settings changes
+//   AlertEngine+User.swift             acknowledge / snooze / settings changes / launch
+//   AlertEngine+Clock.swift            repair after the phone clock moves backwards
 
 import Foundation
 import GlucoseCore
@@ -28,18 +29,17 @@ public struct AlertEngine: Sendable {
         self.snapshot = snapshot.map { Self.sanitized($0, now: now) } ?? AlertEngineSnapshot(start: now)
     }
 
-    /// Makes a restored snapshot safe to use.
+    /// Makes a restored snapshot safe to use: drops unknown alert kinds, restarts a missing
+    /// missed-readings window, and applies the clock-fault repair, which also clamps an urgent-low
+    /// snooze to 30 minutes from when it was made and from now (S7).
     static func sanitized(_ stored: AlertEngineSnapshot, now: Date) -> AlertEngineSnapshot {
         var s = stored
         s.episodes = s.episodes.filter { AlertKind(rawValue: $0.key) != nil }
-        // S7: whatever the stored file says, an urgent-low snooze ends at most 30 minutes after it
-        // was made, and at most 30 minutes from now (in case the clock moved backwards).
-        if case .snoozed(let snooze) = s.episodes[AlertKind.urgentLow.rawValue] {
-            let maximum = TimeInterval(AlertLimits.urgentLowMaximumSnoozeMinutes * 60)
-            let until = min(snooze.until, snooze.snoozedAt.addingTimeInterval(maximum), now.addingTimeInterval(maximum))
-            s.episodes[AlertKind.urgentLow.rawValue] = .snoozed(AlertSnooze(snoozedAt: min(snooze.snoozedAt, now), until: until))
+        s.announcedSessionDates = s.announcedSessionDates.filter { AlertKind(rawValue: $0.key)?.isEventAlert == true }
+        if s.missedReadingsReference == AlertEngineSnapshot.missingReference {
+            s.missedReadingsReference = now
         }
-        return s
+        return repairingClockFaults(s, now: now)
     }
 
     // MARK: Reading the state (for the UI)
@@ -59,15 +59,20 @@ public struct AlertEngine: Sendable {
         AlertKind.allCases.filter { episode($0).isActive }
     }
 
-    /// The latest live reading if it is still current, else `nil` (S1: never carried forward).
+    /// The latest live reading if it is current, else `nil` (S1: never carried forward). Current
+    /// means measured at most 6 minutes ago and not later than the gate's future tolerance; a
+    /// reading dated further ahead only exists after the clock moved backwards (review B1).
     public func currentReading(at now: Date) -> LiveReadingSummary? {
         guard let reading = snapshot.latestLiveReading else { return nil }
-        return now.timeIntervalSince(reading.date) <= AlertLimits.currentReadingMaximumAge ? reading : nil
+        let age = now.timeIntervalSince(reading.date)
+        return age >= -LiveReadingGate.futureTolerance && age <= AlertLimits.currentReadingMaximumAge ? reading : nil
     }
 
     // MARK: The one entry point
 
     public mutating func handle(_ input: AlertInput, at now: Date) -> [AlertAction] {
+        // Before anything else: nothing remembered may lie in the future (review B1).
+        snapshot = Self.repairingClockFaults(snapshot, now: now)
         var actions: [AlertAction] = []
         switch input {
         case .reading(let reading, let session):
@@ -82,6 +87,8 @@ public struct AlertEngine: Sendable {
             snapshot.bridgeStatus = status
         case .tick:
             break
+        case .launched:
+            actions += reconcileAfterLaunch(now: now)
         case .user(let action):
             actions += apply(action, now: now)
         case .settings(let newSettings):
@@ -213,7 +220,7 @@ public struct AlertEngine: Sendable {
             // this adds the ringer-off sound whenever the app is awake. It ends only on
             // acknowledge/snooze or a reading that clears it.
             let interval = urgentLowRepeatInterval
-            let slot = Self.latestSlot(anchor: firing.since, interval: interval, now: now)
+            let slot = Self.latestSlot(anchor: firing.since, interval: interval, now: now.addingTimeInterval(AlertLimits.repeatSlotEarlyTolerance))
             guard slot > firing.lastSoundedAt else { return [] }
             setEpisode(kind, .firing(AlertFiring(since: firing.since, lastSoundedAt: slot)))
             return [
@@ -229,10 +236,16 @@ public struct AlertEngine: Sendable {
         return [.fire(makeNotice(kind, fireDate: nil, now: now))]
     }
 
-    /// Pending notifications for the next `scheduledNotificationCount` repeats after `anchor`.
+    /// Pending notifications (and, on iOS 26+, system alarms) for the repeats after `anchor`, far
+    /// enough ahead to cover `urgentLowPendingHorizonMinutes` whatever the repeat interval.
     func scheduleUrgentLowRepeats(after anchor: Date, now: Date) -> AlertAction {
-        let dates = Self.futureSlots(anchor: anchor, interval: urgentLowRepeatInterval, firstIndex: 1, after: now)
+        let dates = Self.futureSlots(anchor: anchor, interval: urgentLowRepeatInterval, firstIndex: 1, after: now, count: urgentLowPendingCount)
         return .schedule(.urgentLow, dates.map { makeNotice(.urgentLow, fireDate: $0, now: now, isRepeat: true) })
+    }
+
+    /// 60 minutes of repeats: 12 at 5 minutes, 30 at the 2-minute floor.
+    var urgentLowPendingCount: Int {
+        Int((Double(AlertLimits.urgentLowPendingHorizonMinutes) / Double(settings.urgentLow.repeatMinutes)).rounded(.up))
     }
 
     var urgentLowRepeatInterval: TimeInterval {
@@ -247,8 +260,8 @@ public struct AlertEngine: Sendable {
     }
 
     /// `anchor + k × interval` for k = firstIndex, firstIndex + 1, …, keeping only times after
-    /// `now`, until `scheduledNotificationCount` are collected. Never schedules the past.
-    static func futureSlots(anchor: Date, interval: TimeInterval, firstIndex: Int, after now: Date) -> [Date] {
+    /// `now`, until `count` are collected. Never schedules the past.
+    static func futureSlots(anchor: Date, interval: TimeInterval, firstIndex: Int, after now: Date, count: Int) -> [Date] {
         guard interval > 0 else { return [] }
         var dates: [Date] = []
         var k = firstIndex
@@ -256,7 +269,7 @@ public struct AlertEngine: Sendable {
             // Skip straight to the first slot after `now`.
             k = max(k, Int((now.timeIntervalSince(anchor) / interval).rounded(.down)))
         }
-        while dates.count < AlertLimits.scheduledNotificationCount {
+        while dates.count < min(count, AlertLimits.maximumScheduledSlots) {
             let date = anchor.addingTimeInterval(Double(k) * interval)
             if date > now { dates.append(date) }
             k += 1

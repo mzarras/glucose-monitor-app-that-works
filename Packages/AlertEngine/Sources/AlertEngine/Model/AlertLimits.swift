@@ -15,9 +15,13 @@ public enum AlertLimits {
     /// After acknowledging, urgent low re-alerts after this long if glucose is still urgent-low.
     public static let urgentLowDefaultSnoozeMinutes = 30
     /// HANDOFF §4.7: repeat unacknowledged urgent alerts every 5 minutes. The interval may be set
-    /// shorter, never longer, and repeating can never be turned off.
-    public static let urgentLowRepeatMinutes: ClosedRange<Int> = 1...5
+    /// shorter, never longer, and repeating can never be turned off. The floor is 2 minutes so that
+    /// a full hour of repeats fits in iOS's 64 pending notifications (30 + 12 for missed readings).
+    public static let urgentLowRepeatMinutes: ClosedRange<Int> = 2...5
     public static let urgentLowDefaultRepeatMinutes = 5
+    /// Urgent-low repeats (pending notifications, and system alarms on iOS 26+) are scheduled this
+    /// far ahead, whatever the repeat interval, so they keep coming for an hour with no wake-up.
+    public static let urgentLowPendingHorizonMinutes = 60
 
     // MARK: Urgent low soon
 
@@ -80,9 +84,18 @@ public enum AlertLimits {
     /// The same idea for rate alerts, in mg/dL per minute (this project's choice).
     public static let rateRecoveryMarginMgdlPerMinute = 1.0
 
-    /// How many pending notifications are scheduled ahead for urgent-low repeats and missed
-    /// readings. iOS keeps at most 64 pending requests per app; 2 × 12 leaves ample room.
+    /// How many missed-readings notifications are scheduled ahead (≥ 2 hours at the 10-minute
+    /// minimum window). iOS keeps at most 64 pending requests per app.
     public static let scheduledNotificationCount = 12
+    /// The most pending slots any alert uses: urgent low at the 2-minute floor over 60 minutes.
+    /// Notification identifiers and alarm IDs exist for this many slots.
+    public static let maximumScheduledSlots = urgentLowPendingHorizonMinutes / urgentLowRepeatMinutes.lowerBound
+    /// A wake-up this early for a repeat slot still plays that slot's sound. The G7 wakes the app
+    /// every ~5 minutes and the repeat grid is anchored at such a wake, so the next wake often
+    /// lands a few seconds before the slot; without this the sound would slip a whole cycle.
+    /// Must not exceed `LiveReadingGate.futureTolerance` (the clock-fault repair allows state
+    /// dates up to that far ahead of now).
+    public static let repeatSlotEarlyTolerance: TimeInterval = 60
 
     /// How long the in-app (ringer-off) audio loops for urgent low before stopping on its own. The
     /// next repeat plays it again. Other alerts play their sound once.
