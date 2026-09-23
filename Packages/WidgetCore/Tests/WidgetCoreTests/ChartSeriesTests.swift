@@ -72,6 +72,24 @@ final class ChartSeriesTests: XCTestCase {
         // is unknown.
         XCTAssertEqual(series.segments.map { $0.map(\.mgdl) }, [[60, 45], [42]])
         XCTAssertEqual(series.maxPlottedMgdl, 60, "flags do not stretch the axis")
+        // Consecutive flags form one labelled run.
+        XCTAssertEqual(series.lowFlagRuns, [[Fixture.minutesAgo(10), Fixture.minutesAgo(5)]])
+        XCTAssertEqual(series.highFlagRuns, [[Fixture.minutesAgo(30)]])
+    }
+
+    func test_S4_flagRunsBreakAtReadingsAndGaps() {
+        let series = ChartSeries(points: [
+            Fixture.point(.belowRange, minutesAgo: 60),
+            Fixture.point(.belowRange, minutesAgo: 55),
+            Fixture.point(.belowRange, minutesAgo: 30), // 25-minute gap: a new run
+            Fixture.point(.mgdl(45), minutesAgo: 25),
+            Fixture.point(.belowRange, minutesAgo: 20), // after a numeric reading: a new run
+            Fixture.point(.aboveRange, minutesAgo: 15),
+            Fixture.point(.belowRange, minutesAgo: 10), // after a HIGH: a new run
+        ])
+        XCTAssertEqual(series.lowFlagRuns.map(\.count), [2, 1, 1, 1])
+        XCTAssertEqual(series.highFlagRuns.map(\.count), [1])
+        XCTAssertEqual(series.lowFlags.count, 5)
     }
 
     func test_S4_axisDoesNotStretchForHighFlags() {

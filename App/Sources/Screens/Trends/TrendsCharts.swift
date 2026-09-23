@@ -49,22 +49,8 @@ enum TimeOfDayAxis {
 struct AGPChart: View {
     let buckets: [AGPBucket]
 
-    static let maxBucketGapMinutes = 60
-
-    static func segments(_ buckets: [AGPBucket]) -> [[AGPBucket]] {
-        var result: [[AGPBucket]] = []
-        for bucket in buckets.sorted(by: { $0.minuteOfDay < $1.minuteOfDay }) {
-            if let last = result.last?.last, bucket.minuteOfDay - last.minuteOfDay <= maxBucketGapMinutes {
-                result[result.count - 1].append(bucket)
-            } else {
-                result.append([bucket])
-            }
-        }
-        return result
-    }
-
     var body: some View {
-        let segments = Self.segments(buckets)
+        let segments = AGPSegmentation.segments(buckets)
         let upper = ChartScale.yUpperBound(maxPlotted: buckets.map { Int($0.p95.rounded()) }.max())
         Chart {
             RectangleMark(xStart: .value("Start", 0), xEnd: .value("End", 24), yStart: .value("Low", 70), yEnd: .value("High", 180))
@@ -129,6 +115,8 @@ struct DayOverlayChart: View {
         let hour: Double
         let isLow: Bool
         let isToday: Bool
+        /// First reading of a run of flags: carries the "LOW"/"HIGH" label; the rest get a tick only.
+        let isRunStart: Bool
     }
 
     /// The trace the scrub highlight and haptics follow: today, or the newest day.
@@ -150,11 +138,15 @@ struct DayOverlayChart: View {
             for (index, segment) in series.segments.enumerated() {
                 lines.append(Line(id: "\(day.dayStart.timeIntervalSince1970)-\(index)", isToday: day.isToday, points: segment, dayStart: day.dayStart))
             }
-            for date in series.lowFlags {
-                flags.append(Flag(id: "L\(date.timeIntervalSince1970)", hour: TimeOfDayAxis.hourOfDay(date, dayStart: day.dayStart), isLow: true, isToday: day.isToday))
+            for run in series.lowFlagRuns {
+                for (index, date) in run.enumerated() {
+                    flags.append(Flag(id: "L\(date.timeIntervalSince1970)", hour: TimeOfDayAxis.hourOfDay(date, dayStart: day.dayStart), isLow: true, isToday: day.isToday, isRunStart: index == 0))
+                }
             }
-            for date in series.highFlags {
-                flags.append(Flag(id: "H\(date.timeIntervalSince1970)", hour: TimeOfDayAxis.hourOfDay(date, dayStart: day.dayStart), isLow: false, isToday: day.isToday))
+            for run in series.highFlagRuns {
+                for (index, date) in run.enumerated() {
+                    flags.append(Flag(id: "H\(date.timeIntervalSince1970)", hour: TimeOfDayAxis.hourOfDay(date, dayStart: day.dayStart), isLow: false, isToday: day.isToday, isRunStart: index == 0))
+                }
             }
         }
         let maxValue = lines.flatMap(\.points).map(\.mgdl).max()
@@ -194,12 +186,19 @@ struct DayOverlayChart: View {
                     ZStack(alignment: .topLeading) {
                         ForEach(flags) { flag in
                             if let x = proxy.position(forX: flag.hour) {
-                                Text(verbatim: flag.isLow ? "LOW" : "HIGH")
-                                    .font(Typography.fixedLabel(size: 8, medium: true))
-                                    .foregroundStyle(Theme.band(flag.isLow ? .veryLow : .veryHigh))
+                                Rectangle()
+                                    .fill(Theme.band(flag.isLow ? .veryLow : .veryHigh))
+                                    .frame(width: 2, height: 6)
                                     .opacity(flag.isToday ? 1 : 0.6)
-                                    .fixedSize()
-                                    .position(x: plot.minX + x, y: flag.isLow ? plot.maxY - 8 : plot.minY + 8)
+                                    .position(x: plot.minX + x, y: flag.isLow ? plot.maxY - 3 : plot.minY + 3)
+                                if flag.isRunStart {
+                                    Text(verbatim: flag.isLow ? "LOW" : "HIGH")
+                                        .font(Typography.fixedLabel(size: 8, medium: true))
+                                        .foregroundStyle(Theme.band(flag.isLow ? .veryLow : .veryHigh))
+                                        .opacity(flag.isToday ? 1 : 0.6)
+                                        .fixedSize()
+                                        .position(x: min(max(plot.minX + x, plot.minX + 12), plot.maxX - 12), y: flag.isLow ? plot.maxY - 14 : plot.minY + 14)
+                                }
                             }
                         }
                         Rectangle()

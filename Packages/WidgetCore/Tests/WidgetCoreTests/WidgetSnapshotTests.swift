@@ -56,7 +56,7 @@ final class WidgetSnapshotTests: XCTestCase {
     func test_datesAreEncodedAsEpochMilliseconds() throws {
         let data = try WidgetSnapshotStore.encoder().encode(sampleSnapshot())
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual((object["writtenAt"] as? NSNumber)?.int64Value, 1_758_630_900_000)
+        XCTAssertEqual((object["writtenAt"] as? NSNumber)?.int64Value, 1_790_166_900_000)
         XCTAssertEqual(object["schemaVersion"] as? Int, WidgetSnapshot.currentSchemaVersion)
     }
 

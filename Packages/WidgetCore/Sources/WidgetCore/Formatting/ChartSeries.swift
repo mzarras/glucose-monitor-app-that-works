@@ -42,6 +42,11 @@ public struct ChartSeries: Sendable, Equatable {
     public let lowFlags: [Date]
     /// Times of sensor HIGH flags, drawn as "HIGH" markers at the chart's top edge.
     public let highFlags: [Date]
+    /// `lowFlags` grouped into runs: consecutive LOW readings with no other reading between and no
+    /// gap > 15 min. A run gets one "LOW" label and a tick per reading, so labels don't pile up.
+    public let lowFlagRuns: [[Date]]
+    /// `highFlags` grouped the same way.
+    public let highFlagRuns: [[Date]]
     /// Number of places where consecutive readings are more than `maxGap` apart.
     public let gapCount: Int
 
@@ -62,34 +67,53 @@ public struct ChartSeries: Sendable, Equatable {
         var current: [PlottedPoint] = []
         var lowFlags: [Date] = []
         var highFlags: [Date] = []
+        var lowRuns: [[Date]] = []
+        var highRuns: [[Date]] = []
+        var lowRun: [Date] = []
+        var highRun: [Date] = []
         var gapCount = 0
         var previousDate: Date?
+
+        func closeLowRun() { if !lowRun.isEmpty { lowRuns.append(lowRun) }; lowRun = [] }
+        func closeHighRun() { if !highRun.isEmpty { highRuns.append(highRun) }; highRun = [] }
 
         for point in ordered {
             if let previousDate, point.date.timeIntervalSince(previousDate) > Self.maxGap {
                 gapCount += 1
                 if !current.isEmpty { segments.append(current) }
                 current = []
+                closeLowRun()
+                closeHighRun()
             }
             previousDate = point.date
             switch point.value {
             case .mgdl(let mgdl):
                 current.append(PlottedPoint(date: point.date, mgdl: mgdl))
+                closeLowRun()
+                closeHighRun()
             case .belowRange:
                 lowFlags.append(point.date)
+                lowRun.append(point.date)
+                closeHighRun()
                 if !current.isEmpty { segments.append(current) }
                 current = []
             case .aboveRange:
                 highFlags.append(point.date)
+                highRun.append(point.date)
+                closeLowRun()
                 if !current.isEmpty { segments.append(current) }
                 current = []
             }
         }
         if !current.isEmpty { segments.append(current) }
+        closeLowRun()
+        closeHighRun()
 
         self.segments = segments
         self.lowFlags = lowFlags
         self.highFlags = highFlags
+        self.lowFlagRuns = lowRuns
+        self.highFlagRuns = highRuns
         self.gapCount = gapCount
     }
 

@@ -9,8 +9,8 @@ import GlucoseCore
 import WidgetCore
 
 enum Fixtures {
-    /// 2026-09-23 12:35:00 local-ish reference time for screenshots (UTC 16:35).
-    static let referenceNow = Date(timeIntervalSince1970: 1_758_645_300)
+    /// Wed 23 Sep 2026, 12:35 PM in New York (16:35 UTC): the mockups' time, for screenshots.
+    static let referenceNow = Date(timeIntervalSince1970: 1_790_181_300)
 
     // MARK: - Readings
 

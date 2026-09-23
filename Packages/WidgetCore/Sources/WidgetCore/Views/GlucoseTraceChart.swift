@@ -256,26 +256,49 @@ public struct GlucoseTraceChart: View {
         }
     }
 
-    /// LOW markers along the bottom edge and HIGH markers along the top edge of the plot area.
-    /// Only the x position comes from the chart; the y position is the edge (S4).
+    /// LOW markers along the bottom edge and HIGH markers along the top edge of the plot area: a
+    /// tick per flagged reading and one label per run. Only the x position comes from the chart;
+    /// the y position is the edge (S4).
     private func flagOverlay(proxy: ChartProxy, series: ChartSeries) -> some View {
         GeometryReader { geometry in
             if let anchor = proxy.plotFrame {
                 let plot = geometry[anchor]
+                let size = options.flagFontSize
                 ForEach(series.lowFlags, id: \.self) { date in
                     if let x = proxy.position(forX: date) {
-                        FlagMarker(text: "LOW", band: .veryLow, fontSize: options.flagFontSize)
-                            .position(x: plot.minX + x, y: plot.maxY - options.flagFontSize)
+                        FlagTick(band: .veryLow).position(x: plot.minX + x, y: plot.maxY - 3)
                     }
                 }
                 ForEach(series.highFlags, id: \.self) { date in
                     if let x = proxy.position(forX: date) {
-                        FlagMarker(text: "HIGH", band: .veryHigh, fontSize: options.flagFontSize)
-                            .position(x: plot.minX + x, y: plot.minY + options.flagFontSize)
+                        FlagTick(band: .veryHigh).position(x: plot.minX + x, y: plot.minY + 3)
+                    }
+                }
+                ForEach(series.lowFlagRuns, id: \.self) { run in
+                    if let first = run.first, let x = proxy.position(forX: first) {
+                        FlagMarker(text: "LOW", band: .veryLow, fontSize: size)
+                            .position(x: FlagMarker.clampedX(plot.minX + x, label: "LOW", fontSize: size, in: plot), y: plot.maxY - 6 - size)
+                    }
+                }
+                ForEach(series.highFlagRuns, id: \.self) { run in
+                    if let first = run.first, let x = proxy.position(forX: first) {
+                        FlagMarker(text: "HIGH", band: .veryHigh, fontSize: size)
+                            .position(x: FlagMarker.clampedX(plot.minX + x, label: "HIGH", fontSize: size, in: plot), y: plot.minY + 6 + size)
                     }
                 }
             }
         }
+    }
+}
+
+/// Short vertical tick at the chart edge marking one LOW/HIGH reading.
+struct FlagTick: View {
+    let band: GlucoseBand
+
+    var body: some View {
+        Rectangle()
+            .fill(Theme.band(band))
+            .frame(width: 2, height: 6)
     }
 }
 
@@ -284,6 +307,12 @@ struct FlagMarker: View {
     let text: String
     let band: GlucoseBand
     let fontSize: CGFloat
+
+    /// Keeps the label inside the plot (IBM Plex Mono advance ≈ 0.6 em per character).
+    static func clampedX(_ x: CGFloat, label: String, fontSize: CGFloat, in plot: CGRect) -> CGFloat {
+        let half = CGFloat(label.count) * fontSize * 0.6 / 2 + 2
+        return min(max(x, plot.minX + half), plot.maxX - half)
+    }
 
     var body: some View {
         Text(verbatim: text)

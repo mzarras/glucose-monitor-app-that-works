@@ -155,6 +155,24 @@ enum TrendsText {
     }
 }
 
+/// Splits AGP buckets where they are more than an hour apart, so the chart never joins percentile
+/// lines across time of day with no data.
+enum AGPSegmentation {
+    static let maxBucketGapMinutes = 60
+
+    static func segments(_ buckets: [AGPBucket]) -> [[AGPBucket]] {
+        var result: [[AGPBucket]] = []
+        for bucket in buckets.sorted(by: { $0.minuteOfDay < $1.minuteOfDay }) {
+            if let last = result.last?.last, bucket.minuteOfDay - last.minuteOfDay <= maxBucketGapMinutes {
+                result[result.count - 1].append(bucket)
+            } else {
+                result.append([bucket])
+            }
+        }
+        return result
+    }
+}
+
 enum HourLabelText {
     /// "2:15 AM" for VoiceOver.
     static func spoken(minuteOfDay: Int) -> String {

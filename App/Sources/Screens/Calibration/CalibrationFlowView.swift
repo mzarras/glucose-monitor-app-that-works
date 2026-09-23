@@ -33,6 +33,8 @@ struct CalibrationContent: View {
     let now: Date
     let submit: @MainActor (CalibrationRequest) -> Void
     let close: @MainActor () -> Void
+    /// Off only for `ImageRenderer` screenshots, which do not draw ScrollView content.
+    var scrolls = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -51,15 +53,21 @@ struct CalibrationContent: View {
                 .accessibilityLabel(Text("Close"))
             }
             Hairline().padding(.bottom, 12)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    stepContent
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if scrolls {
+                ScrollView { steps }
+            } else {
+                steps
             }
         }
         .padding(.horizontal, Layout.sideMargin)
         .padding(.top, 16)
+    }
+
+    private var steps: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            stepContent
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder

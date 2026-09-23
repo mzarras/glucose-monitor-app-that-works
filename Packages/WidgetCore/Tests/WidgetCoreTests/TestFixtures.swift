@@ -5,7 +5,7 @@ import GlucoseCore
 /// Hand-built fixtures. Dates are whole seconds so JSON round trips (milliseconds) are exact.
 enum Fixture {
     /// 2026-09-23 12:35:00 UTC.
-    static let now = Date(timeIntervalSince1970: 1_758_630_900)
+    static let now = Date(timeIntervalSince1970: 1_790_166_900)
 
     static func minutesAgo(_ minutes: Double) -> Date {
         now.addingTimeInterval(-minutes * 60)

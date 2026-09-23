@@ -42,8 +42,10 @@ enum CalibrationDifference: Equatable, Sendable {
 
 enum CalibrationRules {
     /// Difference limit: the larger of 20 mg/dL or 20 % of the sensor reading (PROGRESS D16).
-    static let absoluteLimitMgdl = 20.0
-    static let relativeLimit = 0.20
+    static let absoluteLimitMgdl = 20
+    /// 20 % as a divisor, so the comparison is exact integer arithmetic (0.2 × 105 is not 21 in
+    /// floating point).
+    static let relativeLimitDivisor = 5
 
     static func availability(_ state: CalibrationViewState, now: Date) -> CalibrationAvailability {
         guard state.acceptedRange != nil else {
@@ -91,7 +93,12 @@ enum CalibrationRules {
     }
 
     static func differenceLimit(sensorMgdl: Int) -> Double {
-        max(absoluteLimitMgdl, relativeLimit * Double(sensorMgdl))
+        max(Double(absoluteLimitMgdl), Double(sensorMgdl) / Double(relativeLimitDivisor))
+    }
+
+    /// More than 20 mg/dL *and* more than 20 % of the sensor reading, i.e. more than the larger of the two.
+    static func isLargeDifference(_ difference: Int, sensorMgdl: Int) -> Bool {
+        difference > absoluteLimitMgdl && difference * relativeLimitDivisor > sensorMgdl
     }
 
     /// Compares with the latest live reading, if it is current (< 10 min, same rule as the hero).
@@ -101,9 +108,10 @@ enum CalibrationRules {
         }
         guard let sensor = reading.value.numericMgdl else { return .sensorFlag(reading.value) }
         let difference = abs(fingerstick - sensor)
-        let limit = differenceLimit(sensorMgdl: sensor)
-        if Double(difference) > limit {
-            return .large(sensorMgdl: sensor, difference: difference, limit: Int(limit.rounded(.up)))
+        if isLargeDifference(difference, sensorMgdl: sensor) {
+            // Shown to the user; whole mg/dL, rounded down so "more than the limit" stays true.
+            let limit = max(absoluteLimitMgdl, sensor / relativeLimitDivisor)
+            return .large(sensorMgdl: sensor, difference: difference, limit: limit)
         }
         return .withinLimit(sensorMgdl: sensor, difference: difference)
     }
