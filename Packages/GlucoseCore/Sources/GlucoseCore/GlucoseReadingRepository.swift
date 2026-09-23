@@ -6,11 +6,17 @@ import Foundation
 ///
 /// Two roles, never mixed (S1, S6):
 /// - **production** — the app's database. Stores only `.sensor` and `.imported` readings. `insert`
-///   throws `GlucoseReadingRepositoryError.sourceNotAllowed` for `.replay`/`.mock`, and opening a
+///   throws `GlucoseReadingRepositoryError.sourceNotAllowed` for `.replay`/`.mock` — a batch that
+///   contains any disallowed reading is rejected whole and nothing is stored — and opening a
 ///   production store deletes any `.replay`/`.mock` rows (defence against a DEBUG build having
 ///   written them to the same App Group database).
 /// - **replay** (DEBUG only) — a separate in-memory store or separate file used while a ReplayKit
 ///   source runs. Stores only `.replay`/`.mock` readings and throws for anything else.
+///
+/// Both roles refuse a numeric value outside `GlucoseValue.sensorReportableRange` (40...400) with
+/// `GlucoseReadingRepositoryError.implausibleValue`, rejecting the whole batch: such a number can
+/// only come from a parse fault, and storing it would put it in charts and stats (S1). Importers
+/// filter their rows before calling `insert`, so in practice this only fires on a bug.
 public protocol GlucoseReadingRepository: Sendable {
     /// Insert-or-ignore keyed by `id` (S3 dedupe): inserting the same readings again changes nothing.
     ///
@@ -45,4 +51,6 @@ public protocol GlucoseReadingRepository: Sendable {
 public enum GlucoseReadingRepositoryError: Error, Sendable, Equatable {
     /// The reading's source is not allowed in this store's role (see `GlucoseReadingRepository`).
     case sourceNotAllowed(ReadingSource)
+    /// A numeric value outside `GlucoseValue.sensorReportableRange`.
+    case implausibleValue(Int)
 }

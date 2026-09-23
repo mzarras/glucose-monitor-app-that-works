@@ -60,10 +60,10 @@ targets:
       # lists fonts by file name. Keep file names unique across both folders.
       - path: Resources/Fonts
         buildPhase: resources
-        excludes: ["**/.gitkeep"]
+        excludes: ["**/.gitkeep", "**/README.md"]
       - path: Resources/Sounds
         buildPhase: resources
-        excludes: ["**/.gitkeep"]
+        excludes: ["**/.gitkeep", "**/README.md"]
     settings:
       base:
         PRODUCT_NAME: Sensor
@@ -93,7 +93,7 @@ targets:
       - path: Widgets/Sources
       - path: Resources/Fonts
         buildPhase: resources
-        excludes: ["**/.gitkeep"]
+        excludes: ["**/.gitkeep", "**/README.md"]
     settings:
       base:
         PRODUCT_NAME: SensorWidgets
