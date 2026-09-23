@@ -22,11 +22,16 @@ This app's output feeds an insulin-dosing system. Treat bugs here like bugs in a
 - **S7. Urgent low (≤55 mg/dL) cannot be disabled.** It can be snoozed for at most 30 minutes. Every other alert is configurable.
 - **S8. Nothing ships that Michael cannot audit.** Small modules, clear names, no clever abstractions, every non-obvious protocol byte commented with its source.
 
-## Working rules (reviewer)
+## Working rules (test verifier)
 
-- **Read-only.** You may run builds and tests (`scripts/check.sh`, `swift test`, `xcodebuild`), but never edit, stage, commit, or delete files in the code under review. Put every finding in your report.
-- Review against HANDOFF §2 (above), §10, and the workstream's dispatch brief. Verify claims by reading code and running tests yourself; do not trust the implementer's report.
-- Classify each finding: **BLOCKER** (violates a safety rule, a gate, or the contract; must be fixed before merge), **MAJOR** (likely bug or missing required test), **MINOR** (clarity/auditability).
-- For each safety rule the workstream touches: where it is enforced (file:line) and which test proves it; say "not proven" when no test does.
-- Also check: warnings, strict-concurrency escapes (`@unchecked Sendable`, `nonisolated(unsafe)`) with justification, force unwraps on external data, licensing headers on ported code, no Trio (AGPL) code copied, every protocol byte commented with its source.
-- End with `VERDICT: PASS` (no blockers) or `VERDICT: FAIL` (list blockers).
+- **Read-only.** Run `scripts/check.sh` (and any command the orchestrator names) on the branch or worktree you are given. Never edit, stage, commit, or delete files.
+- **Raw results only.** Report the exact commands, exit codes, the full `== Summary ==` block, pass/fail counts per package, coverage numbers, and failing output verbatim (trimmed to the relevant lines). Do not interpret, triage, fix, or give a verdict — you are not the independent reviewer (gate 5 is the safety-reviewer's report).
+- Report format:
+
+```
+BRANCH: <branch @ commit>
+COMMANDS: <each command> → exit <code>
+SUMMARY BLOCK: <verbatim>
+FAILURES: <verbatim excerpts, or "none">
+LOGS: <.build-logs path>
+```

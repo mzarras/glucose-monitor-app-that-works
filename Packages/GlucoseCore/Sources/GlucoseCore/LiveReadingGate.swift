@@ -24,11 +24,24 @@ public enum LiveReadingGate {
         case afterSessionEnd
         /// S2: timestamp later than `now + futureTolerance`.
         case inFuture
+        /// S2: a numeric value outside `GlucoseValue.sensorReportableRange`. The sensor reports
+        /// anything it cannot measure as LOW/HIGH, so a number outside 40...400 means a parse or
+        /// transport fault (e.g. 0 or 4095 from a misread packet), never a real glucose value.
+        case implausibleValue(Int)
+        /// S2: a trend rate that is NaN or infinite — a parse fault; it would also corrupt JSON
+        /// encoding and equality downstream.
+        case nonFiniteTrendRate
+        /// S2: the session itself is malformed (empty serial, or dates out of order), so no
+        /// reading can be checked against it.
+        case malformedSession
     }
 
-    /// Allowed clock skew between a derived reading time and the phone's clock. Reading dates are
-    /// derived from the sensor-reported session age at connection time (S3), so only rounding
-    /// separates them from `now`; anything beyond this is a clock problem and is refused.
+    /// How far after `now` a reading's derived date may be. Reading dates are derived by anchoring
+    /// the sensor's clock (1-second resolution) to the phone's clock at each connection (S3). The
+    /// tolerance absorbs that resolution, message latency, and a small phone clock correction
+    /// (e.g. an NTP step) between anchoring and validation. It cannot make a stale reading look
+    /// fresh in any way that matters: every staleness threshold in the app is ≥ 10 minutes.
+    /// Anything later than this is a clock fault and is refused.
     public static let futureTolerance: TimeInterval = 60
 
     /// Refuses the reading unless it is a live sensor reading that is plausible for `session` at `now`.
@@ -51,7 +64,12 @@ public enum LiveReadingGate {
     #endif
 
     private static func validateAgainstSession(_ reading: GlucoseReading, session: SensorSession?, now: Date) throws(Rejection) {
+        if case .mgdl(let value) = reading.value, !GlucoseValue.sensorReportableRange.contains(value) {
+            throw .implausibleValue(value)
+        }
+        if let rate = reading.trendRate, !rate.isFinite { throw .nonFiniteTrendRate }
         guard let session else { throw .noSession }
+        guard session.isWellFormed else { throw .malformedSession }
         guard reading.sensorSerial == session.serial else {
             throw .serialMismatch(readingSerial: reading.sensorSerial, sessionSerial: session.serial)
         }

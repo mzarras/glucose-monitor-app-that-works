@@ -49,4 +49,10 @@ public struct SensorSession: Sendable, Equatable, Hashable, Codable {
         self.expiresAt = expiresAt
         self.gracePeriodEndsAt = gracePeriodEndsAt
     }
+
+    /// Non-empty serial and `start ≤ warmUpEndsAt ≤ expiresAt ≤ gracePeriodEndsAt`.
+    /// `LiveReadingGate` refuses every reading against a session that is not well formed.
+    public var isWellFormed: Bool {
+        !serial.isEmpty && start <= warmUpEndsAt && warmUpEndsAt <= expiresAt && expiresAt <= gracePeriodEndsAt
+    }
 }
