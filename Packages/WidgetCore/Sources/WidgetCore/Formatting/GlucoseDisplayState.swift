@@ -29,6 +29,10 @@ public enum GlucoseDisplayState: Sendable, Equatable, Hashable {
     case sensorError(message: String, last: LatestReading?)
     /// No sensor paired.
     case notPaired
+    /// The latest reading is dated more than `LiveReadingGate.futureTolerance` ahead of the
+    /// phone's clock (the clock was moved back). It cannot be judged current, so it is not shown
+    /// as a number; the message asks the user to check the date and time.
+    case clockMismatch(latest: LatestReading)
 
     /// - Parameters:
     ///   - latest: the newest stored reading, if any.
@@ -55,6 +59,9 @@ public enum GlucoseDisplayState: Sendable, Equatable, Hashable {
             break
         }
         guard let latest else { return .noData(last: nil) }
+        if latest.date > now.addingTimeInterval(LiveReadingGate.futureTolerance) {
+            return .clockMismatch(latest: latest)
+        }
         let age = now.timeIntervalSince(latest.date)
         if age < Freshness.staleAfter { return .current(latest) }
         if age < Freshness.noDataAfter { return .stale(latest) }
@@ -66,7 +73,7 @@ public enum GlucoseDisplayState: Sendable, Equatable, Hashable {
     public var displayedReading: LatestReading? {
         switch self {
         case .current(let reading), .stale(let reading): return reading
-        case .noData, .warmingUp, .sensorExpired, .sensorError, .notPaired: return nil
+        case .noData, .warmingUp, .sensorExpired, .sensorError, .notPaired, .clockMismatch: return nil
         }
     }
 
@@ -75,6 +82,8 @@ public enum GlucoseDisplayState: Sendable, Equatable, Hashable {
     public static func transitionDates(latest: LatestReading?, sensorState: SensorState) -> [Date] {
         var dates: [Date] = []
         if let latest {
+            // When the phone clock catches up with a reading dated ahead of it.
+            dates.append(latest.date.addingTimeInterval(-LiveReadingGate.futureTolerance))
             dates.append(latest.date.addingTimeInterval(Freshness.staleAfter))
             dates.append(latest.date.addingTimeInterval(Freshness.noDataAfter))
         }

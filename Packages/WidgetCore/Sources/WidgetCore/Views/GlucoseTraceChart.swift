@@ -41,6 +41,9 @@ public struct GlucoseTraceChart: View {
 
     let points: [ChartPoint]
     let domain: ClosedRange<Date>
+    /// The latest *live* reading: the accent dot and VoiceOver's "latest". Never taken from
+    /// `points`, which may contain imported history (S6). Nil: no dot.
+    let latestLive: ChartPoint?
     let fingersticks: [FingerstickMarker]
     let options: Options
     let accessibilityTitle: String
@@ -56,10 +59,11 @@ public struct GlucoseTraceChart: View {
     ///   - accessibilityTitle: first words of the VoiceOver summary, e.g. "Last 3 hours".
     ///   - timeText: clock-time formatter for the scrub callout.
     ///   - initialScrubDate: previews and screenshots only — start with the finger at this time.
-    public init(points: [ChartPoint], domain: ClosedRange<Date>, fingersticks: [FingerstickMarker] = [], options: Options, accessibilityTitle: String,
+    public init(points: [ChartPoint], domain: ClosedRange<Date>, latestLive: ChartPoint?, fingersticks: [FingerstickMarker] = [], options: Options, accessibilityTitle: String,
                 timeText: @escaping @Sendable (Date) -> String = ChartScrub.shortTime, initialScrubDate: Date? = nil) {
         self.points = points.filter { domain.contains($0.date) }
         self.domain = domain
+        self.latestLive = latestLive.flatMap { domain.contains($0.date) ? $0 : nil }
         self.fingersticks = fingersticks.filter { domain.contains($0.date) }
         self.options = options
         self.accessibilityTitle = accessibilityTitle
@@ -155,17 +159,17 @@ public struct GlucoseTraceChart: View {
     }
 
     private var accessibilityText: String {
-        var text = ChartSummary.text(title: accessibilityTitle, points: points)
+        var text = ChartSummary.text(title: accessibilityTitle, points: points, latestLive: latestLive?.value)
         if !fingersticks.isEmpty {
             text += fingersticks.count == 1 ? " 1 fingerstick marked." : " \(fingersticks.count) fingersticks marked."
         }
         return text
     }
 
-    /// The newest reading in view, if it is numeric (a newest LOW/HIGH shows as a flag instead).
+    /// The latest live reading, if numeric (a LOW/HIGH shows as a flag marker instead).
     private var latestPlotted: PlottedPoint? {
-        guard let latest = points.max(by: { $0.date < $1.date }), let mgdl = latest.value.numericMgdl else { return nil }
-        return PlottedPoint(date: latest.date, mgdl: mgdl)
+        guard let latestLive, let mgdl = latestLive.value.numericMgdl else { return nil }
+        return PlottedPoint(date: latestLive.date, mgdl: mgdl)
     }
 
     @ChartContentBuilder

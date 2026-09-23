@@ -39,6 +39,15 @@ public struct SRGBColor: Sendable, Equatable, Hashable, CustomStringConvertible 
         return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
     }
 
+    /// This colour drawn at `opacity` over `background`, composited per channel in sRGB (how the
+    /// renderer blends sRGB content). Used to check reduced-opacity content against WCAG.
+    public func blended(over background: SRGBColor, opacity: Double) -> SRGBColor {
+        func mix(_ top: UInt8, _ bottom: UInt8) -> UInt32 {
+            UInt32((opacity * Double(top) + (1 - opacity) * Double(bottom)).rounded())
+        }
+        return SRGBColor(hex: mix(red, background.red) << 16 | mix(green, background.green) << 8 | mix(blue, background.blue))
+    }
+
     /// WCAG 2.x contrast ratio, 1...21, symmetric in its arguments.
     /// Source: https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio
     public static func contrastRatio(_ a: SRGBColor, _ b: SRGBColor) -> Double {

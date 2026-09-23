@@ -63,6 +63,17 @@ public struct Palette: Sendable, Equatable {
     }
 }
 
+/// Reduced-opacity content. Every value here is checked against WCAG in
+/// `DesignTokenContrastTests.test_reducedOpacityContentStillMeetsAA`.
+public enum Emphasis {
+    /// Charts in the widget's stale / no-data states: dimmed, but the ink line keeps ≥ 3:1 over
+    /// the target band and the background.
+    public static let dimmedChartOpacity: Double = 0.6
+    /// Ticks marking the earlier days' LOW/HIGH readings in the 3 D overlay (graphics, ≥ 3:1).
+    /// Their "LOW"/"HIGH" labels are drawn at full opacity (text, ≥ 4.5:1).
+    public static let otherDayFlagTickOpacity: Double = 0.85
+}
+
 /// The user-selectable accent (HANDOFF §7.1, Settings → Accent colour).
 public enum AccentChoice: String, Sendable, Equatable, Hashable, Codable, CaseIterable, Identifiable {
     case forest

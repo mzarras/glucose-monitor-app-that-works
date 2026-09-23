@@ -67,6 +67,25 @@ final class WidgetTimelineTests: XCTestCase {
         }
     }
 
+    /// Review M1: a snapshot whose reading is dated ahead of the phone's clock never shows it as
+    /// current until the clock has caught up.
+    func test_S5_futureDatedReadingIsNeverShownAsCurrent() {
+        for minutesAhead in [5.0, 60, 600] {
+            let reading = Fixture.latest(.mgdl(105), minutesAgo: -minutesAhead)
+            let entries = WidgetTimeline.entries(snapshot: snapshot(reading), now: Fixture.now)
+            XCTAssertEqual(entries.first?.display, .clockMismatch(latest: reading), "\(minutesAhead) min ahead")
+            for entry in entries where entry.date < reading.date.addingTimeInterval(-LiveReadingGate.futureTolerance) {
+                XCTAssertNil(entry.display.displayedReading, "\(minutesAhead) min ahead: number shown at \(entry.date)")
+            }
+            XCTAssertEqual(entries.map(\.date), [
+                Fixture.now,
+                reading.date.addingTimeInterval(-LiveReadingGate.futureTolerance),
+                reading.date.addingTimeInterval(Freshness.staleAfter),
+                reading.date.addingTimeInterval(Freshness.noDataAfter),
+            ])
+        }
+    }
+
     // MARK: warm-up / expired
 
     func test_warmUpShowsCountdownThenStopsClaimingWarmUp() {
@@ -140,13 +159,18 @@ final class WidgetTimelineTests: XCTestCase {
 
     func test_widgetStyleRules() {
         let reading = Fixture.latest(.mgdl(105), minutesAgo: 3)
-        XCTAssertEqual(WidgetStyle.numberOpacity(.current(reading)), 1)
-        XCTAssertEqual(WidgetStyle.numberOpacity(.stale(reading)), WidgetStyle.staleOpacity)
-        XCTAssertLessThan(WidgetStyle.chartOpacity(.noData(last: reading)), 1)
+        XCTAssertFalse(WidgetStyle.isStale(.current(reading)))
+        XCTAssertTrue(WidgetStyle.isStale(.stale(reading)))
+        XCTAssertEqual(WidgetStyle.chartOpacity(.current(reading)), 1)
+        XCTAssertEqual(WidgetStyle.chartOpacity(.noData(last: reading)), Emphasis.dimmedChartOpacity)
+        XCTAssertEqual(WidgetStyle.chartLatest(.current(reading)), ChartPoint(date: reading.date, value: reading.value))
+        XCTAssertNil(WidgetStyle.chartLatest(.stale(reading)), "no 'latest' dot on a dimmed chart")
         XCTAssertEqual(WidgetStyle.title(.noData(last: nil)), "No data")
         XCTAssertEqual(WidgetStyle.title(.stale(reading)), "105")
         XCTAssertNil(WidgetStyle.heroStyle(.mgdl(105)), "in range uses ink")
         XCTAssertEqual(WidgetStyle.heroStyle(.belowRange)?.band, .veryLow)
         XCTAssertEqual(WidgetStyle.spokenValue(reading), "105 milligrams per deciliter, steady")
+        // Review m8: VoiceOver hears "stale" before the number.
+        XCTAssertEqual(WidgetStyle.spokenValue(reading, stale: true), "Stale: 105 milligrams per deciliter, steady")
     }
 }

@@ -107,8 +107,10 @@ enum AppBanners {
         }
 
         if health.urgentLowAlarm == .denied {
+            // Critical (review m6, D26): on iOS 26+ the system alarm is how urgent low rings while
+            // the app is suspended.
             banners.append(AppBanner(
-                kind: .urgentLowAlarmOff, severity: .warning,
+                kind: .urgentLowAlarmOff, severity: .critical,
                 title: "Urgent low alarm is off",
                 detail: "Alarms aren't allowed, so urgent low can't ring as a system alarm while the app is in the background. Allow alarms for this app in iOS Settings.",
                 action: .openAppSettings, actionTitle: "Open Settings"))
@@ -157,6 +159,15 @@ enum AppBanners {
                 title: "No readings yet",
                 detail: "The sensor hasn't delivered a reading. Keep your phone within a few metres of it.",
                 action: .openSensorSettings, actionTitle: "Sensor")
+        }
+        // A reading dated ahead of the phone's clock (clock moved back) is not a current reading
+        // (review M1), however new it looks.
+        if latest > now.addingTimeInterval(LiveReadingGate.futureTolerance) {
+            return AppBanner(
+                kind: .missedReadings, severity: .critical,
+                title: "No current reading",
+                detail: "The latest reading is dated \(TimeText.time(latest, context)), ahead of this phone's clock. Check Settings › General › Date & Time and turn on Set Automatically.",
+                action: nil, actionTitle: nil)
         }
         let age = now.timeIntervalSince(latest)
         guard age >= missedReadingsAfter else { return nil }

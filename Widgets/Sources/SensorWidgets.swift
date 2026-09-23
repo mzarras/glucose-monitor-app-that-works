@@ -59,14 +59,12 @@ struct GlucoseTimelineProvider: TimelineProvider {
     }
 }
 
-/// Reads the app's snapshot. Any failure (no App Group, no file yet, unreadable or newer
-/// format) reads as "no snapshot", which the timeline shows as "No data" — never as a number.
+/// Reads the app's snapshot through `WidgetSnapshotStore.snapshotForWidget()` (tested in
+/// WidgetCore): any failure — no App Group, no file yet, empty, truncated or corrupt JSON, another
+/// schema — reads as "no snapshot", which the timeline shows as "No data", never as a number.
 enum SnapshotSource {
     static func read() -> WidgetSnapshot? {
-        guard let groupID = WidgetSnapshotStore.appGroupID(), let store = WidgetSnapshotStore(appGroupID: groupID) else {
-            return nil
-        }
-        return try? store.read()
+        WidgetSnapshotStore.snapshotForWidget()
     }
 
     /// `<BUNDLE_ID_PREFIX>://now` (Widgets/Info.plist `HostAppURLScheme`; the app registers the

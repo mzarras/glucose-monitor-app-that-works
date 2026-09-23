@@ -17,10 +17,14 @@ struct WidgetSnapshotPublisher {
         return WidgetSnapshotPublisher(store: store)
     }
 
-    /// - Parameter readings: stored readings covering at least the last 3 hours (any source; the
-    ///   snapshot picks the current value from live readings only).
-    func publish(readings: [GlucoseReading], sensorState: SensorState, accent: AccentChoice, now: Date) throws {
-        let snapshot = WidgetSnapshot.make(readings: readings, sensorState: sensorState, accent: accent, now: now)
+    /// - Parameters:
+    ///   - latestLive: `GlucoseReadingRepository.latestLiveReading()`, however old.
+    ///   - previousLive: the live reading just before it (for the delta), if any.
+    ///   - recent: stored readings of the last 3 hours, any source (chart only).
+    func publish(latestLive: GlucoseReading?, previousLive: GlucoseReading?, recent: [GlucoseReading],
+                 sensorState: SensorState, accent: AccentChoice, now: Date) throws {
+        let snapshot = WidgetSnapshot.make(latestLive: latestLive, previousLive: previousLive, recent: recent,
+                                           sensorState: sensorState, accent: accent, now: now)
         try store.write(snapshot)
         WidgetCenter.shared.reloadAllTimelines()
     }

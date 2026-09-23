@@ -148,6 +148,21 @@ final class CalibrationRulesTests: XCTestCase {
         XCTAssertNil(flow.confirmLargeDifference(), "not reachable from entry")
     }
 
+    /// Review m4: while retyping, the first value is not on screen; it appears only once both match.
+    func test_retypeStepNeverShowsTheFirstValue() {
+        var flow = CalibrationFlow(step: .entry, entryText: "155")
+        flow.continueFromEntry(acceptedRange: range, now: t0)
+        for partial in ["", "1", "15", "55", "515", "156"] {
+            flow.confirmText = partial
+            XCTAssertFalse(flow.showsValueForReview, "'\(partial)' must not reveal the first value")
+        }
+        flow.confirmText = "155"
+        XCTAssertTrue(flow.showsValueForReview)
+        for text in [CalibrationRules.retypePrompt, CalibrationRules.mismatchMessage] {
+            XCTAssertNil(text.rangeOfCharacter(from: .decimalDigits), "no digits that could be copied: \(text)")
+        }
+    }
+
     func test_outcomeText() {
         XCTAssertEqual(CalibrationRules.outcomeText(.status(.queued)).title, "Waiting for sensor")
         XCTAssertTrue(CalibrationRules.outcomeText(.status(.queued)).detail.contains("5 minutes"))

@@ -127,7 +127,10 @@ final class AppModel {
         // S7: urgent low stays on, sounds on silent, and snoozes at most 30 minutes, whatever the UI sent.
         if !kind.canBeDisabled { row.isEnabled = true }
         if kind.soundOnSilentIsFixed { row.soundOnSilent = true }
-        if let snooze = row.snoozeMinutes { row.snoozeMinutes = min(snooze, kind.maxSnoozeMinutes) }
+        if let snooze = row.snoozeMinutes { row.snoozeMinutes = min(max(snooze, 1), kind.maxSnoozeMinutes) }
+        // Thresholds stay inside their limits (urgent low 50–60, …) whatever the UI sent (review m5).
+        row.threshold = row.threshold?.clamped(for: kind)
+        if let delay = row.delayMinutes { row.delayMinutes = min(max(delay, 0), 60) }
         alerts.rows[index] = row
     }
 

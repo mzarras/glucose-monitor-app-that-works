@@ -85,6 +85,34 @@ final class DesignTokenContrastTests: XCTestCase {
         XCTAssertEqual(Palette.light.veryHigh.hexString, "#754D0F")
     }
 
+    /// Review m7: content drawn at reduced opacity is checked after compositing onto what is
+    /// behind it.
+    func test_reducedOpacityContentStillMeetsAA() {
+        for scheme in schemes {
+            let p = scheme.palette
+            // Dimmed widget chart (stale / no data): the ink line is a graphic, ≥ 3:1 over the band
+            // and the background.
+            let dimmedOnBand = p.ink.blended(over: p.rangeBand, opacity: Emphasis.dimmedChartOpacity)
+            let dimmedOnBackground = p.ink.blended(over: p.background, opacity: Emphasis.dimmedChartOpacity)
+            XCTAssertGreaterThanOrEqual(SRGBColor.contrastRatio(dimmedOnBand, p.rangeBand), 3, "\(scheme.name) dimmed line on band")
+            XCTAssertGreaterThanOrEqual(SRGBColor.contrastRatio(dimmedOnBackground, p.background), 3, "\(scheme.name) dimmed line on background")
+            // 3 D overlay, earlier days: flag ticks are graphics (≥ 3:1); their labels are full
+            // opacity text (≥ 4.5:1, asserted in test_bodyTextPairsMeetAA_4_5 for veryLow/veryHigh).
+            for flag in [p.veryLow, p.veryHigh] {
+                let tick = flag.blended(over: p.background, opacity: Emphasis.otherDayFlagTickOpacity)
+                XCTAssertGreaterThanOrEqual(SRGBColor.contrastRatio(tick, p.background), 3, "\(scheme.name) other-day tick \(flag)")
+            }
+            // Earlier days' lines are the muted token at full opacity: a graphic on the band.
+            XCTAssertGreaterThanOrEqual(SRGBColor.contrastRatio(p.muted, p.rangeBand), 3, "\(scheme.name) other-day line on band")
+            // Stale widget number: muted at full opacity, large text (≥ 3:1).
+            XCTAssertGreaterThanOrEqual(SRGBColor.contrastRatio(p.muted, p.background), 3, "\(scheme.name) stale number")
+        }
+        // Compositing maths: fully opaque is the colour itself; fully transparent is the background.
+        let ink = Palette.light.ink
+        XCTAssertEqual(ink.blended(over: Palette.light.background, opacity: 1), ink)
+        XCTAssertEqual(ink.blended(over: Palette.light.background, opacity: 0), Palette.light.background)
+    }
+
     /// Adjacent range-bar segments stay distinguishable from each other (not a WCAG rule; guards
     /// against a future tweak collapsing high and very high into one colour).
     func test_adjacentBandColoursStayDistinct() {

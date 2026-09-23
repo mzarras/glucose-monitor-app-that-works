@@ -52,6 +52,33 @@ final class NowFormattingTests: XCTestCase {
         guard case .message = NowHero.make(state.display(now: later), now: later) else { return XCTFail("still a number at 10 min") }
     }
 
+    /// Review M1: a reading dated ahead of the phone's clock is never the hero number.
+    func test_S5_futureDatedReadingIsNeverShownAsCurrent() {
+        for ahead in [5.0, 60, 600] {
+            let reading = latest(.mgdl(105), ageMinutes: -ahead)
+            guard case .message(let title, let detail, _) = hero(reading) else {
+                XCTFail("\(ahead) min ahead: hero shows a number")
+                continue
+            }
+            XCTAssertEqual(title, "Phone clock doesn't match")
+            XCTAssertTrue(detail.contains("Date & Time"), detail)
+            let display = GlucoseDisplayState.classify(latest: reading, sensorState: activeSensor, now: t0)
+            XCTAssertEqual(StateLine.make(display, sensorState: activeSensor, now: t0).text, "CLOCK MISMATCH · NO CURRENT READING")
+            XCTAssertEqual(CalibrationRules.difference(fingerstick: 105, latest: reading, sensorState: activeSensor, now: t0), .noCurrentReading)
+        }
+    }
+
+    /// Review M2: the Now chart is scrubbable in every window.
+    @MainActor
+    func test_nowChartIsScrubbable() {
+        for window in ChartWindow.allCases {
+            let options = NowContent.chartOptions(window)
+            XCTAssertTrue(options.scrubbable, "\(window)")
+            XCTAssertTrue(options.showsAxes)
+            XCTAssertEqual(options.hourStride, window.hourStride)
+        }
+    }
+
     // MARK: S4
 
     func test_S4_lowHighHeroAndStateLineNeverShow40Or400() {

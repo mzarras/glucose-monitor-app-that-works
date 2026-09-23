@@ -10,18 +10,28 @@ struct CalibrationFlowView: View {
     let state: CalibrationViewState
     let submit: @MainActor (CalibrationRequest) -> Void
     let close: @MainActor () -> Void
+    /// Drawn on top in DEBUG builds (D19, review M3). Nil in Release.
+    let buildBanner: BuildBanner?
     @State private var flow: CalibrationFlow
 
-    init(state: CalibrationViewState, initialFlow: CalibrationFlow = CalibrationFlow(), submit: @escaping @MainActor (CalibrationRequest) -> Void, close: @escaping @MainActor () -> Void) {
+    init(state: CalibrationViewState, initialFlow: CalibrationFlow = CalibrationFlow(),
+         buildBanner: BuildBanner? = BuildBanner.forThisBuild(replayScenario: nil),
+         submit: @escaping @MainActor (CalibrationRequest) -> Void, close: @escaping @MainActor () -> Void) {
         self.state = state
         self.submit = submit
         self.close = close
+        self.buildBanner = buildBanner
         _flow = State(initialValue: initialFlow)
     }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 15)) { timeline in
-            CalibrationContent(state: state, flow: $flow, now: timeline.date, submit: submit, close: close)
+        VStack(spacing: 0) {
+            if let buildBanner {
+                BuildBannerView(banner: buildBanner)
+            }
+            TimelineView(.periodic(from: .now, by: 15)) { timeline in
+                CalibrationContent(state: state, flow: $flow, now: timeline.date, submit: submit, close: close)
+            }
         }
         .editorialScreen()
     }
@@ -126,16 +136,20 @@ struct CalibrationContent: View {
         }
     }
 
+    /// The first value is not shown while retyping, so the second entry is read from the meter,
+    /// not copied from the screen (review m4). It appears once both entries match.
     private func confirm(_ value: Int, takenAt: Date) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionLabel("CHECK THE VALUE")
-            FingerstickFigure(value: value, takenAt: takenAt)
-            Text(verbatim: "Type the value again to confirm. This catches typos like 55 for 155.")
+            SectionLabel("TYPE IT AGAIN")
+            Text(verbatim: CalibrationRules.retypePrompt)
                 .font(Typography.body(size: 14))
                 .fixedSize(horizontal: false, vertical: true)
             ValueField(label: "FINGERSTICK AGAIN, MG/DL", text: $flow.confirmText)
             if flow.confirmMismatch {
-                FieldMessage(text: "That doesn't match \(value). Check your meter and type it again.")
+                FieldMessage(text: CalibrationRules.mismatchMessage)
+            }
+            if flow.showsValueForReview {
+                FingerstickFigure(value: value, takenAt: takenAt)
             }
             Button("Confirm") {
                 if let request = flow.continueFromConfirm(latest: state.latestLiveReading, sensorState: state.sensorState, now: now) {

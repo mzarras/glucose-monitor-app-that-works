@@ -114,7 +114,8 @@ final class WidgetSnapshotTests: XCTestCase {
             Fixture.reading(.mgdl(108), minutesAgo: 5, rate: -0.4),
             Fixture.reading(.mgdl(105), minutesAgo: 0, rate: -0.6),
         ]
-        let snapshot = WidgetSnapshot.make(readings: readings.shuffled(), sensorState: Fixture.activeSensor, accent: .rust, now: Fixture.now)
+        let snapshot = WidgetSnapshot.make(latestLive: readings[3], previousLive: readings[2], recent: readings.shuffled(),
+                                           sensorState: Fixture.activeSensor, accent: .rust, now: Fixture.now)
         XCTAssertEqual(snapshot.latest, LatestReading(date: Fixture.now, value: .mgdl(105), trend: .flat, delta: GlucoseDelta(mgdl: -3, minutes: 5)))
         XCTAssertEqual(snapshot.recent.map(\.value), [.mgdl(110), .mgdl(108), .mgdl(105)])
         let input = Set(readings.map(ChartPoint.init))
@@ -130,12 +131,51 @@ final class WidgetSnapshotTests: XCTestCase {
             Fixture.reading(.mgdl(250), minutesAgo: 0, source: .imported(.nightscout)),
             Fixture.reading(.mgdl(251), minutesAgo: 1, source: .imported(.clarityCSV)),
         ]
-        let snapshot = WidgetSnapshot.make(readings: readings, sensorState: Fixture.activeSensor, accent: .forest, now: Fixture.now)
-        XCTAssertEqual(snapshot.latest?.value, .mgdl(118), "latest live reading, not the newer imported one")
+        let snapshot = WidgetSnapshot.make(latestLive: readings[1], previousLive: readings[0], recent: readings,
+                                           sensorState: Fixture.activeSensor, accent: .forest, now: Fixture.now)
+        XCTAssertEqual(snapshot.latest?.value, .mgdl(118), "the live reading passed in, not the newer imported one")
         XCTAssertEqual(snapshot.latest?.delta, GlucoseDelta(mgdl: -2, minutes: 5), "delta between live readings only")
         XCTAssertEqual(snapshot.recent.count, 4, "imported history may still be charted")
 
-        let onlyImported = WidgetSnapshot.make(readings: [readings[2]], sensorState: Fixture.activeSensor, accent: .forest, now: Fixture.now)
-        XCTAssertNil(onlyImported.latest)
+        // A caller bug passing imported readings as "live" is ignored.
+        let wrong = WidgetSnapshot.make(latestLive: readings[2], previousLive: readings[3], recent: readings,
+                                        sensorState: Fixture.activeSensor, accent: .forest, now: Fixture.now)
+        XCTAssertNil(wrong.latest)
+        let wrongPrevious = WidgetSnapshot.make(latestLive: readings[1], previousLive: readings[3], recent: readings,
+                                                sensorState: Fixture.activeSensor, accent: .forest, now: Fixture.now)
+        XCTAssertNil(wrongPrevious.latest?.delta, "no delta against an imported reading")
+    }
+
+    /// Review m2: a latest reading older than the 3-hour chart window is still the latest reading
+    /// ("Last reading 4 h ago"), not "no reading".
+    func test_S5_oldLatestReadingIsKeptOutsideTheChartWindow() {
+        let old = Fixture.reading(.mgdl(140), minutesAgo: 240)
+        let snapshot = WidgetSnapshot.make(latestLive: old, previousLive: nil, recent: [], sensorState: Fixture.activeSensor, accent: .forest, now: Fixture.now)
+        XCTAssertEqual(snapshot.latest?.date, old.date)
+        XCTAssertEqual(snapshot.recent, [])
+        let entry = WidgetTimeline.entries(snapshot: snapshot, now: Fixture.now)[0]
+        XCTAssertEqual(entry.display, .noData(last: snapshot.latest), "No data, with the last reading's age")
+    }
+
+    /// Review m3: whatever is in the file, the widget either gets a valid snapshot or nil ("No data").
+    func test_S5_corruptTruncatedOrEmptyFileReadsAsNoData() throws {
+        let store = WidgetSnapshotStore(directory: directory)
+        let valid = try WidgetSnapshotStore.encoder().encode(sampleSnapshot())
+        let bad: [(String, Data)] = [
+            ("empty", Data()),
+            ("truncated", valid.prefix(valid.count / 2)),
+            ("not JSON", Data("garbage \u{0}\u{1}".utf8)),
+            ("wrong shape", Data(#"{"schemaVersion":1,"latest":42}"#.utf8)),
+            ("other schema", try WidgetSnapshotStore.encoder().encode(WidgetSnapshot(writtenAt: Fixture.now, latest: nil, sensorState: .searching, recent: [], accent: .forest, schemaVersion: 2))),
+            ("random bytes", Data((0..<256).map { UInt8($0) })),
+        ]
+        for (name, data) in bad {
+            try data.write(to: store.fileURL)
+            XCTAssertNil(store.readOrNil(), name)
+            XCTAssertEqual(WidgetTimeline.entries(snapshot: store.readOrNil(), now: Fixture.now).map(\.display), [.noData(last: nil)], name)
+        }
+        try valid.write(to: store.fileURL)
+        XCTAssertEqual(store.readOrNil(), sampleSnapshot())
+        XCTAssertNil(WidgetSnapshotStore.snapshotForWidget(bundle: Bundle(for: WidgetSnapshotTests.self)), "no App Group → nil")
     }
 }

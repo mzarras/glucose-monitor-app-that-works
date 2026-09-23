@@ -74,29 +74,60 @@ struct NowContent: View {
 
     // MARK: Header
 
+    /// Wordmark, date and time, sound and menu buttons on one row when they fit; otherwise
+    /// (large text sizes) the date moves to its own line. Nothing is truncated (review m9).
     private var header: some View {
-        VStack(spacing: 6) {
-            HStack(alignment: .center, spacing: 10) {
-                Text(verbatim: "glucose")
-                    .font(Typography.wordmark(size: 22))
-                    .accessibilityAddTraits(.isHeader)
-                Text(verbatim: "\(TimeText.headerDate(now, context)) · \(TimeText.time(now, context))")
-                    .font(Typography.label(size: 11))
-                    .foregroundStyle(Theme.muted)
-                Spacer(minLength: 0)
-                Button(action: actions.openAlerts) {
-                    Image(systemName: "speaker.wave.1")
-                        .font(.system(size: 18, weight: .light))
-                        .foregroundStyle(Theme.ink)
-                        .frame(width: Layout.minTarget, height: Layout.minTarget)
-                        .contentShape(Rectangle())
+        VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 10) {
+                    wordmark
+                    headerDate
+                    Spacer(minLength: 0)
+                    headerButtons
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("Alert sounds"))
-                menu
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .center, spacing: 10) {
+                        wordmark
+                        Spacer(minLength: 0)
+                        headerButtons
+                    }
+                    headerDate
+                }
             }
             Hairline()
         }
+    }
+
+    private var wordmark: some View {
+        Text(verbatim: "glucose")
+            .font(Typography.wordmark(size: 22))
+            .lineLimit(1)
+            .fixedSize()
+            .layoutProbe("header.wordmark")
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private var headerDate: some View {
+        Text(verbatim: "\(TimeText.headerDate(now, context)) · \(TimeText.time(now, context))")
+            .font(Typography.label(size: 11))
+            .foregroundStyle(Theme.muted)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var headerButtons: some View {
+        HStack(spacing: 0) {
+            Button(action: actions.openAlerts) {
+                Image(systemName: "speaker.wave.1")
+                    .font(.system(size: 18, weight: .light))
+                    .foregroundStyle(Theme.ink)
+                    .frame(width: Layout.minTarget, height: Layout.minTarget)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Alert sounds"))
+            menu
+        }
+        .fixedSize()
     }
 
     /// Header menu: a button and a confirmation dialog. When calibration is unavailable the dialog
@@ -155,9 +186,11 @@ struct NowContent: View {
             GlucoseTraceChart(
                 points: state.chartPoints,
                 domain: now.addingTimeInterval(-state.chartWindow.duration)...now,
+                latestLive: state.latestLiveReading.map { ChartPoint(date: $0.date, value: $0.value) },
                 fingersticks: state.fingersticks,
-                options: GlucoseTraceChart.Options(showsAxes: true, hourStride: state.chartWindow.hourStride),
-                accessibilityTitle: state.chartWindow.spokenName
+                options: Self.chartOptions(state.chartWindow),
+                accessibilityTitle: state.chartWindow.spokenName,
+                timeText: { [context] in TimeText.time($0, context) }
             )
             .frame(height: 200)
             TextSegmentPicker(
@@ -168,6 +201,13 @@ struct NowContent: View {
                 select: actions.selectChartWindow
             )
         }
+    }
+
+    /// The Now chart: axes, target band, latest-reading dot, and finger scrubbing (D23).
+    static func chartOptions(_ window: ChartWindow) -> GlucoseTraceChart.Options {
+        var options = GlucoseTraceChart.Options.nowScreen
+        options.hourStride = window.hourStride
+        return options
     }
 
     // MARK: Status rows
@@ -206,6 +246,7 @@ struct NowHeroView: View {
     let hero: NowHero
     let now: Date
     let pairSensor: @MainActor () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         switch hero {
@@ -236,37 +277,104 @@ struct NowHeroView: View {
         }
     }
 
+    /// The side column (arrow, unit or LOW/HIGH caption, delta) grows with Dynamic Type only up to
+    /// this size; the number itself is fixed-size. Beyond it the side column stays readable without
+    /// squeezing the number (review B1).
+    static let sideColumnMaxTypeSize = DynamicTypeSize.xxxLarge
+
+    static func numberFont(_ value: GlucoseValue) -> Font {
+        Typography.heroNumeral(size: value.numericMgdl == nil ? 104 : 132)
+    }
+
+    static func numberTracking(_ value: GlucoseValue) -> CGFloat {
+        value.numericMgdl == nil ? 0 : -3
+    }
+
+    /// Number and side column side by side when they fit at full size (the mockup); otherwise,
+    /// and always at accessibility text sizes, stacked: the number on its own row, the side
+    /// column under it. The number is never scaled down to make room (review B1).
     private func readingView(_ reading: LatestReading) -> some View {
-        let isFlag = reading.value.numericMgdl == nil
-        return HStack(alignment: .bottom, spacing: 16) {
-            Text(verbatim: GlucoseText.value(reading.value))
-                .font(Typography.heroNumeral(size: isFlag ? 104 : 132))
-                .tracking(isFlag ? 0 : -3)
-                .heroForeground(WidgetStyle.heroStyle(reading.value))
-                .lineLimit(1)
-                .minimumScaleFactor(0.4)
-                .padding(.vertical, -14)
-            VStack(alignment: .leading, spacing: 6) {
-                TrendArrowView(arrow: reading.trend, size: 32, lineWidth: 2)
-                    .foregroundStyle(Theme.accent)
-                    .frame(height: 24)
-                Text(verbatim: GlucoseText.flagCaption(reading.value) ?? GlucoseText.unit)
-                    .font(Typography.label(size: 12))
-                    .foregroundStyle(Theme.ink)
-                if let delta = reading.delta {
-                    Text(verbatim: DeltaText.text(delta))
-                        .font(Typography.label(size: 12))
-                        .foregroundStyle(Theme.muted)
-                        .accessibilityLabel(Text(verbatim: DeltaText.spoken(delta)))
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                stacked(reading)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    sideBySide(reading)
+                    stacked(reading)
                 }
             }
-            .padding(.bottom, 6)
-            .fixedSize()
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: HeroSpeech.label(for: reading, now: now)))
         .accessibilityValue(Text(verbatim: reading.delta.map(DeltaText.spoken) ?? ""))
         .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private func sideBySide(_ reading: LatestReading) -> some View {
+        HStack(alignment: .bottom, spacing: 16) {
+            number(reading)
+                .layoutPriority(1)
+            VStack(alignment: .leading, spacing: 6) {
+                arrow(reading)
+                caption(reading)
+                delta(reading)
+            }
+            .padding(.bottom, 6)
+            .fixedSize()
+            .dynamicTypeSize(...Self.sideColumnMaxTypeSize)
+        }
+    }
+
+    private func stacked(_ reading: LatestReading) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            number(reading)
+            HStack(alignment: .center, spacing: 12) {
+                arrow(reading)
+                VStack(alignment: .leading, spacing: 4) {
+                    caption(reading)
+                    delta(reading)
+                }
+            }
+            .dynamicTypeSize(...Self.sideColumnMaxTypeSize)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func number(_ reading: LatestReading) -> some View {
+        Text(verbatim: GlucoseText.value(reading.value))
+            .font(Self.numberFont(reading.value))
+            .tracking(Self.numberTracking(reading.value))
+            .heroForeground(WidgetStyle.heroStyle(reading.value))
+            .lineLimit(1)
+            // Last resort for very narrow screens (Display Zoom on a 320-pt phone); never needed
+            // at 335 pt and wider, which the layout tests check.
+            .minimumScaleFactor(0.6)
+            .layoutProbe("hero.number")
+            .padding(.vertical, -14)
+    }
+
+    private func arrow(_ reading: LatestReading) -> some View {
+        TrendArrowView(arrow: reading.trend, size: 32, lineWidth: 2)
+            .foregroundStyle(Theme.accent)
+            .frame(height: 24)
+    }
+
+    private func caption(_ reading: LatestReading) -> some View {
+        Text(verbatim: GlucoseText.flagCaption(reading.value) ?? GlucoseText.unit)
+            .font(Typography.label(size: 12))
+            .foregroundStyle(Theme.ink)
+            .fixedSize(horizontal: false, vertical: true)
+            .layoutProbe("hero.caption")
+    }
+
+    @ViewBuilder
+    private func delta(_ reading: LatestReading) -> some View {
+        if let delta = reading.delta {
+            Text(verbatim: DeltaText.text(delta))
+                .font(Typography.label(size: 12))
+                .foregroundStyle(Theme.muted)
+                .accessibilityLabel(Text(verbatim: DeltaText.spoken(delta)))
+        }
     }
 }
 

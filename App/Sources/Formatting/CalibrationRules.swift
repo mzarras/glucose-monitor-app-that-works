@@ -85,6 +85,12 @@ enum CalibrationRules {
         return .valid(value)
     }
 
+    /// Retype step prompt. It never contains the first value (review m4).
+    static let retypePrompt = "Type the value again, reading it from your meter rather than from what you typed. This catches a missing or extra digit."
+
+    /// Shown when the two entries differ. It never contains the first value (review m4).
+    static let mismatchMessage = "That doesn't match your first entry. Check your meter and type it again, or start over."
+
     /// The re-typed value must be exactly the same number.
     static func retypeMatches(_ value: Int, retyped: String) -> Bool {
         let trimmed = retyped.trimmingCharacters(in: .whitespaces)
@@ -221,6 +227,12 @@ struct CalibrationFlow: Equatable, Sendable {
     mutating func startOver() {
         step = .entry
         confirmText = ""
+    }
+
+    /// The value is shown for review only once the second entry matches the first (review m4).
+    var showsValueForReview: Bool {
+        guard case .confirm(let value, _) = step else { return false }
+        return CalibrationRules.retypeMatches(value, retyped: confirmText)
     }
 
     /// Whether the confirm field shows a mismatch: at least as many characters as the value has

@@ -47,6 +47,11 @@ enum NowHero: Equatable, Sendable {
             return .message(title: "Sensor error", detail: "\(message). Readings are paused.", action: nil)
         case .notPaired:
             return .message(title: "No sensor paired", detail: "Pair a G7 sensor to start receiving readings.", action: .pairSensor)
+        case .clockMismatch(let latest):
+            return .message(
+                title: "Phone clock doesn't match",
+                detail: "The latest reading is dated \(TimeText.time(latest.date, context)), ahead of this phone's clock, so it can't be shown as current. Check Settings › General › Date & Time and turn on Set Automatically.",
+                action: nil)
         }
     }
 }
@@ -81,6 +86,8 @@ struct StateLine: Equatable, Sendable {
             return StateLine(text: "SENSOR ERROR", dot: .alert)
         case .notPaired:
             return StateLine(text: "NO SENSOR PAIRED", dot: .muted)
+        case .clockMismatch:
+            return StateLine(text: "CLOCK MISMATCH · NO CURRENT READING", dot: .alert)
         }
     }
 }

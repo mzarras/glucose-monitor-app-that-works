@@ -34,6 +34,23 @@ enum AlertKind: String, CaseIterable, Identifiable, Sendable {
     /// quiet-hours setting.
     var soundsDuringQuietHours: Bool { self == .urgentLow }
 
+    /// Allowed glucose thresholds, mg/dL. Urgent low 50–60 is HANDOFF §5; the others are this
+    /// screen's limits (AlertEngine may be stricter).
+    var glucoseThresholdRange: ClosedRange<Int>? {
+        switch self {
+        case .urgentLow: return 50...60
+        case .low: return 60...100
+        case .high: return 120...400
+        default: return nil
+        }
+    }
+
+    /// Rise/fall rate threshold, mg/dL per minute.
+    var rateThresholdRange: ClosedRange<Double>? { self == .rateOfChange ? 2...5 : nil }
+
+    /// Missed-readings window, minutes (HANDOFF §5: 10–60).
+    var windowRange: ClosedRange<Int>? { self == .missedReadings ? 10...60 : nil }
+
     var title: String {
         switch self {
         case .urgentLow: return "Urgent low"
@@ -77,6 +94,26 @@ enum AlertThreshold: Equatable, Sendable {
     case rate(mgdlPerMinute: Double, allowed: ClosedRange<Double>)
     /// Missed readings window, minutes.
     case window(minutes: Int, allowed: ClosedRange<Int>)
+}
+
+extension AlertThreshold {
+    /// This threshold with its value clamped to `kind`'s limits, and those limits as `allowed`,
+    /// whatever range the caller sent (review m5).
+    func clamped(for kind: AlertKind) -> AlertThreshold {
+        switch self {
+        case .glucose(let mgdl, let isBelow, let allowed):
+            let range = kind.glucoseThresholdRange ?? allowed
+            return .glucose(mgdl: min(max(mgdl, range.lowerBound), range.upperBound), isBelow: isBelow, allowed: range)
+        case .rate(let rate, let allowed):
+            let range = kind.rateThresholdRange ?? allowed
+            return .rate(mgdlPerMinute: min(max(rate, range.lowerBound), range.upperBound), allowed: range)
+        case .window(let minutes, let allowed):
+            let range = kind.windowRange ?? allowed
+            return .window(minutes: min(max(minutes, range.lowerBound), range.upperBound), allowed: range)
+        case .projected:
+            return self
+        }
+    }
 }
 
 struct AlertRow: Equatable, Identifiable, Sendable {

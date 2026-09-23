@@ -115,12 +115,18 @@ final class ChartSeriesTests: XCTestCase {
             Fixture.point(.mgdl(105), minutesAgo: 0),
         ]
         XCTAssertEqual(
-            ChartSummary.text(title: "Last 3 hours", points: points),
+            ChartSummary.text(title: "Last 3 hours", points: points, latestLive: .mgdl(105)),
             "Last 3 hours: 4 readings, 82 to 120 milligrams per deciliter, latest 105. 1 LOW reading. The line breaks at 2 gaps longer than 15 minutes."
         )
         XCTAssertEqual(
-            ChartSummary.text(title: "Last 3 hours", points: [Fixture.point(.aboveRange, minutesAgo: 0)]),
+            ChartSummary.text(title: "Last 3 hours", points: [Fixture.point(.aboveRange, minutesAgo: 0)], latestLive: .aboveRange),
             "Last 3 hours: 1 reading, latest HIGH. 1 HIGH reading."
+        )
+        // "latest" comes only from the live reading passed in, never from the newest point (which
+        // may be imported history, S6).
+        XCTAssertEqual(
+            ChartSummary.text(title: "Today", points: [Fixture.point(.mgdl(250), minutesAgo: 0)]),
+            "Today: 1 reading, 250 milligrams per deciliter."
         )
     }
 }

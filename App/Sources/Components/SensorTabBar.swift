@@ -21,6 +21,8 @@ enum AppTab: String, CaseIterable, Identifiable, Sendable {
 }
 
 struct SensorTabBar: View {
+    static let maxTypeSize = DynamicTypeSize.xxxLarge
+
     let selected: AppTab
     /// Marks the Now tab while S5 banners are showing, so a problem is visible from any tab.
     let nowHasProblems: Bool
@@ -39,6 +41,9 @@ struct SensorTabBar: View {
                             Text(verbatim: tab.title)
                                 .font(Typography.body(size: 13, weight: isSelected ? .semibold : .regular))
                                 .foregroundStyle(isSelected ? AnyShapeStyle(Theme.ink) : AnyShapeStyle(Theme.muted))
+                                .lineLimit(1)
+                                .fixedSize()
+                                .layoutProbe("tab.title.\(tab.rawValue)")
                             if tab == .now && nowHasProblems {
                                 Circle().fill(Theme.alert).frame(width: 6, height: 6)
                             }
@@ -47,6 +52,12 @@ struct SensorTabBar: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    // Like the system tab bar: titles stop growing at xxxLarge; at accessibility
+                    // sizes a long press shows the Large Content Viewer (review m9).
+                    .dynamicTypeSize(...Self.maxTypeSize)
+                    .accessibilityShowsLargeContentViewer {
+                        Text(verbatim: tab.title)
+                    }
                     .accessibilityLabel(Text(verbatim: tab == .now && nowHasProblems ? "\(tab.title), needs attention" : tab.title))
                     .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
                 }

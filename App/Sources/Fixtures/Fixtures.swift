@@ -291,10 +291,10 @@ enum Fixtures {
 
     static let alerts = AlertsViewState(
         rows: [
-            AlertRow(kind: .urgentLow, isEnabled: true, threshold: .glucose(mgdl: 55, isBelow: true, allowed: 50...60), soundID: "siren", soundOnSilent: true, snoozeMinutes: 30, delayMinutes: nil, repeatMinutes: 5),
+            AlertRow(kind: .urgentLow, isEnabled: true, threshold: .glucose(mgdl: 55, isBelow: true, allowed: AlertKind.urgentLow.glucoseThresholdRange!), soundID: "siren", soundOnSilent: true, snoozeMinutes: 30, delayMinutes: nil, repeatMinutes: 5),
             AlertRow(kind: .urgentLowSoon, isEnabled: false, threshold: .projected(mgdl: 55, minutes: 20), soundID: "rising-bell", soundOnSilent: true, snoozeMinutes: 15, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .low, isEnabled: true, threshold: .glucose(mgdl: 70, isBelow: true, allowed: 60...100), soundID: "low-chime", soundOnSilent: true, snoozeMinutes: 15, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .high, isEnabled: true, threshold: .glucose(mgdl: 250, isBelow: false, allowed: 120...400), soundID: "horn", soundOnSilent: false, snoozeMinutes: 60, delayMinutes: 15, repeatMinutes: nil),
+            AlertRow(kind: .low, isEnabled: true, threshold: .glucose(mgdl: 70, isBelow: true, allowed: AlertKind.low.glucoseThresholdRange!), soundID: "low-chime", soundOnSilent: true, snoozeMinutes: 15, delayMinutes: nil, repeatMinutes: nil),
+            AlertRow(kind: .high, isEnabled: true, threshold: .glucose(mgdl: 250, isBelow: false, allowed: AlertKind.high.glucoseThresholdRange!), soundID: "horn", soundOnSilent: false, snoozeMinutes: 60, delayMinutes: 15, repeatMinutes: nil),
             AlertRow(kind: .rateOfChange, isEnabled: false, threshold: .rate(mgdlPerMinute: 3, allowed: 2...5), soundID: "pulse", soundOnSilent: false, snoozeMinutes: 30, delayMinutes: nil, repeatMinutes: nil),
             AlertRow(kind: .missedReadings, isEnabled: true, threshold: .window(minutes: 15, allowed: 10...60), soundID: "sonar", soundOnSilent: true, snoozeMinutes: 30, delayMinutes: nil, repeatMinutes: nil),
             AlertRow(kind: .trioBridge, isEnabled: true, threshold: nil, soundID: "knock", soundOnSilent: true, snoozeMinutes: 30, delayMinutes: nil, repeatMinutes: nil),

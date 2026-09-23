@@ -24,6 +24,7 @@ public struct MediumWidgetView: View {
             GlucoseTraceChart(
                 points: content.recent,
                 domain: content.date.addingTimeInterval(-WidgetSnapshot.historyWindow)...content.date,
+                latestLive: WidgetStyle.chartLatest(content.display),
                 options: .widget,
                 accessibilityTitle: "Last 3 hours"
             )
@@ -71,9 +72,10 @@ public struct RectangularAccessoryView: View {
                             .minimumScaleFactor(0.6)
                         TrendArrowView(arrow: reading.trend, size: 14, lineWidth: 1.5)
                     }
-                    .opacity(WidgetStyle.numberOpacity(content.display))
+                    // Lock Screen colours are the system's; secondary is its dimmed style.
+                    .foregroundStyle(WidgetStyle.isStale(content.display) ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(Text(WidgetStyle.spokenValue(reading)))
+                    .accessibilityLabel(Text(WidgetStyle.spokenValue(reading, stale: WidgetStyle.isStale(content.display))))
                     if case .stale = content.display {
                         Text("STALE · \(LiveAge.text(since: reading.date, style: .short))")
                             .font(Typography.fixedLabel(size: 10, medium: true))
@@ -94,6 +96,7 @@ public struct RectangularAccessoryView: View {
                 GlucoseTraceChart(
                     points: content.recent,
                     domain: content.date.addingTimeInterval(-WidgetSnapshot.historyWindow)...content.date,
+                    latestLive: nil,
                     options: .sparkline,
                     accessibilityTitle: "Last 3 hours"
                 )
@@ -128,6 +131,8 @@ public enum InlineAccessoryText {
             return Text("Sensor error")
         case .notPaired:
             return Text("No sensor paired")
+        case .clockMismatch:
+            return Text("Check phone clock")
         }
     }
 
@@ -149,18 +154,18 @@ struct WidgetReadingColumn: View {
         VStack(alignment: .leading, spacing: 4) {
             switch content.display {
             case .current(let reading), .stale(let reading):
+                let stale = WidgetStyle.isStale(content.display)
                 HStack(alignment: .center, spacing: 6) {
                     Text(verbatim: GlucoseText.value(reading.value))
                         .font(Typography.heroNumeral(size: reading.value.numericMgdl == nil ? heroSize * 0.62 : heroSize))
-                        .heroForeground(WidgetStyle.heroStyle(reading.value))
+                        .heroForeground(stale ? nil : WidgetStyle.heroStyle(reading.value), fallback: stale ? .muted : .ink)
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
                     TrendArrowView(arrow: reading.trend, size: 22, lineWidth: 1.8)
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(stale ? AnyShapeStyle(Theme.muted) : AnyShapeStyle(Theme.accent))
                 }
-                .opacity(WidgetStyle.numberOpacity(content.display))
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text(WidgetStyle.spokenValue(reading)))
+                .accessibilityLabel(Text(WidgetStyle.spokenValue(reading, stale: stale)))
 
                 Text(verbatim: GlucoseText.flagCaption(reading.value) ?? GlucoseText.unit)
                     .font(Typography.fixedLabel(size: 10))
@@ -216,6 +221,8 @@ struct WidgetDetailText: View {
                 Text(verbatim: message)
             case .notPaired:
                 Text(verbatim: "Pair a sensor in the app")
+            case .clockMismatch:
+                Text(verbatim: "Latest reading is dated ahead of this phone's clock")
             case .current, .stale:
                 EmptyView()
             }
@@ -226,17 +233,23 @@ struct WidgetDetailText: View {
 
 /// Small shared rules for the widget layouts. Pure; unit-tested.
 public enum WidgetStyle {
-    /// Stale readings are dimmed so an old number never looks current (HANDOFF §7.4).
-    public static let staleOpacity: Double = 0.4
-
-    public static func numberOpacity(_ display: GlucoseDisplayState) -> Double {
-        if case .stale = display { return staleOpacity }
-        return 1
+    /// A stale number is drawn in the muted colour (not faded by opacity, which would drop it
+    /// below 3:1), next to a "STALE · 12 min ago" label, so an old number never looks current.
+    public static func isStale(_ display: GlucoseDisplayState) -> Bool {
+        if case .stale = display { return true }
+        return false
     }
 
+    /// Charts are dimmed whenever the number is not current (`Emphasis.dimmedChartOpacity`).
     public static func chartOpacity(_ display: GlucoseDisplayState) -> Double {
         if case .current = display { return 1 }
-        return staleOpacity
+        return Emphasis.dimmedChartOpacity
+    }
+
+    /// The accent "latest" dot only while the reading is current.
+    public static func chartLatest(_ display: GlucoseDisplayState) -> ChartPoint? {
+        guard case .current(let reading) = display else { return nil }
+        return ChartPoint(date: reading.date, value: reading.value)
     }
 
     /// Headline for message states.
@@ -248,6 +261,7 @@ public enum WidgetStyle {
         case .sensorExpired: return "Sensor expired"
         case .sensorError: return "Sensor error"
         case .notPaired: return "No sensor"
+        case .clockMismatch: return "Check phone clock"
         }
     }
 
@@ -256,20 +270,29 @@ public enum WidgetStyle {
         value.band == .inRange ? nil : Theme.band(value.band)
     }
 
-    /// "105 milligrams per deciliter, steady" (the age is read separately, from the live text).
-    public static func spokenValue(_ reading: LatestReading) -> String {
-        "\(GlucoseText.spoken(reading.value)), \(TrendText.word(reading.trend))"
+    /// "105 milligrams per deciliter, steady", or "Stale: 105 milligrams per deciliter, steady".
+    /// The age is read separately, from the live text.
+    public static func spokenValue(_ reading: LatestReading, stale: Bool = false) -> String {
+        let value = "\(GlucoseText.spoken(reading.value)), \(TrendText.word(reading.trend))"
+        return stale ? "Stale: \(value)" : value
     }
 }
 
+public enum HeroFallback: Sendable {
+    case ink, muted
+}
+
 extension View {
-    /// The hero number's colour: `style`, or the ink token when `style` is nil.
+    /// The hero number's colour: `style`, or the `fallback` token (ink by default) when nil.
     @ViewBuilder
-    public func heroForeground(_ style: BandStyle?) -> some View {
+    public func heroForeground(_ style: BandStyle?, fallback: HeroFallback = .ink) -> some View {
         if let style {
             foregroundStyle(style)
         } else {
-            foregroundStyle(Theme.ink)
+            switch fallback {
+            case .ink: foregroundStyle(Theme.ink)
+            case .muted: foregroundStyle(Theme.muted)
+            }
         }
     }
 }

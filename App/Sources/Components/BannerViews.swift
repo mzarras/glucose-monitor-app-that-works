@@ -54,6 +54,7 @@ struct BuildBannerView: View {
         .padding(.vertical, 6)
         .padding(.horizontal, 12)
         .background(Theme.ink)
+        .layoutProbe("build.banner")
         .accessibilityElement(children: .combine)
     }
 }

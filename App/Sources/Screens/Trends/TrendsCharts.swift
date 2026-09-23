@@ -167,7 +167,7 @@ struct DayOverlayChart: View {
                 if line.points.count == 1, let only = line.points.first {
                     PointMark(x: .value("Hour", TimeOfDayAxis.hourOfDay(only.date, dayStart: line.dayStart)), y: .value("mg/dL", only.mgdl))
                         .symbolSize(20)
-                        .foregroundStyle(line.isToday ? AnyShapeStyle(Theme.ink) : AnyShapeStyle(Theme.muted.opacity(0.6)))
+                        .foregroundStyle(line.isToday ? AnyShapeStyle(Theme.ink) : AnyShapeStyle(Theme.muted))
                 } else {
                     ForEach(line.points, id: \.date) { point in
                         LineMark(
@@ -175,7 +175,8 @@ struct DayOverlayChart: View {
                             y: .value("mg/dL", point.mgdl),
                             series: .value("Segment", line.id)
                         )
-                        .foregroundStyle(line.isToday ? AnyShapeStyle(Theme.ink) : AnyShapeStyle(Theme.muted.opacity(0.6)))
+                        // Earlier days: the muted token, thinner (≥ 3:1 on the band; review m7).
+                        .foregroundStyle(line.isToday ? AnyShapeStyle(Theme.ink) : AnyShapeStyle(Theme.muted))
                         .lineStyle(StrokeStyle(lineWidth: line.isToday ? 2 : 1, lineCap: .round, lineJoin: .round))
                     }
                 }
@@ -196,13 +197,13 @@ struct DayOverlayChart: View {
                                 Rectangle()
                                     .fill(Theme.band(flag.isLow ? .veryLow : .veryHigh))
                                     .frame(width: 2, height: 6)
-                                    .opacity(flag.isToday ? 1 : 0.6)
+                                    .opacity(flag.isToday ? 1 : Emphasis.otherDayFlagTickOpacity)
                                     .position(x: plot.minX + x, y: flag.isLow ? plot.maxY - 3 : plot.minY + 3)
                                 if flag.isRunStart {
+                                    // Full opacity for every day: text must keep 4.5:1 (review m7).
                                     Text(verbatim: flag.isLow ? "LOW" : "HIGH")
                                         .font(Typography.fixedLabel(size: 8, medium: true))
                                         .foregroundStyle(Theme.band(flag.isLow ? .veryLow : .veryHigh))
-                                        .opacity(flag.isToday ? 1 : 0.6)
                                         .fixedSize()
                                         .position(x: min(max(plot.minX + x, plot.minX + 12), plot.maxX - 12), y: flag.isLow ? plot.maxY - 14 : plot.minY + 14)
                                 }

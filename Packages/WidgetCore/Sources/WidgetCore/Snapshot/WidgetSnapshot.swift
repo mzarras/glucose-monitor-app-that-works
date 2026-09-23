@@ -42,34 +42,37 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
         self.accent = accent
     }
 
-    /// Builds a snapshot from stored readings. Selection only: the latest live reading, the live
-    /// reading before it (for the delta), and the readings inside the 3-hour window. No value is
-    /// created (S1).
+    /// Builds a snapshot from stored readings. Selection only; no value is created (S1).
     ///
-    /// The current value, its age, delta and staleness come from live readings only; imported
-    /// history may appear in the chart but is never the current value (S6, repository contract
-    /// `latestLiveReading()`).
-    ///
-    /// - Parameter readings: stored readings, any order, covering at least the last 3 hours.
+    /// - Parameters:
+    ///   - latestLive: the repository's `latestLiveReading()` — the current value, its age, delta
+    ///     and staleness come from it, however old it is (so an old reading reads "Last reading
+    ///     4 h ago", not "no reading"). An imported reading here is ignored (S6).
+    ///   - previousLive: the live reading immediately before `latestLive`, for the delta.
+    ///   - recent: stored readings covering the last 3 hours, any source (chart only).
     public static func make(
-        readings: [GlucoseReading],
+        latestLive: GlucoseReading?,
+        previousLive: GlucoseReading?,
+        recent: [GlucoseReading],
         sensorState: SensorState,
         accent: AccentChoice,
         now: Date
     ) -> WidgetSnapshot {
-        let ordered = readings.sorted { $0.date < $1.date }
-        let live = ordered.filter { !$0.source.isImportedHistory }
-        let latestLive = live.last
-        let previousLive = live.count >= 2 ? live[live.count - 2] : nil
+        let latest = latestLive.flatMap { $0.source.isImportedHistory ? nil : $0 }
+        let previous = previousLive.flatMap { reading -> GlucoseReading? in
+            guard !reading.source.isImportedHistory, let latest, reading.date < latest.date else { return nil }
+            return reading
+        }
         let windowStart = now.addingTimeInterval(-historyWindow)
-        let recent = ordered
+        let points = recent
             .filter { $0.date >= windowStart && $0.date <= now }
+            .sorted { $0.date < $1.date }
             .map(ChartPoint.init)
         return WidgetSnapshot(
             writtenAt: now,
-            latest: latestLive.map { LatestReading(reading: $0, previous: previousLive) },
+            latest: latest.map { LatestReading(reading: $0, previous: previous) },
             sensorState: sensorState,
-            recent: recent,
+            recent: points,
             accent: accent
         )
     }

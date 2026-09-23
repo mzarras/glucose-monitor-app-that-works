@@ -97,7 +97,8 @@ final class ScreenshotTests: XCTestCase {
         return GlucoseTraceChart(
             points: state.chartPoints,
             domain: now.addingTimeInterval(-window.duration)...now,
-            options: GlucoseTraceChart.Options(showsAxes: true, hourStride: window.hourStride, scrubbable: true),
+            latestLive: state.latestLiveReading.map { ChartPoint(date: $0.date, value: $0.value) },
+            options: NowContent.chartOptions(window),
             accessibilityTitle: window.spokenName,
             timeText: { date in
                 var style = Date.FormatStyle(date: .omitted, time: .shortened)

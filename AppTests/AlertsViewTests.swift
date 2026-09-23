@@ -46,6 +46,28 @@ final class AlertsViewTests: XCTestCase {
         XCTAssertEqual(AlertsText.quietHoursSchedule(QuietHours(isEnabled: true, start: TimeOfDay(hour: 22, minute: 0), end: TimeOfDay(hour: 7, minute: 0))), "10 PM – 7 AM")
     }
 
+    /// Review m5: thresholds stay inside their limits whatever the screen sends.
+    @MainActor
+    func test_S7_thresholdsAreClampedToTheirLimits() {
+        let model = AppModel.launch(arguments: [])
+        model.updateAlert(.urgentLow) { $0.threshold = .glucose(mgdl: 45, isBelow: true, allowed: 40...80) }
+        XCTAssertEqual(model.alerts.row(.urgentLow)?.threshold, .glucose(mgdl: 50, isBelow: true, allowed: 50...60))
+        model.updateAlert(.urgentLow) { $0.threshold = .glucose(mgdl: 75, isBelow: true, allowed: 40...80) }
+        XCTAssertEqual(model.alerts.row(.urgentLow)?.threshold, .glucose(mgdl: 60, isBelow: true, allowed: 50...60))
+        model.updateAlert(.low) { $0.threshold = .glucose(mgdl: 30, isBelow: true, allowed: 0...500) }
+        XCTAssertEqual(model.alerts.row(.low)?.threshold, .glucose(mgdl: 60, isBelow: true, allowed: 60...100))
+        model.updateAlert(.high) { $0.threshold = .glucose(mgdl: 500, isBelow: false, allowed: 0...600) }
+        XCTAssertEqual(model.alerts.row(.high)?.threshold, .glucose(mgdl: 400, isBelow: false, allowed: 120...400))
+        model.updateAlert(.rateOfChange) { $0.threshold = .rate(mgdlPerMinute: 9, allowed: 0...10) }
+        XCTAssertEqual(model.alerts.row(.rateOfChange)?.threshold, .rate(mgdlPerMinute: 5, allowed: 2...5))
+        model.updateAlert(.missedReadings) { $0.threshold = .window(minutes: 2, allowed: 0...90) }
+        XCTAssertEqual(model.alerts.row(.missedReadings)?.threshold, .window(minutes: 10, allowed: 10...60))
+        model.updateAlert(.high) { $0.delayMinutes = 500 }
+        XCTAssertEqual(model.alerts.row(.high)?.delayMinutes, 60)
+        model.updateAlert(.urgentLow) { $0.snoozeMinutes = 0 }
+        XCTAssertEqual(model.alerts.row(.urgentLow)?.snoozeMinutes, 1)
+    }
+
     func test_thresholdText() {
         XCTAssertEqual(AlertsText.threshold(.glucose(mgdl: 55, isBelow: true, allowed: 50...60)), "≤ 55 mg/dL")
         XCTAssertEqual(AlertsText.threshold(.glucose(mgdl: 250, isBelow: false, allowed: 120...400)), "≥ 250 mg/dL")

@@ -28,10 +28,18 @@ struct OnboardingActions {
 struct OnboardingFlowView: View {
     let state: OnboardingState
     let actions: OnboardingActions
+    /// Drawn on top in DEBUG builds (D19): pairing a real sensor from a DEBUG build must be
+    /// unmistakable (review M3). Nil in Release.
+    var buildBanner: BuildBanner? = BuildBanner.forThisBuild(replayScenario: nil)
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { timeline in
-            OnboardingContent(state: state, actions: actions, now: timeline.date)
+        VStack(spacing: 0) {
+            if let buildBanner {
+                BuildBannerView(banner: buildBanner)
+            }
+            TimelineView(.periodic(from: .now, by: 30)) { timeline in
+                OnboardingContent(state: state, actions: actions, now: timeline.date)
+            }
         }
         .editorialScreen()
     }

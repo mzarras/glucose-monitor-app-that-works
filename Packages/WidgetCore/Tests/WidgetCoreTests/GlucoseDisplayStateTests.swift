@@ -59,16 +59,28 @@ final class GlucoseDisplayStateTests: XCTestCase {
         }
     }
 
-    func test_futureDatedReadingCountsAsCurrent() {
-        let reading = Fixture.latest(.mgdl(105), minutesAgo: -0.5)
-        XCTAssertEqual(classify(reading), .current(reading))
+    /// Review M1: a reading dated ahead of the phone's clock (clock moved back) must never read
+    /// as current, however far ahead it is.
+    func test_S5_futureDatedReadingIsNeverShownAsCurrent() {
+        for minutesAhead in [5.0, 60, 600] {
+            let reading = Fixture.latest(.mgdl(105), minutesAgo: -minutesAhead)
+            let state = classify(reading)
+            XCTAssertEqual(state, .clockMismatch(latest: reading), "\(minutesAhead) min ahead")
+            XCTAssertNil(state.displayedReading, "\(minutesAhead) min ahead: no number")
+            XCTAssertEqual(WidgetStyle.title(state), "Check phone clock")
+        }
+        // Within the sensor-clock tolerance (LiveReadingGate.futureTolerance, 60 s) it is current.
+        let justAhead = Fixture.latest(.mgdl(105), minutesAgo: -0.5)
+        XCTAssertEqual(classify(justAhead), .current(justAhead))
+        let atTolerance = Fixture.latest(.mgdl(105), minutesAgo: -1)
+        XCTAssertEqual(classify(atTolerance), .current(atTolerance))
     }
 
     func test_transitionDates() {
         let reading = Fixture.latest(.mgdl(105), minutesAgo: 3)
         XCTAssertEqual(
             GlucoseDisplayState.transitionDates(latest: reading, sensorState: Fixture.activeSensor),
-            [Fixture.minutesAgo(-7), Fixture.minutesAgo(-17)]
+            [Fixture.minutesAgo(4), Fixture.minutesAgo(-7), Fixture.minutesAgo(-17)]
         )
         let end = Fixture.now.addingTimeInterval(600)
         XCTAssertEqual(GlucoseDisplayState.transitionDates(latest: nil, sensorState: .warmingUp(endsAt: end)), [end])

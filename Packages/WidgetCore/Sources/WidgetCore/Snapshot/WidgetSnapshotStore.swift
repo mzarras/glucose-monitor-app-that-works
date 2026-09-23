@@ -60,6 +60,19 @@ public struct WidgetSnapshotStore: Sendable {
         return try Self.decode(data)
     }
 
+    /// For the widget: the snapshot, or nil for any problem — no file yet, unreadable, empty,
+    /// truncated or corrupt JSON, another schema version. The timeline shows nil as "No data",
+    /// never as a number.
+    public func readOrNil() -> WidgetSnapshot? {
+        try? read()
+    }
+
+    /// The widget's read path: App Group from Info.plist `AppGroupID`, then `readOrNil()`.
+    public static func snapshotForWidget(bundle: Bundle = .main) -> WidgetSnapshot? {
+        guard let groupID = appGroupID(in: bundle), let store = WidgetSnapshotStore(appGroupID: groupID) else { return nil }
+        return store.readOrNil()
+    }
+
     public static func decode(_ data: Data) throws -> WidgetSnapshot {
         let snapshot = try decoder().decode(WidgetSnapshot.self, from: data)
         guard snapshot.schemaVersion == WidgetSnapshot.currentSchemaVersion else {

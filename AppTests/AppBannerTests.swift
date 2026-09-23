@@ -39,7 +39,7 @@ final class AppBannerTests: XCTestCase {
             ("notifications denied", banners(health: denied), .notificationsDisabled, .critical),
             ("notifications provisional", banners(health: quiet), .notificationsDisabled, .critical),
             ("alarm volume too low", banners(health: volume), .alarmVolumeTooLow, .warning),
-            ("urgent low alarm not allowed (D26)", banners(health: alarm), .urgentLowAlarmOff, .warning),
+            ("urgent low alarm not allowed (D26, review m6)", banners(health: alarm), .urgentLowAlarmOff, .critical),
             ("Nightscout upload failing", banners(health: nightscout), .nightscoutUploadFailing, .warning),
             ("Dexcom Share upload failing", banners(health: share), .shareUploadFailing, .warning),
             ("force-quit gap", banners(health: forceQuit), .forceQuitGap, .warning),
@@ -69,6 +69,18 @@ final class AppBannerTests: XCTestCase {
         XCTAssertEqual(banners(.warmingUp(endsAt: minutes(30)), latestAge: nil), [])
         // Once warm-up should be over, silence is a problem again.
         XCTAssertEqual(banners(.warmingUp(endsAt: minutes(-1)), latestAge: nil).map(\.kind), [.missedReadings])
+    }
+
+    /// Review M1: a reading dated ahead of the phone's clock raises the missed-readings banner.
+    func test_S5_futureDatedReadingIsNeverShownAsCurrent() {
+        for ahead in [5.0, 60, 600] {
+            let result = banners(latestAge: -ahead)
+            let banner = result.first { $0.kind == .missedReadings }
+            XCTAssertEqual(banner?.severity, .critical, "\(ahead) min ahead")
+            XCTAssertEqual(banner?.title, "No current reading", "\(ahead) min ahead")
+            XCTAssertTrue(banner?.detail.contains("ahead of this phone's clock") ?? false)
+        }
+        XCTAssertNil(banners(latestAge: -0.5).first { $0.kind == .missedReadings }, "within the 60 s tolerance")
     }
 
     func test_urgentLowAlarmNotAvailableIsNotAProblem() {

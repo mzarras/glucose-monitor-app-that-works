@@ -128,7 +128,10 @@ public enum ChartSummary {
     /// VoiceOver summary for a glucose chart, e.g.
     /// "Last 3 hours: 36 readings, 82 to 120 milligrams per deciliter, latest 105. 1 LOW reading.
     ///  The line breaks at 1 gap longer than 15 minutes."
-    public static func text(title: String, points: [ChartPoint]) -> String {
+    ///
+    /// - Parameter latestLive: the latest *live* reading, spoken as "latest"; nil omits it. Never
+    ///   derived from `points`, which may include imported history (S6).
+    public static func text(title: String, points: [ChartPoint], latestLive: GlucoseValue? = nil) -> String {
         let series = ChartSeries(points: points)
         let count = series.segments.joined().count + series.lowFlags.count + series.highFlags.count
         guard count > 0 else { return "\(title): no readings." }
@@ -140,8 +143,8 @@ public enum ChartSummary {
                 ? ", \(low) milligrams per deciliter"
                 : ", \(low) to \(high) milligrams per deciliter"
         }
-        if let latest = points.max(by: { $0.date < $1.date }) {
-            first += ", latest \(GlucoseText.value(latest.value))"
+        if let latestLive {
+            first += ", latest \(GlucoseText.value(latestLive))"
         }
         parts.append(first + ".")
         if !series.lowFlags.isEmpty {

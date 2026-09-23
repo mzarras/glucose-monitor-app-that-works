@@ -28,12 +28,12 @@ struct RootView: View {
         .tint(Theme.accentColor(model.accent, scheme: colorScheme))
         .preferredColorScheme(model.settings.appearance.colorScheme)
         .sheet(isPresented: $model.isCalibrationPresented) {
-            CalibrationFlowView(state: model.calibration, submit: model.submitCalibration, close: { model.isCalibrationPresented = false })
+            CalibrationFlowView(state: model.calibration, buildBanner: model.now.buildBanner, submit: model.submitCalibration, close: { model.isCalibrationPresented = false })
                 .environment(\.accentChoice, model.accent)
         }
         .fullScreenCover(isPresented: onboardingPresented) {
             if let onboarding = model.onboarding {
-                OnboardingFlowView(state: onboarding, actions: onboardingActions)
+                OnboardingFlowView(state: onboarding, actions: onboardingActions, buildBanner: model.now.buildBanner)
                     .environment(\.accentChoice, model.accent)
             }
         }
