@@ -42,8 +42,13 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
         self.accent = accent
     }
 
-    /// Builds a snapshot from stored readings. Selection only: the latest reading, the one before
-    /// it (for the delta), and the readings inside the 3-hour window. No value is created.
+    /// Builds a snapshot from stored readings. Selection only: the latest live reading, the live
+    /// reading before it (for the delta), and the readings inside the 3-hour window. No value is
+    /// created (S1).
+    ///
+    /// The current value, its age, delta and staleness come from live readings only; imported
+    /// history may appear in the chart but is never the current value (S6, repository contract
+    /// `latestLiveReading()`).
     ///
     /// - Parameter readings: stored readings, any order, covering at least the last 3 hours.
     public static func make(
@@ -53,18 +58,28 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
         now: Date
     ) -> WidgetSnapshot {
         let ordered = readings.sorted { $0.date < $1.date }
-        let latestReading = ordered.last
-        let previousReading = ordered.count >= 2 ? ordered[ordered.count - 2] : nil
+        let live = ordered.filter { !$0.source.isImportedHistory }
+        let latestLive = live.last
+        let previousLive = live.count >= 2 ? live[live.count - 2] : nil
         let windowStart = now.addingTimeInterval(-historyWindow)
         let recent = ordered
             .filter { $0.date >= windowStart && $0.date <= now }
             .map(ChartPoint.init)
         return WidgetSnapshot(
             writtenAt: now,
-            latest: latestReading.map { LatestReading(reading: $0, previous: previousReading) },
+            latest: latestLive.map { LatestReading(reading: $0, previous: previousLive) },
             sensorState: sensorState,
             recent: recent,
             accent: accent
         )
+    }
+}
+
+extension ReadingSource {
+    /// True for history imported from Nightscout or a Clarity export (HANDOFF §4.5). Such readings
+    /// feed charts and statistics only; they are never the current value (S6).
+    public var isImportedHistory: Bool {
+        if case .imported = self { return true }
+        return false
     }
 }

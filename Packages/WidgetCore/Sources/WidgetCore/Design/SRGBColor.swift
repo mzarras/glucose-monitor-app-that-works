@@ -4,12 +4,12 @@
 import Foundation
 
 /// An opaque sRGB colour, 8 bits per channel.
-public struct RGBColor: Sendable, Equatable, Hashable, CustomStringConvertible {
+public struct SRGBColor: Sendable, Equatable, Hashable, CustomStringConvertible {
     public let red: UInt8
     public let green: UInt8
     public let blue: UInt8
 
-    /// `RGBColor(hex: 0x2F6B4F)` is `#2F6B4F`.
+    /// `SRGBColor(hex: 0x2F6B4F)` is `#2F6B4F`.
     public init(hex: UInt32) {
         red = UInt8((hex >> 16) & 0xFF)
         green = UInt8((hex >> 8) & 0xFF)
@@ -41,7 +41,7 @@ public struct RGBColor: Sendable, Equatable, Hashable, CustomStringConvertible {
 
     /// WCAG 2.x contrast ratio, 1...21, symmetric in its arguments.
     /// Source: https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio
-    public static func contrastRatio(_ a: RGBColor, _ b: RGBColor) -> Double {
+    public static func contrastRatio(_ a: SRGBColor, _ b: SRGBColor) -> Double {
         let la = a.relativeLuminance
         let lb = b.relativeLuminance
         return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)

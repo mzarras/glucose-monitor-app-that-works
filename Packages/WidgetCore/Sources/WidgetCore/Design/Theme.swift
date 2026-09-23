@@ -10,10 +10,10 @@ import SwiftUI
 
 /// A design token: one colour for light mode, one for dark.
 public struct TokenStyle: ShapeStyle, Sendable {
-    public let light: RGBColor
-    public let dark: RGBColor
+    public let light: SRGBColor
+    public let dark: SRGBColor
 
-    public init(light: RGBColor, dark: RGBColor) {
+    public init(light: SRGBColor, dark: SRGBColor) {
         self.light = light
         self.dark = dark
     }
@@ -64,7 +64,7 @@ public enum Theme {
 }
 
 extension Color {
-    public init(rgb: RGBColor) {
+    public init(rgb: SRGBColor) {
         self.init(
             .sRGB,
             red: Double(rgb.red) / 255,
