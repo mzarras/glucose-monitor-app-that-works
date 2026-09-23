@@ -19,7 +19,13 @@ public struct TokenStyle: ShapeStyle, Sendable {
     }
 
     public func resolve(in environment: EnvironmentValues) -> Color {
-        Color(rgb: environment.colorScheme == .dark ? dark : light)
+        color(for: environment.colorScheme)
+    }
+
+    /// The token as a concrete `Color`, for controls bridged to UIKit (menus, text fields), where
+    /// a custom `ShapeStyle` is not resolved.
+    public func color(for scheme: ColorScheme) -> Color {
+        Color(rgb: scheme == .dark ? dark : light)
     }
 }
 
@@ -61,6 +67,12 @@ public enum Theme {
     public static let alert = TokenStyle(light: Palette.light.low, dark: Palette.dark.low)
 
     public static func band(_ band: GlucoseBand) -> BandStyle { BandStyle(band: band) }
+
+    /// The accent as a concrete `Color`, for APIs backed by UIKit that need one (`.tint`, toggles,
+    /// menus); a custom `ShapeStyle` does not reach them.
+    public static func accentColor(_ accent: AccentChoice, scheme: ColorScheme) -> Color {
+        Color(rgb: scheme == .dark ? accent.dark : accent.light)
+    }
 }
 
 extension Color {

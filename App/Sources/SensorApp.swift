@@ -1,11 +1,16 @@
-// Phase 0 scaffold. WS5 (UI) replaces the body; Phase 2 adds dependency wiring.
+// App entry point. Phase 2 adds dependency wiring (G7Kit → GlucoseStore → UI, AlertEngine,
+// TrioBridge, uploaders, widget snapshot) to AppModel.
+
 import SwiftUI
 
 @main
 struct SensorApp: App {
+    @State private var model = AppModel.launch()
+
     var body: some Scene {
         WindowGroup {
-            Text(verbatim: "Sensor — Phase 0 scaffold")
+            RootView(model: model)
+                .onOpenURL { model.open($0) }
         }
     }
 }

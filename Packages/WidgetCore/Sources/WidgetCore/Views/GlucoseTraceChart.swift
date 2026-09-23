@@ -5,6 +5,8 @@
 //   - optional fingerstick markers, separate from the line (S1);
 //   - the 70–180 target band.
 // No forecast (HANDOFF §1.1, §7.5).
+// With `scrubbable`, press-and-hold then drag selects the nearest real reading (ChartScrub): a
+// callout, a vertical rule, a highlighted point and a selection haptic; "No data" inside gaps.
 
 import Charts
 import GlucoseCore
@@ -19,17 +21,20 @@ public struct GlucoseTraceChart: View {
         /// Hours between x-axis labels.
         public var hourStride: Int
         public var flagFontSize: CGFloat
+        /// Finger scrubbing and the VoiceOver adjustable action. Off in widgets (not interactive).
+        public var scrubbable: Bool
 
-        public init(showsAxes: Bool, showsBand: Bool = true, showsLatestDot: Bool = true, lineWidth: CGFloat = 2, hourStride: Int = 1, flagFontSize: CGFloat = 9) {
+        public init(showsAxes: Bool, showsBand: Bool = true, showsLatestDot: Bool = true, lineWidth: CGFloat = 2, hourStride: Int = 1, flagFontSize: CGFloat = 9, scrubbable: Bool = false) {
             self.showsAxes = showsAxes
             self.showsBand = showsBand
             self.showsLatestDot = showsLatestDot
             self.lineWidth = lineWidth
             self.hourStride = hourStride
             self.flagFontSize = flagFontSize
+            self.scrubbable = scrubbable
         }
 
-        public static let nowScreen = Options(showsAxes: true)
+        public static let nowScreen = Options(showsAxes: true, scrubbable: true)
         public static let widget = Options(showsAxes: false, lineWidth: 1.5, flagFontSize: 8)
         public static let sparkline = Options(showsAxes: false, showsBand: false, showsLatestDot: false, lineWidth: 1.5, flagFontSize: 7)
     }
@@ -39,28 +44,112 @@ public struct GlucoseTraceChart: View {
     let fingersticks: [FingerstickMarker]
     let options: Options
     let accessibilityTitle: String
+    let timeText: @Sendable (Date) -> String
+    /// Time under the finger while scrubbing.
+    @State private var scrubDate: Date?
+    /// Reading chosen with VoiceOver's adjustable action.
+    @State private var accessibilityReading: ChartPoint?
 
     /// - Parameters:
     ///   - points: readings; those outside `domain` are ignored.
     ///   - domain: the time span shown, e.g. the last 3 hours ending now.
     ///   - accessibilityTitle: first words of the VoiceOver summary, e.g. "Last 3 hours".
-    public init(points: [ChartPoint], domain: ClosedRange<Date>, fingersticks: [FingerstickMarker] = [], options: Options, accessibilityTitle: String) {
+    ///   - timeText: clock-time formatter for the scrub callout.
+    public init(points: [ChartPoint], domain: ClosedRange<Date>, fingersticks: [FingerstickMarker] = [], options: Options, accessibilityTitle: String,
+                timeText: @escaping @Sendable (Date) -> String = ChartScrub.shortTime) {
         self.points = points.filter { domain.contains($0.date) }
         self.domain = domain
         self.fingersticks = fingersticks.filter { domain.contains($0.date) }
         self.options = options
         self.accessibilityTitle = accessibilityTitle
+        self.timeText = timeText
+    }
+
+    private var scrubSelection: ScrubSelection {
+        guard let scrubDate else { return .none }
+        return ChartScrub.select(at: scrubDate, in: points)
     }
 
     public var body: some View {
         let series = ChartSeries(points: points)
         let upper = ChartScale.yUpperBound(maxPlotted: max(series.maxPlottedMgdl ?? 0, fingersticks.map(\.mgdl).max() ?? 0))
-        chart(series: series, upper: upper)
+        let base = chart(series: series, upper: upper)
             .chartXScale(domain: domain)
             .chartYScale(domain: ChartScale.yLowerBound...upper)
-            .chartOverlay { proxy in flagOverlay(proxy: proxy, series: series) }
+            .chartOverlay { proxy in
+                ZStack {
+                    flagOverlay(proxy: proxy, series: series)
+                    if options.scrubbable { scrubOverlay(proxy: proxy) }
+                }
+            }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(accessibilityText))
+        if options.scrubbable {
+            base
+                .scrubHaptics(scrubSelection)
+                .accessibilityValue(Text(accessibilityReading.flatMap { ChartScrub.callout(.reading($0), time: timeText)?.spoken } ?? ""))
+                .accessibilityHint(Text("Swipe up or down to move through readings."))
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment: accessibilityReading = ChartScrub.step(from: accessibilityReading, forward: true, in: points) ?? accessibilityReading
+                    case .decrement: accessibilityReading = ChartScrub.step(from: accessibilityReading, forward: false, in: points) ?? accessibilityReading
+                    @unknown default: break
+                    }
+                }
+                .accessibilityChartDescriptor(GlucoseChartDescriptor(title: accessibilityTitle, summary: accessibilityText, points: Array(series.segments.joined()), domain: domain))
+        } else {
+            base
+        }
+    }
+
+    /// Finger tracking plus the rule, highlighted point and callout for the current selection.
+    private func scrubOverlay(proxy: ChartProxy) -> some View {
+        GeometryReader { geometry in
+            if let anchor = proxy.plotFrame {
+                let plot = geometry[anchor]
+                ZStack(alignment: .topLeading) {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .scrubGesture(
+                            onChange: { location in
+                                scrubDate = proxy.value(atX: location.x - plot.minX, as: Date.self)
+                            },
+                            onEnd: { scrubDate = nil }
+                        )
+                    scrubMarks(proxy: proxy, plot: plot)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func scrubMarks(proxy: ChartProxy, plot: CGRect) -> some View {
+        let selection = scrubSelection
+        let x: CGFloat? = {
+            switch selection {
+            case .reading(let point): return proxy.position(forX: point.date)
+            case .gap: return scrubDate.flatMap { proxy.position(forX: $0) }
+            case .none: return nil
+            }
+        }()
+        if let x, let callout = ChartScrub.callout(selection, time: timeText) {
+            let isGap: Bool = { if case .gap = selection { return true } else { return false } }()
+            Rectangle()
+                .fill(isGap ? AnyShapeStyle(Theme.muted) : AnyShapeStyle(Theme.ink))
+                .frame(width: 1, height: plot.height)
+                .position(x: plot.minX + x, y: plot.midY)
+            if case .reading(let point) = selection, let mgdl = point.value.numericMgdl, let y = proxy.position(forY: mgdl) {
+                Circle()
+                    .fill(Theme.background)
+                    .overlay(Circle().stroke(Theme.ink, lineWidth: 2))
+                    .frame(width: 11, height: 11)
+                    .position(x: plot.minX + x, y: plot.minY + y)
+            }
+            ScrubCalloutView(callout: callout)
+                .position(x: min(max(plot.minX + x, plot.minX + 48), plot.maxX - 48), y: plot.minY + 20)
+        }
     }
 
     private var accessibilityText: String {

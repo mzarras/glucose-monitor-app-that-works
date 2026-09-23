@@ -20,6 +20,17 @@
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(BUNDLE_ID_PREFIX)</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
@@ -31,7 +42,16 @@
 	<key>TrioAppGroupID</key>
 	<string>$(TRIO_APP_GROUP_ID)</string>
 	<key>UIAppFonts</key>
-	<array/>
+	<array>
+		<string>Newsreader72pt-Light.ttf</string>
+		<string>Newsreader16pt-Regular.ttf</string>
+		<string>Newsreader16pt-Italic.ttf</string>
+		<string>IBMPlexSans-Regular.ttf</string>
+		<string>IBMPlexSans-Medium.ttf</string>
+		<string>IBMPlexSans-SemiBold.ttf</string>
+		<string>IBMPlexMono-Regular.ttf</string>
+		<string>IBMPlexMono-Medium.ttf</string>
+	</array>
 	<key>UIApplicationSupportsMultipleScenes</key>
 	<false/>
 	<key>UIBackgroundModes</key>

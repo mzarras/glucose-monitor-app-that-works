@@ -1,0 +1,224 @@
+// Calibration entry rules and the step-by-step flow (PROGRESS D16). Pure; unit-tested in
+// CalibrationRulesTests.
+//
+// Flow: enter value → confirm by typing it again (typo protection: 55 vs 155 would shift the
+// sensor, and Trio doses on the sensor's readings) → if the value is far from the current reading
+// or cannot be compared, an explicit "are you sure" step → submit. A non-flat trend is a warning,
+// never a block.
+
+import Foundation
+import GlucoseCore
+import WidgetCore
+
+enum CalibrationAvailability: Equatable, Sendable {
+    case available
+    case unavailable(reason: String)
+}
+
+enum CalibrationEntry: Equatable, Sendable {
+    case empty
+    /// Not a whole number of mg/dL.
+    case invalid
+    case outOfRange(ClosedRange<Int>)
+    case valid(Int)
+}
+
+/// How the fingerstick compares with the sensor's current reading.
+enum CalibrationDifference: Equatable, Sendable {
+    /// Within the larger of 20 mg/dL or 20 %: no extra step.
+    case withinLimit(sensorMgdl: Int, difference: Int)
+    /// Beyond it: "are you sure" step.
+    case large(sensorMgdl: Int, difference: Int, limit: Int)
+    /// The sensor reads LOW/HIGH, so no numeric comparison is possible (S4): "are you sure".
+    case sensorFlag(GlucoseValue)
+    /// No current (fresh) reading to compare with: "are you sure".
+    case noCurrentReading
+
+    var needsExtraConfirmation: Bool {
+        if case .withinLimit = self { return false }
+        return true
+    }
+}
+
+enum CalibrationRules {
+    /// Difference limit: the larger of 20 mg/dL or 20 % of the sensor reading (PROGRESS D16).
+    static let absoluteLimitMgdl = 20.0
+    static let relativeLimit = 0.20
+
+    static func availability(_ state: CalibrationViewState, now: Date) -> CalibrationAvailability {
+        guard state.acceptedRange != nil else {
+            return .unavailable(reason: "This sensor doesn't accept calibrations.")
+        }
+        if let submission = state.lastSubmission, case .status(let status) = submission.outcome, status.isPending {
+            return .unavailable(reason: "A calibration is already waiting for the sensor.")
+        }
+        switch state.sensorState {
+        case .notPaired:
+            return .unavailable(reason: "No sensor is paired.")
+        case .warmingUp(let endsAt) where now < endsAt:
+            return .unavailable(reason: "The sensor is warming up. Calibration is possible after \(TimeText.time(endsAt)).")
+        case .expired:
+            return .unavailable(reason: "The sensor has expired.")
+        case .gracePeriod(let endsAt) where now >= endsAt:
+            return .unavailable(reason: "The sensor has expired.")
+        case .failed, .error:
+            return .unavailable(reason: "The sensor reported an error.")
+        case .bluetoothUnavailable:
+            return .unavailable(reason: "Bluetooth is unavailable, so the sensor can't receive a calibration.")
+        case .searching, .connecting, .authenticating:
+            return .unavailable(reason: "Waiting for the sensor to connect.")
+        case .warmingUp, .active, .gracePeriod:
+            return .available
+        }
+    }
+
+    /// Parses the typed fingerstick value. Only ASCII digits (the field uses a number pad).
+    static func parse(_ text: String, acceptedRange: ClosedRange<Int>) -> CalibrationEntry {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return .empty }
+        guard trimmed.count <= 3, trimmed.allSatisfy({ $0.isASCII && $0.isNumber }), let value = Int(trimmed) else {
+            return .invalid
+        }
+        guard acceptedRange.contains(value) else { return .outOfRange(acceptedRange) }
+        return .valid(value)
+    }
+
+    /// The re-typed value must be exactly the same number.
+    static func retypeMatches(_ value: Int, retyped: String) -> Bool {
+        let trimmed = retyped.trimmingCharacters(in: .whitespaces)
+        guard trimmed.allSatisfy({ $0.isASCII && $0.isNumber }), let again = Int(trimmed) else { return false }
+        return again == value
+    }
+
+    static func differenceLimit(sensorMgdl: Int) -> Double {
+        max(absoluteLimitMgdl, relativeLimit * Double(sensorMgdl))
+    }
+
+    /// Compares with the latest live reading, if it is current (< 10 min, same rule as the hero).
+    static func difference(fingerstick: Int, latest: LatestReading?, sensorState: SensorState, now: Date) -> CalibrationDifference {
+        guard case .current(let reading) = GlucoseDisplayState.classify(latest: latest, sensorState: sensorState, now: now) else {
+            return .noCurrentReading
+        }
+        guard let sensor = reading.value.numericMgdl else { return .sensorFlag(reading.value) }
+        let difference = abs(fingerstick - sensor)
+        let limit = differenceLimit(sensorMgdl: sensor)
+        if Double(difference) > limit {
+            return .large(sensorMgdl: sensor, difference: difference, limit: Int(limit.rounded(.up)))
+        }
+        return .withinLimit(sensorMgdl: sensor, difference: difference)
+    }
+
+    /// Advice when glucose is not steady (a warning; it never blocks).
+    static func trendAdvice(latest: LatestReading?) -> String? {
+        guard let latest else { return nil }
+        switch latest.trend {
+        case .flat: return nil
+        case .notComputable:
+            return "The sensor isn't reporting a trend, so it's unclear whether glucose is steady. Calibrating while glucose is changing can make readings less accurate."
+        default:
+            return "Glucose is \(TrendText.word(latest.trend)). Calibrations are most accurate when glucose is steady; consider waiting until the trend arrow is flat."
+        }
+    }
+
+    /// Text for the "are you sure" step.
+    static func largeDifferenceMessage(_ difference: CalibrationDifference, fingerstick: Int) -> String? {
+        switch difference {
+        case .withinLimit:
+            return nil
+        case .large(let sensor, let diff, let limit):
+            return "Your fingerstick (\(fingerstick) mg/dL) differs from the sensor's \(sensor) mg/dL by \(diff) mg/dL — more than the \(limit) mg/dL limit. A wrong calibration shifts every reading after it, and Trio doses from those readings. Wash your hands, re-check with your meter, and only continue if you're sure."
+        case .sensorFlag(let value):
+            return "The sensor reads \(GlucoseText.value(value)), so your fingerstick (\(fingerstick) mg/dL) can't be compared with it. A wrong calibration shifts every reading after it, and Trio doses from those readings. Only continue if you're sure."
+        case .noCurrentReading:
+            return "There's no current sensor reading to compare your fingerstick (\(fingerstick) mg/dL) with. A wrong calibration shifts every reading after it, and Trio doses from those readings. Only continue if you're sure."
+        }
+    }
+
+    /// Status after submitting.
+    static func outcomeText(_ outcome: CalibrationSubmission.Outcome) -> (title: String, detail: String) {
+        switch outcome {
+        case .status(.queued):
+            return ("Waiting for sensor", "It will be sent at the next connection, within about 5 minutes.")
+        case .status(.sent):
+            return ("Sent to sensor", "Waiting for the sensor's answer.")
+        case .status(.accepted):
+            return ("Accepted", "The sensor accepted the calibration. Readings after the next connection reflect it.")
+        case .status(.rejected(_, let reason)):
+            return ("Rejected by the sensor", "\(reason). Readings are unchanged.")
+        case .status(.unknown(let description)):
+            return ("Outcome unknown", "\(description). Compare the next readings with your meter before relying on them.")
+        case .refused(let refusal):
+            return ("Not sent", refusalText(refusal))
+        }
+    }
+
+    static func refusalText(_ refusal: CalibrationRefusal) -> String {
+        switch refusal {
+        case .notPaired: return "No sensor is paired."
+        case .notAuthenticated: return "The sensor isn't connected yet. Try again after the next reading."
+        case .warmingUp: return "The sensor is still warming up."
+        case .sessionEnded: return "The sensor session has ended."
+        case .valueOutOfRange(let range): return "The sensor accepts \(range.lowerBound)–\(range.upperBound) mg/dL."
+        case .anotherCalibrationInProgress: return "Another calibration is still waiting for the sensor."
+        }
+    }
+}
+
+/// Where the user is in the calibration sheet. A value type the view keeps in `@State`.
+struct CalibrationFlow: Equatable, Sendable {
+    enum Step: Equatable, Sendable {
+        case entry
+        /// Value accepted; type it again.
+        case confirm(value: Int, takenAt: Date)
+        /// Far from (or not comparable with) the sensor: explicit "are you sure".
+        case largeDifference(value: Int, takenAt: Date, difference: CalibrationDifference)
+        /// Handed to the source; the status comes from `CalibrationViewState.lastSubmission`.
+        case submitted(CalibrationRequest)
+    }
+
+    var step: Step = .entry
+    var entryText = ""
+    var confirmText = ""
+
+    /// Entry → confirm. `takenAt` is when the user finished entering the value.
+    mutating func continueFromEntry(acceptedRange: ClosedRange<Int>, now: Date) {
+        guard case .entry = step, case .valid(let value) = CalibrationRules.parse(entryText, acceptedRange: acceptedRange) else { return }
+        confirmText = ""
+        step = .confirm(value: value, takenAt: now)
+    }
+
+    /// Confirm → are-you-sure, or straight to a request ready to submit.
+    /// - Returns: the request to submit, or nil if another step is needed (or the retype doesn't match).
+    mutating func continueFromConfirm(latest: LatestReading?, sensorState: SensorState, now: Date) -> CalibrationRequest? {
+        guard case .confirm(let value, let takenAt) = step, CalibrationRules.retypeMatches(value, retyped: confirmText) else { return nil }
+        let difference = CalibrationRules.difference(fingerstick: value, latest: latest, sensorState: sensorState, now: now)
+        if difference.needsExtraConfirmation {
+            step = .largeDifference(value: value, takenAt: takenAt, difference: difference)
+            return nil
+        }
+        let request = CalibrationRequest(mgdl: value, takenAt: takenAt)
+        step = .submitted(request)
+        return request
+    }
+
+    /// "Calibrate anyway" on the are-you-sure step.
+    mutating func confirmLargeDifference() -> CalibrationRequest? {
+        guard case .largeDifference(let value, let takenAt, _) = step else { return nil }
+        let request = CalibrationRequest(mgdl: value, takenAt: takenAt)
+        step = .submitted(request)
+        return request
+    }
+
+    /// Back to entry, keeping nothing that was confirmed.
+    mutating func startOver() {
+        step = .entry
+        confirmText = ""
+    }
+
+    /// Whether the confirm field shows a mismatch: at least as many characters as the value has
+    /// digits, and not the same number (no warning while the user is still typing).
+    var confirmMismatch: Bool {
+        guard case .confirm(let value, _) = step, confirmText.count >= String(value).count else { return false }
+        return !CalibrationRules.retypeMatches(value, retyped: confirmText)
+    }
+}
