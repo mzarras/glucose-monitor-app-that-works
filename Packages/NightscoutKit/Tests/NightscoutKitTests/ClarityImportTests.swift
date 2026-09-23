@@ -8,9 +8,11 @@ import GlucoseCore
 /// 2025-11-02 fall-back.
 final class ClarityImportTests: XCTestCase {
     static let newYork = TimeZone(identifier: "America/New_York")!
+    /// Import time for parser tests: after every fixture date.
+    static let now = Fixtures.date("2026-09-23T00:00:00Z")
 
     private func parseFixture() throws -> ClarityParseResult {
-        try ClarityExportParser.parse(Fixtures.data("clarity_export_synthetic.csv"), timeZone: Self.newYork)
+        try ClarityExportParser.parse(Fixtures.data("clarity_export_synthetic.csv"), timeZone: Self.newYork, now: ClarityImportTests.now)
     }
 
     /// Builds an export with the real header and the given EGV rows (timestamp, value, transmitter time).
@@ -87,7 +89,7 @@ final class ClarityImportTests: XCTestCase {
         XCTAssertEqual(ClarityExportParser.glucoseValue("40"), .mgdl(40))
         XCTAssertEqual(ClarityExportParser.glucoseValue("400"), .mgdl(400))
         XCTAssertEqual(ClarityExportParser.glucoseValue("120.0"), .mgdl(120))
-        let result = try ClarityExportParser.parse(export([("2026-01-10T10:00:00", "39", ""), ("2026-01-10T10:05:00", "401", ""), ("2026-01-10T10:10:00", "120", "")]), timeZone: Self.newYork)
+        let result = try ClarityExportParser.parse(export([("2026-01-10T10:00:00", "39", ""), ("2026-01-10T10:05:00", "401", ""), ("2026-01-10T10:10:00", "120", "")]), timeZone: Self.newYork, now: ClarityImportTests.now)
         XCTAssertEqual(result.rejectedInvalidValue, 2)
         XCTAssertEqual(result.readings.map(\.value), [.mgdl(120)])
     }
@@ -104,7 +106,7 @@ final class ClarityImportTests: XCTestCase {
         let adjacent = try ClarityExportParser.parse(export([
             ("2025-11-02T01:30:00", "108", "88500"),
             ("2025-11-02T01:30:00", "99", "92100"),
-        ]), timeZone: Self.newYork)
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
         XCTAssertEqual(adjacent.readings.map(\.date), [Fixtures.date("2025-11-02T05:30:00Z"), Fixtures.date("2025-11-02T06:30:00Z")])
         XCTAssertEqual(Set(adjacent.readings.map(\.id)).count, 2)
     }
@@ -131,7 +133,7 @@ final class ClarityImportTests: XCTestCase {
             ("2025-11-02T01:10:00", "123", "1600", "SYNTH1"),   // EDT → 05:10Z
             ("2025-11-02T01:10:00", "133", "5200", "SYNTH1"),   // EST → 06:10Z
             ("2025-11-02T02:00:00", "140", "8200", "SYNTH1"),   // 07:00Z
-        ]), timeZone: Self.newYork)
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
         let placed = Dictionary(uniqueKeysWithValues: result.readings.map { ($0.value, $0.date) })
         let expected: [(Int, String)] = [
             (120, "2025-11-02T04:55:00Z"), (121, "2025-11-02T05:00:00Z"), (131, "2025-11-02T06:00:00Z"),
@@ -151,7 +153,7 @@ final class ClarityImportTests: XCTestCase {
         let result = try ClarityExportParser.parse(export(rows: [
             ("2025-11-02T01:30:00", "99", "92100", "SYNTH1"),
             ("2025-11-02T02:00:00", "96", "93900", "SYNTH1"),
-        ]), timeZone: Self.newYork)
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
         XCTAssertEqual(result.readings.map(\.date), [Fixtures.date("2025-11-02T06:30:00Z"), Fixtures.date("2025-11-02T07:00:00Z")])
     }
 
@@ -161,7 +163,7 @@ final class ClarityImportTests: XCTestCase {
         let result = try ClarityExportParser.parse(export(rows: [
             ("2025-11-02T00:55:00", "120", "700", "SYNTH1"),
             ("2025-11-02T01:30:00", "110", "3400", "SYNTH1"),
-        ]), timeZone: Self.newYork)
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
         XCTAssertEqual(result.readings.map(\.value), [.mgdl(120)])
         XCTAssertEqual(result.rejectedAmbiguousLocalTime, 1)
     }
@@ -171,7 +173,7 @@ final class ClarityImportTests: XCTestCase {
         let result = try ClarityExportParser.parse(export(rows: [
             ("2025-11-02T01:55:00", "104", "90000", "SYNTH1"),
             ("2025-11-02T01:00:00", "103", "300", "OTHER2"),
-        ]), timeZone: Self.newYork)
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
         XCTAssertEqual(result.readings.map(\.date), [Fixtures.date("2025-11-02T05:55:00Z"), Fixtures.date("2025-11-02T06:00:00Z")])
     }
 
@@ -182,7 +184,7 @@ final class ClarityImportTests: XCTestCase {
             let result = try ClarityExportParser.parse(export([
                 ("2025-11-02T01:30:00", "108", transmitterTimes.0),
                 ("2025-11-02T01:30:00", "108", transmitterTimes.1),
-            ]), timeZone: Self.newYork)
+            ]), timeZone: Self.newYork, now: ClarityImportTests.now)
             XCTAssertEqual(result.readings.map(\.date), [Fixtures.date("2025-11-02T05:30:00Z")])
             XCTAssertEqual(result.duplicateRows, 1)
         }
@@ -193,7 +195,7 @@ final class ClarityImportTests: XCTestCase {
         let result = try ClarityExportParser.parse(export([
             ("2025-11-02T03:00:00", "120", ""),
             ("2025-11-02T01:30:00", "118", ""),
-        ]), timeZone: Self.newYork)
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
         XCTAssertEqual(result.readings.map(\.date), [Fixtures.date("2025-11-02T08:00:00Z")])
         XCTAssertEqual(result.rejectedAmbiguousLocalTime, 1)
     }
@@ -204,7 +206,7 @@ final class ClarityImportTests: XCTestCase {
             ("2026-03-08T01:55:00", "130", ""),
             ("2026-03-08T02:30:00", "128", ""),
             ("2026-03-08T03:00:00", "126", ""),
-        ]), timeZone: Self.newYork)
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
         XCTAssertEqual(result.readings.map(\.date), [Fixtures.date("2026-03-08T06:55:00Z"), Fixtures.date("2026-03-08T07:00:00Z")])
         XCTAssertEqual(result.rejectedNonexistentLocalTime, 1)
     }
@@ -217,7 +219,7 @@ final class ClarityImportTests: XCTestCase {
             ("2025-10-26T01:30:00", "101", ""),
             ("2025-10-26T01:10:00", "102", ""),
             ("2025-10-26T02:00:00", "103", ""),
-        ]), timeZone: london)
+        ]), timeZone: london, now: ClarityImportTests.now)
         XCTAssertEqual(result.readings.map(\.date), [
             Fixtures.date("2025-10-25T23:55:00Z"), Fixtures.date("2025-10-26T00:30:00Z"),
             Fixtures.date("2025-10-26T01:10:00Z"), Fixtures.date("2025-10-26T02:00:00Z"),
@@ -226,8 +228,8 @@ final class ClarityImportTests: XCTestCase {
 
     func test_timestampsUseTheCallerSuppliedTimeZone() throws {
         let data = export([("2026-01-10T10:00:00", "120", "")])
-        let utc = try ClarityExportParser.parse(data, timeZone: TimeZone(identifier: "UTC")!)
-        let tokyo = try ClarityExportParser.parse(data, timeZone: TimeZone(identifier: "Asia/Tokyo")!)
+        let utc = try ClarityExportParser.parse(data, timeZone: TimeZone(identifier: "UTC")!, now: ClarityImportTests.now)
+        let tokyo = try ClarityExportParser.parse(data, timeZone: TimeZone(identifier: "Asia/Tokyo")!, now: ClarityImportTests.now)
         XCTAssertEqual(utc.readings.first?.date, Fixtures.date("2026-01-10T10:00:00Z"))
         XCTAssertEqual(tokyo.readings.first?.date, Fixtures.date("2026-01-10T01:00:00Z"))
     }
@@ -236,25 +238,47 @@ final class ClarityImportTests: XCTestCase {
         let result = try ClarityExportParser.parse(export([
             ("", "120", ""), ("2026-02-30T10:00:00", "120", ""), ("2026-01-10 25:00:00", "120", ""),
             ("10/01/2026 10:00", "120", ""), ("2026-01-10 10:05:00", "121", ""),
-        ]), timeZone: Self.newYork)
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
         XCTAssertEqual(result.rejectedInvalidTimestamp, 4)
         XCTAssertEqual(result.readings.count, 1, "older exports use a space instead of T")
     }
 
     func test_refusesMmolExportsAndOtherFiles() {
         let mmol = export([("2026-01-10T10:00:00", "6.7", "")], header: "Index,Timestamp (YYYY-MM-DDThh:mm:ss),Event Type,Event Subtype,Patient Info,Device Info,Source Device ID,Glucose Value (mmol/L),Insulin Value (u),Carb Value (grams),Duration (hh:mm:ss),Glucose Rate of Change (mmol/L/min),Transmitter Time (Long Integer),Transmitter ID")
-        XCTAssertThrowsError(try ClarityExportParser.parse(mmol, timeZone: Self.newYork)) { error in
+        XCTAssertThrowsError(try ClarityExportParser.parse(mmol, timeZone: Self.newYork, now: ClarityImportTests.now)) { error in
             XCTAssertEqual(error as? ClarityImportError, .unsupportedUnit("Glucose Value (mmol/L)"))
         }
-        XCTAssertThrowsError(try ClarityExportParser.parse(Data("date,value\n2026-01-10,120\n".utf8))) { error in
+        XCTAssertThrowsError(try ClarityExportParser.parse(Data("date,value\n2026-01-10,120\n".utf8), now: ClarityImportTests.now)) { error in
             XCTAssertEqual(error as? ClarityImportError, .notAClarityExport)
         }
-        XCTAssertThrowsError(try ClarityExportParser.parse(Data([0xFF, 0xFE, 0x00]))) { error in
+        XCTAssertThrowsError(try ClarityExportParser.parse(Data([0xFF, 0xFE, 0x00]), now: ClarityImportTests.now)) { error in
             XCTAssertEqual(error as? ClarityImportError, .notUTF8)
         }
-        XCTAssertThrowsError(try ClarityExportParser.parse(Data("Index,Event Type,Glucose Value (mg/dL)\n".utf8))) { error in
+        XCTAssertThrowsError(try ClarityExportParser.parse(Data("Index,Event Type,Glucose Value (mg/dL)\n".utf8), now: ClarityImportTests.now)) { error in
             XCTAssertEqual(error as? ClarityImportError, .missingColumn("Timestamp (YYYY-MM-DDThh:mm:ss)"))
         }
+    }
+
+    func test_S3_futureDatedImportRowsAreSkippedNotStalling() async throws {
+        // D33: a row later than now + 60 s (wrong time zone picked, device clock fault) would make
+        // the store reject the whole batch; it is skipped and counted, the rest imports. A
+        // non-finite rate becomes nil rather than reaching the store.
+        let clock = TestClock(Fixtures.date("2026-01-10T15:10:00Z"))
+        let repository = InMemoryGlucoseReadingRepository(clock: clock)
+        let data = Data([
+            "Index,Timestamp (YYYY-MM-DDThh:mm:ss),Event Type,Event Subtype,Patient Info,Device Info,Source Device ID,Glucose Value (mg/dL),Insulin Value (u),Carb Value (grams),Duration (hh:mm:ss),Glucose Rate of Change (mg/dL/min),Transmitter Time (Long Integer),Transmitter ID",
+            "1,2026-01-10T10:00:00,EGV,,,,iOS G7,120,,,,NaN,1000,SYNTH1",      // 15:00Z, rate NaN → nil
+            "2,2026-01-10T10:05:00,EGV,,,,iOS G7,121,,,,inf,1300,SYNTH1",      // 15:05Z, rate ∞ → nil
+            "3,2026-01-10T10:11:00,EGV,,,,iOS G7,122,,,,,1660,SYNTH1",         // 15:11Z, within 60 s
+            "4,2026-01-10T10:15:00,EGV,,,,iOS G7,123,,,,,1900,SYNTH1",         // 15:15Z, future
+            "5,2026-01-10T11:00:00,EGV,,,,iOS G7,124,,,,,4600,SYNTH1",         // 16:00Z, future
+        ].joined(separator: "\r\n").utf8)
+        let result = try await ClarityHistoryImporter(repository: repository, clock: clock).importExport(data, timeZone: Self.newYork)
+        XCTAssertEqual(result.parse.rejectedFutureDated, 2)
+        XCTAssertEqual(result.readingsImported, 3, "one bad row does not stall the import")
+        let stored = await repository.stored
+        XCTAssertEqual(stored.map(\.value), [.mgdl(120), .mgdl(121), .mgdl(122)])
+        XCTAssertTrue(stored.allSatisfy { $0.trendRate == nil })
     }
 
     func test_S3_clarityImportIsIdempotent() async throws {
@@ -343,7 +367,7 @@ final class CSVReaderTests: XCTestCase {
 
     func test_quotedDeviceInfoInClarityRow() throws {
         let data = Data("Index,Timestamp (YYYY-MM-DDThh:mm:ss),Event Type,Event Subtype,Patient Info,Device Info,Source Device ID,Glucose Value (mg/dL)\r\n1,2026-01-10T10:00:00,EGV,,,\"G7, iOS\",iOS G7,120\r\n".utf8)
-        let result = try ClarityExportParser.parse(data, timeZone: TimeZone(identifier: "UTC")!)
+        let result = try ClarityExportParser.parse(data, timeZone: TimeZone(identifier: "UTC")!, now: ClarityImportTests.now)
         XCTAssertEqual(result.readings.map(\.value), [.mgdl(120)])
     }
 }

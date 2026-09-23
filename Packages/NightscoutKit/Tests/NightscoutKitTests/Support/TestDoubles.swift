@@ -6,12 +6,21 @@ import GlucoseCore
 @testable import NightscoutKit
 
 /// In-memory production-role `GlucoseReadingRepository` following the contract in GlucoseCore
-/// GlucoseReadingRepository.swift: whole-batch refusal of `.replay`/`.mock` and of numbers outside
-/// 40...400; insert-or-ignore by id; an `.imported` reading is skipped when any stored reading lies
-/// within ±150 s (inclusive); a `.sensor` reading deletes `.imported` readings within ±150 s; a
-/// batch is applied in ascending date order.
+/// GlucoseReadingRepository.swift: whole-batch refusal of `.replay`/`.mock`, of numbers outside
+/// 40...400, of non-finite trend rates, and of readings dated after the store clock +
+/// `LiveReadingGate.futureTolerance` (D33); insert-or-ignore by id; an `.imported` reading is
+/// skipped when any stored reading lies within ±150 s (inclusive); a `.sensor` reading deletes
+/// `.imported` readings within ±150 s; a batch is applied in ascending date order.
 actor InMemoryGlucoseReadingRepository: GlucoseReadingRepository {
     static let window: TimeInterval = 150
+    /// Default store clock for tests: after every fixture date.
+    static let defaultNow = Fixtures.date("2026-09-23T00:00:00Z")
+
+    private let clock: any WallClock
+
+    init(clock: any WallClock = TestClock(InMemoryGlucoseReadingRepository.defaultNow)) {
+        self.clock = clock
+    }
 
     private(set) var stored: [GlucoseReading] = []
     private(set) var insertCalls = 0
@@ -33,6 +42,12 @@ actor InMemoryGlucoseReadingRepository: GlucoseReadingRepository {
             }
             if case .mgdl(let value) = reading.value, !GlucoseValue.sensorReportableRange.contains(value) {
                 throw GlucoseReadingRepositoryError.implausibleValue(value)
+            }
+            if let rate = reading.trendRate, !rate.isFinite {
+                throw GlucoseReadingRepositoryError.nonFiniteTrendRate
+            }
+            if reading.date > clock.now().addingTimeInterval(LiveReadingGate.futureTolerance) {
+                throw GlucoseReadingRepositoryError.futureDated(reading.date)
             }
         }
         var added: [GlucoseReading] = []

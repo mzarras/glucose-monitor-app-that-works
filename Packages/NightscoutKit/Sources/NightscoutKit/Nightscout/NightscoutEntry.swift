@@ -61,6 +61,10 @@ public enum NightscoutEntrySkipReason: String, Sendable, Equatable, Hashable, Ca
     case missingValue
     /// `sgv` below 39: a Dexcom error code, not glucose (lib/plugins/errorcodes.js:13-22).
     case errorCode
+    /// Dated later than now + `LiveReadingGate.futureTolerance` (a clock fault on the uploader or
+    /// this phone). Stores reject a batch containing such a reading (PROGRESS D33), so it is
+    /// skipped here and one bad entry cannot stall the import.
+    case futureDated
 }
 
 enum NightscoutEntryMapper {
@@ -70,9 +74,10 @@ enum NightscoutEntryMapper {
     }
 
     /// Maps one entry to an imported reading: `source: .imported(.nightscout)`, id from
-    /// `GlucoseReading.importedID(origin:date:)`, `trendRate: nil`, `isBackfill: false`,
-    /// `sensorSerial: ""` (brief §A). The timestamp is Nightscout's `date`, unchanged (S3).
-    static func map(_ entry: NightscoutEntry) -> Result {
+    /// `GlucoseReading.importedID(origin:date:)`, `trendRate: nil` (never non-finite),
+    /// `isBackfill: false`, `sensorSerial: ""` (brief §A). The timestamp is Nightscout's `date`,
+    /// unchanged (S3); entries dated after `now + LiveReadingGate.futureTolerance` are skipped.
+    static func map(_ entry: NightscoutEntry, now: Date) -> Result {
         guard entry.type == "sgv" else { return .skipped(.notSGV) }
         guard let milliseconds = entry.date, milliseconds.isFinite, milliseconds > 0 else {
             return .skipped(.missingDate)
@@ -85,6 +90,7 @@ enum NightscoutEntryMapper {
         case .invalid: return .skipped(.missingValue)
         }
         let date = Date(timeIntervalSince1970: milliseconds.rounded() / 1000)
+        guard date <= now.addingTimeInterval(LiveReadingGate.futureTolerance) else { return .skipped(.futureDated) }
         return .reading(GlucoseReading(
             id: GlucoseReading.importedID(origin: .nightscout, date: date),
             date: date,

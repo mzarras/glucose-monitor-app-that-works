@@ -318,4 +318,38 @@ final class NightscoutImportTests: XCTestCase {
         try store.clearCheckpoint()
         XCTAssertNil(try store.loadCheckpoint())
     }
+
+    func test_S3_futureDatedImportRowsAreSkippedNotStalling() async throws {
+        // D33: the plan started when the phone's clock was a day ahead (planEnd 2026-09-20 12:00);
+        // the clock has since been corrected to 2026-09-19 10:10. Entries at 10:15 and 10:20 are now
+        // in the future: the store would reject the whole window, so the importer skips and counts
+        // them and the import finishes. 10:10:02 is within the 60 s tolerance.
+        let clock = TestClock(Fixtures.date("2026-09-19T10:10:00Z"))
+        let repository = InMemoryGlucoseReadingRepository(clock: clock)
+        let site = try NightscoutSite("https://nightscout.invalid")
+        let checkpoints = InMemoryNightscoutImportCheckpointStore(NightscoutImportCheckpoint(
+            site: site, scope: .default, planEnd: Self.now, planStart: Self.now.addingTimeInterval(-90 * 86_400),
+            completedDownTo: Self.now, readingsImported: 0, readingsSkippedByStore: 0, skipped: [:], isFinished: false
+        ))
+        let result = try await makeImporter(server: try makeServer(), repository: repository, checkpoints: checkpoints, clock: clock).run()
+
+        XCTAssertEqual(result.phase, .finished, "one bad row does not stall the import")
+        XCTAssertEqual(result.skipped[.futureDated], 2)
+        let stored = await repository.stored
+        XCTAssertFalse(stored.contains { $0.date > clock.now().addingTimeInterval(LiveReadingGate.futureTolerance) })
+        XCTAssertEqual(stored.count, 8, "the 90-day history minus the two future entries")
+        XCTAssertTrue(stored.allSatisfy { $0.trendRate == nil })
+
+        // Control: the store really does reject a batch holding a future-dated reading.
+        let future = GlucoseReading(
+            id: "imported:nightscout:1", date: clock.now().addingTimeInterval(LiveReadingGate.futureTolerance + 1),
+            value: .mgdl(100), trendRate: nil, isBackfill: false, source: .imported(.nightscout), sensorSerial: ""
+        )
+        do {
+            _ = try await repository.insert([future])
+            XCTFail("the fake must enforce D33")
+        } catch {
+            XCTAssertEqual(error as? GlucoseReadingRepositoryError, .futureDated(future.date))
+        }
+    }
 }

@@ -65,6 +65,9 @@ public struct ClarityParseResult: Sendable, Equatable {
     public var rejectedAmbiguousLocalTime = 0
     public var rejectedInvalidTimestamp = 0
     public var rejectedInvalidValue = 0
+    /// EGV rows dated later than the import's `now` + `LiveReadingGate.futureTolerance` (wrong time
+    /// zone chosen, or a device clock fault). Stores reject such readings (PROGRESS D33).
+    public var rejectedFutureDated = 0
 
     public init() {}
 }
@@ -83,8 +86,9 @@ public enum ClarityExportParser {
     static let highText = "High"
 
     /// Parses a Clarity export. `timeZone` is where the data was recorded (HANDOFF §4.5 step 2:
-    /// ask the user; default to the current zone).
-    public static func parse(_ data: Data, timeZone: TimeZone = .current) throws(ClarityImportError) -> ClarityParseResult {
+    /// ask the user; default to the current zone). Rows dated after `now` +
+    /// `LiveReadingGate.futureTolerance` are rejected and counted (D33).
+    public static func parse(_ data: Data, timeZone: TimeZone = .current, now: Date) throws(ClarityImportError) -> ClarityParseResult {
         guard let text = String(data: data, encoding: .utf8) else { throw .notUTF8 }
         let rows: [[String]]
         do {
@@ -171,6 +175,10 @@ public enum ClarityExportParser {
                 guard let index, index < egv.fields.count else { return "" }
                 return egv.fields[index]
             }
+            guard date <= now.addingTimeInterval(LiveReadingGate.futureTolerance) else {
+                result.rejectedFutureDated += 1
+                continue
+            }
             guard let value = glucoseValue(field(glucoseIndex)) else {
                 result.rejectedInvalidValue += 1
                 continue
@@ -186,7 +194,8 @@ public enum ClarityExportParser {
                 id: id,
                 date: date,
                 value: value,
-                // Clarity's own recorded rate when the export has one; usually empty for EGVs.
+                // Clarity's own recorded rate when the export has one (usually empty for EGVs);
+                // a non-numeric or non-finite rate becomes nil, never NaN/∞ (D33).
                 trendRate: Double(field(rateIndex)).flatMap { $0.isFinite ? $0 : nil },
                 isBackfill: false,
                 source: .imported(.clarityCSV),

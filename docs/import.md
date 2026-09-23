@@ -58,6 +58,7 @@ below 1970.
 |---|---|---|
 | `type` ≠ `sgv` (`mbg` fingersticks, `cal` calibrations, …) | ignored, counted `notSGV` | brief; the server filter makes this rare |
 | no numeric `date` > 0 | skipped, `missingDate` | |
+| `date` later than now + 60 s (`LiveReadingGate.futureTolerance`) | skipped, `futureDated` | PROGRESS D33: stores reject a batch holding one, so skipping keeps one bad entry from stalling the import |
 | `sgv` missing or not finite | skipped, `missingValue` | |
 | `sgv` < 39 | skipped, `errorCode` — Dexcom error codes, not glucose | `lib/plugins/errorcodes.js:13-22`, `lib/plugins/bgnow.js:95-101` |
 | 39 ≤ `sgv` < 40 | `.belowRange` (LOW) | `lib/client/index.js:544-545`, `lib/sandbox.js:249-250` |
@@ -94,7 +95,11 @@ sensor reported).
 
 **Values**: `Low` → `.belowRange`, `High` → `.aboveRange` (S4); a whole number 40–400 →
 `.mgdl`; anything else (e.g. 39, 401, 0, text) is rejected and counted — never clamped.
-`trendRate` is Clarity's "Glucose Rate of Change" when the row has one (usually empty).
+`trendRate` is Clarity's "Glucose Rate of Change" when the row has one (usually empty); a
+non-numeric or non-finite rate becomes `nil`, never NaN/∞. A row dated later than the import time
++ 60 s (wrong time zone chosen, device clock fault) is rejected and counted
+(`rejectedFutureDated`): stores reject a whole batch holding one (PROGRESS D33), so skipping it
+keeps one bad row from stalling the import.
 
 **Time zone**: timestamps are local wall-clock time without an offset. The app asks which zone the
 data was recorded in (default: the current one) and passes it to the parser.

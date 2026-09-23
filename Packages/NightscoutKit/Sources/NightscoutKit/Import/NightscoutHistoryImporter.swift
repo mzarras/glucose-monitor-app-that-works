@@ -166,8 +166,11 @@ public actor NightscoutHistoryImporter {
 
         let entries = try await fetchWindow(lowerMs: milliseconds(lower), upperMs: milliseconds(upper))
         var readingsByID: [String: GlucoseReading] = [:]
+        // Windows never reach past the plan end, but the phone's clock may have been corrected
+        // backwards since the plan started (or an uploader's clock was ahead): D33.
+        let now = clock.now()
         for entry in entries {
-            switch NightscoutEntryMapper.map(entry) {
+            switch NightscoutEntryMapper.map(entry, now: now) {
             case .reading(let reading): readingsByID[reading.id] = reading
             case .skipped(let reason): checkpoint.skipped[reason, default: 0] += 1
             }

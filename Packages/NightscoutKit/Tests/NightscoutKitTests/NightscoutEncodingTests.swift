@@ -36,7 +36,7 @@ final class NightscoutEncodingTests: XCTestCase {
 
     func test_entryMapping() {
         let date = 1_789_812_000_000.0
-        func map(_ entry: NightscoutEntry) -> NightscoutEntryMapper.Result { NightscoutEntryMapper.map(entry) }
+        func map(_ entry: NightscoutEntry) -> NightscoutEntryMapper.Result { NightscoutEntryMapper.map(entry, now: Date(timeIntervalSince1970: 1_789_900_000)) }
         XCTAssertEqual(map(NightscoutEntry(type: "mbg", sgv: nil, date: date)), .skipped(.notSGV))
         XCTAssertEqual(map(NightscoutEntry(type: "cal", sgv: nil, date: date)), .skipped(.notSGV))
         XCTAssertEqual(map(NightscoutEntry(type: nil, sgv: 120, date: date)), .skipped(.notSGV))

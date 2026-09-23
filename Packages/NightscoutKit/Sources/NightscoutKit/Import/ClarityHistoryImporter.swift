@@ -58,7 +58,7 @@ public struct ClarityHistoryImporter: Sendable {
         timeZone: TimeZone = .current,
         onProgress: @Sendable (ClarityImportProgress) -> Void = { _ in }
     ) async throws(ClarityImportError) -> ClarityImportResult {
-        let parsed = try ClarityExportParser.parse(data, timeZone: timeZone)
+        let parsed = try ClarityExportParser.parse(data, timeZone: timeZone, now: clock.now())
         let sorted = parsed.readings.sorted { $0.date < $1.date }
         var imported = 0
         var processed = 0
@@ -81,7 +81,8 @@ public struct ClarityHistoryImporter: Sendable {
         record("Clarity import: \(parsed.egvRows) EGV rows, \(imported) new readings, "
             + "\(sorted.count - imported) skipped by the store, "
             + "\(parsed.rejectedNonexistentLocalTime) nonexistent and \(parsed.rejectedAmbiguousLocalTime) ambiguous local times, "
-            + "\(parsed.rejectedInvalidTimestamp) bad timestamps, \(parsed.rejectedInvalidValue) bad values")
+            + "\(parsed.rejectedInvalidTimestamp) bad timestamps, \(parsed.rejectedInvalidValue) bad values, "
+            + "\(parsed.rejectedFutureDated) in the future")
         return ClarityImportResult(
             parse: parsed, readingsImported: imported, readingsSkippedByStore: sorted.count - imported,
             coveredFrom: sorted.first?.date, coveredTo: sorted.last?.date
