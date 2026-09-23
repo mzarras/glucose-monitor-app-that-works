@@ -62,6 +62,9 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D26 | **AlarmKit for urgent low** (iOS 26+ at runtime; deployment target stays 17.0): urgent low and its repeats are scheduled as system alarms that ring on silent and in Focus while the app is suspended; other alerts unchanged; older iOS falls back to D17. Needs `NSAlarmKitUsageDescription` (added), an onboarding permission step, a Settings row, and a Stop/Snooze intent. | Michael, 2026-09-23 (WS4 finding: Loop uses AlarmKit for this; closes the urgent-low-repeat gap between BLE wake-ups without the Critical Alerts entitlement). |
 | D27 | Quiet hours silence every alert except urgent low, exactly as HANDOFF §5 (including Low and missed readings). | Michael, 2026-09-23, asked explicitly. |
 | D28 | `CGMSource.currentSession` lifetime pinned: non-nil across routine disconnects and relaunches until the session ends; `nil` means "no valid session". TrioBridge removes Trio's payload only on positive evidence (new session, session ended, `clear()`), never because of a transient `nil`. | WS6 delta review B1: a transient nil session would have deleted Trio's payload at exactly the moment Trio polls. |
+| D29 | **Nightscout LOW = sgv 39** (displays "LOW"). Nightscout's own web/push alarms ignore 39 and auto-send "All Clear" (cgm-remote-monitor 15.0.8 `simplealarms.js:21`, `bgnow.js:96`, `notifications.js:52,151-152`); `docs/following.md` states this plainly and makes LoopFollow (alarms on 39) the required follower app for anyone relying on alarms. HIGH = 401. | Michael, 2026-09-23 (WS7 review B1). |
+| D30 | **Dexcom Share LOW/HIGH = 39/401** (not withheld), to be verified with a real follower in §11 step 4a (Dexcom Follow shows LOW/HIGH and alarms); revert to withholding if it doesn't. | Michael, 2026-09-23 (WS7 evidence: LoopKit's Share reader treats < 40 / > 400 as below/above range). |
+| D31 | G7 raw glucose 0, 0x0FFF and 0xFFFE are "no value" (withheld, logged, surfaced) — never LOW/HIGH; other raw < 40 → LOW, > 400 → HIGH (G7SensorKit mapping). No real LOW/HIGH G7 packet exists in any reference: capturing one is a §11 item before relying on HIGH → 401 in closed loop. | WS1 review M1: a misread packet would otherwise become HIGH and reach Trio as 401. |
 
 ## Discrepancies with HANDOFF (resolved)
 
@@ -85,6 +88,22 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 
 - Store opening before first unlock (BLE state-restoration launch after reboot) throws by design: retry on `protectedDataDidBecomeAvailable`, surface S5 until open, and hold incoming readings in memory meanwhile (G7 backfill covers the rest); base backfill requests on the latest *stored* reading (WS2).
 - DEBUG accelerated replay: the app uses `ReplayClock.now()` for staleness, alerts and the gate's `now` in replay wiring (WS2).
+
+- Contract additions deferred to Phase 2 (to avoid breaking in-flight exhaustive switches): `SensorState.calibrationRequired(code:)` / `.calibrationError(code:)` (WS1 stand-in: `.error(code: algorithmState)`), `CalibrationRefusal.invalidTime` (stand-in: immediate `.unknown`). Update WS4/WS5 switches in the same change.
+- Signal loss must be derived from reading age, never from `SensorState` (G7Kit suppresses connecting/authenticating after the first sensor state; WS1 review minor 8).
+- Hosted (simulator) Keychain round-trip tests for G7Kit and NightscoutKit credential stores (WS1 review M3, WS7): accessibility `AfterFirstUnlock`, not synchronizable.
+- Trio heartbeat: WS1 assessed it as low risk (Trio subscribes to Receive_Authentication only, never writes); implement per `docs/trio-bridge.md` "Heartbeat wiring".
+
+## §11 on-device checklist additions (collected from reviews; goes into docs/setup.md in Phase 3)
+
+- Capture raw G7 packets for a real LOW and HIGH (D31) before relying on HIGH→401 in closed loop.
+- J-PAKE/certificates accepted by a real G7; pairing prompt accept/cancel/timeout error codes; state-restoration relaunch reconnects.
+- Receiver (slot 1) + app (slot 2) side by side 24 h; reading times match the receiver within seconds; backfill after a gap lands on the same ids.
+- With another G7 app installed, an unsolicited auth status is not taken as ours (WS1 review B1 fix).
+- Calibration round trip and display-only duration; warm-up length reported by 0x52; expired sensor keeps advertising; 15-day sensor refused.
+- Trio loop cadence with the phone locked 30+ min (heartbeat); Dexcom Follow shows LOW/HIGH from Share (D30); Nightscout LOW shows "LOW" and LoopFollow alarms (D29).
+- Urgent low as an AlarmKit system alarm on silent while suspended, incl. repeats and Stop → acknowledge (D26).
+- Widget lag measured and recorded in docs/widgets.md; DB writes while locked for hours (file protection).
 
 ## Open questions for Michael
 
