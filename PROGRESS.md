@@ -19,8 +19,8 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (65787e4): 127 tests; fixing N1/N2 | FAIL → fixed; delta **FAIL** (N1 one terminal-state packet ends the session forever while status shows Active) → fixing | — |
 | WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (a1f0c6c): 92 + 39 tests, 98.2% / 97.3% cov | **PASS** (after 2 fix rounds) | **yes** — 3b51811 (+ a4a782e store compile-out gate); gates PASS on merged result |
 | WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (de6da6b): 150 tests, 99.88% cov, 90 d in 5.8 ms release | **PASS** (after 2 fix rounds) | **yes** — 3002c9d; gates build+tests+safety PASS on merged result |
-| WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (564eca3): 214 tests, 99.2% cov; due-repeat blocker + partial rollback fixed | 2 FAILs → fixed; second delta re-review running | — |
-| WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | done (a5296a2); fixing N1 (post-mismatch catch-up entry), n2, n3 | **PASS** (delta: 0 blockers) | — |
+| WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (564eca3): 214 tests; fixing ID-reuse major | **PASS** (second delta); ID reuse fix before merge | — |
+| WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | done (ea2e587): 68 + 64 tests; N1 clock-mismatch latch, n2, n3 | **PASS**; final check of N1 running | — |
 | WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (cbf5619): 62 tests, 97.8% cov | **PASS** (after 2 fix rounds) | **yes** — 9305a72; gates build+tests+safety (S2–S6) PASS on merged result |
 | WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (a70f3ae): 111 tests, 91.9% cov | **PASS** (after 3 fix rounds) | **yes** — 6113de7; gates PASS on merged result (480 tests, S1–S6) |
 
@@ -109,6 +109,8 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 
 - Alert threshold ranges: one source of truth — the UI clamps (WS5 `AppModel.updateAlert`: Low 60–100, High 120–400, rate 2–5) must use AlertEngine's `AlertLimits`, not its own numbers (reconcile in wiring).
 
+- Persist `NowViewState.clockMismatchLatchedFor` across app relaunch; carry it over on every view-state rebuild and mirror into `CalibrationViewState` (WS5).
+
 ## §11 on-device checklist additions (collected from reviews; goes into docs/setup.md in Phase 3)
 
 - Capture raw G7 packets for a real LOW and HIGH (D31) before relying on HIGH→401 in closed loop.
@@ -119,6 +121,7 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Trio loop cadence with the phone locked 30+ min (heartbeat); Dexcom Follow shows LOW/HIGH from Share (D30); Nightscout LOW shows "LOW" and LoopFollow alarms (D29).
 - Urgent low as an AlarmKit system alarm on silent while suspended, incl. repeats and Stop → acknowledge (D26).
 - Widget lag measured and recorded in docs/widgets.md; DB writes while locked for hours (file protection).
+- Change the phone's time manually during an urgent-low snooze (rollback detection with the monotonic clock, WS4); AlarmKit: 31 alarms at the 2-min floor, wake 30 s before / 3 s after a repeat, revoke alarm permission with repeats pending.
 
 ## Open questions for Michael
 
