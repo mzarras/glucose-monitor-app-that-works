@@ -277,6 +277,8 @@ gate_safety() {
     # S6: replay code and the replay-accepting gate must not exist in Release builds.
     compiled_out_check ReplayKit '$s9ReplayKit' "ReplayKit"
     compiled_out_check GlucoseCore 'validateAllowingReplay' "LiveReadingGate.validateAllowingReplay"
+    # GlucoseStore's replay role and its factories (D20) — mangled prefix of GlucoseStore.replay(…).
+    compiled_out_check GlucoseStore '$s12GlucoseStoreAAC6replay' "GlucoseStore replay role"
 
     # S6 / D11: only the alert engine and the app's replay wiring may call validateAllowingReplay.
     callers="$(grep -rl 'validateAllowingReplay' Packages/*/Sources App/Sources Widgets/Sources 2>/dev/null \
