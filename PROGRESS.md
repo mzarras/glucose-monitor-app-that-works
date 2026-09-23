@@ -18,10 +18,10 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 |---|---|---|---|---|---|
 | WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (6da2eae): 106 tests, 99% cov Messages/; fixing review | **FAIL** (B1 unsolicited auth status accepted; B2 `currentSession` vs D28) → fixing | — |
 | WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (7aa1ef6): 83 + 38 tests, 98.3% / 97.6% cov; D25, D28 applied | in review | — |
-| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (a332581): 146 tests, 99.75% cov; review fixes + D24 applied | **PASS**; delta re-review running | — |
+| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (a332581): 146 tests, 99.75% cov; fixing N1 (today's lows during an overnight low) | **PASS** (delta PASS) | — |
 | WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (d1f946c): 161 tests, 99.6% cov; fixing review + AlarmKit (D26) | **FAIL** (B1 clock rollback hides urgent low / extends snooze) → fixing | — |
 | WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | done (3287a14): 61 + 52 tests, 132 previews, 26 screenshots | in review | — |
-| WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (cbf5619): 62 tests, 97.8% cov | **PASS**, delta FAIL (nil session removed payload) → fixed; re-review running | — |
+| WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (cbf5619): 62 tests, 97.8% cov | **PASS** (after 2 fix rounds) | **yes** — 9305a72; gates build+tests+safety (S2–S6) PASS on merged result |
 | WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (8e4889c): 96 tests, 90.3% cov; fixing review | **FAIL** (B1 Nightscout alarms silent at LOW → D29 disclosure; M1 Clarity order) → fixing | — |
 
 ### Merge flow
@@ -93,6 +93,8 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Signal loss must be derived from reading age, never from `SensorState` (G7Kit suppresses connecting/authenticating after the first sensor state; WS1 review minor 8).
 - Hosted (simulator) Keychain round-trip tests for G7Kit and NightscoutKit credential stores (WS1 review M3, WS7): accessibility `AfterFirstUnlock`, not synchronizable.
 - Trio heartbeat: WS1 assessed it as low risk (Trio subscribes to Receive_Authentication only, never writes); implement per `docs/trio-bridge.md` "Heartbeat wiring".
+
+- TrioBridge follow-ups (WS6 re-review r1/r2, minor): doc note that after a relaunch a leftover ended-session payload is replaced only by the next write; a named test for a sensor stopped early before grace end.
 
 ## §11 on-device checklist additions (collected from reviews; goes into docs/setup.md in Phase 3)
 
