@@ -1,0 +1,258 @@
+# Statistics (GlucoseStats)
+
+What every number on the Trends screen and in "Today so far" means, how it is computed, and which
+test proves it. Source: `Packages/GlucoseStats/Sources/GlucoseStats/`. Spec: HANDOFF §6, §7.3.
+
+GlucoseStats is pure functions over `[GlucoseReading]`: no UI, no storage, no clock, no I/O. It
+never creates, changes or smooths a reading (S1) and never turns LOW/HIGH into a number (S4).
+
+## API
+
+```swift
+let options = StatisticsOptions(calendar: .current)   // time zone + calendar; overnight window optional
+
+// One period, every metric:
+let stats: PeriodStatistics = GlucoseStatistics.compute(readings: readings, interval: interval, options: options)
+
+// Trends: N calendar days ending now, vs the N days before:
+let comparison: PeriodComparison = GlucoseStatistics.compare(readings: readings, period: .fourteenDays, now: now, options: options)
+
+// Now screen, "Today so far":
+let today: PeriodStatistics = GlucoseStatistics.todaySoFar(readings: readings, now: now, options: options)
+
+// AGP chart geometry (display only, never a metric):
+let lines: [AGPDisplayBucket] = AGPDisplaySmoothing.smoothedForDisplay(stats.agp)
+```
+
+`readings` is normally `GlucoseReadingRepository.readings(from:to:)` covering the whole span
+(for `compare`, both periods). Each metric is also a standalone type built from `PeriodReadings`
+(`RangeDistribution`, `MeanAndVariability`, `DataSufficiency`, `AGPProfile`, `HypoEvents`,
+`OvernightAndDayTimeInRange`, `InRangeStreak.longest`), which is how the tests exercise them.
+
+### Units
+
+| Kind | Unit | Example field |
+|---|---|---|
+| Any share or proportion | **percent, 0…100, unrounded** (never a 0…1 fraction) | `ranges.inRange.percent` |
+| CV, GMI | percent | `meanAndVariability.coefficientOfVariationPercent`, `gmi.percent` |
+| Glucose | mg/dL (`Double` for mean/SD) | `meanAndVariability.meanMgdl` |
+| Durations | seconds (`TimeInterval`) | `hypoEvents.level1.meanDuration`, `longestInRangeStreak.duration` |
+| Comparison deltas | percentage points (`…DeltaPoints`), mg/dL (`…DeltaMgdl`), seconds (`…DeltaSeconds`), counts (`…CountDelta`) | `comparison.inRangeDeltaPoints` |
+
+A value that cannot be computed is `nil`, never 0: no readings → no TIR; one reading → no SD.
+The UI rounds for display; bins may then not add to exactly 100.
+
+## Which readings count (`PeriodReadings`)
+
+1. **Interval.** `start <= date < end` (half-open, same as the repository). Everything else is ignored.
+2. **One reading per instant.** Readings with an identical `date` count once. Kept: `.sensor` over
+   `.imported` over the DEBUG-only replay/mock sources; then live over backfill; then the smallest
+   `id`. Deterministic regardless of input order. Readings at *different* instants are never merged
+   here; the store already drops imported readings within ±150 s of another reading
+   (`GlucoseReadingRepository.insert`). `duplicateCount` reports what was dropped.
+3. **Order.** Ascending by date. Input that is not strictly ascending is sorted.
+4. **All sources count.** Imported history is used for stats (S6 allows charts and stats);
+   `containsImportedReadings` is true when any *counted* reading is imported and drives the Trends
+   footnote (HANDOFF §4.5 step 4). An imported copy that lost to a sensor reading does not set it.
+5. **Values are used as reported.** LOW/HIGH stay flags. Numbers outside the sensor's 40–400 (only
+   possible in imported history) are binned by their band and used in the mean.
+
+Each counted reading carries its local wall-clock time of day (`secondOfDay`), its band, and
+whether a gap precedes it (`startsAfterGap`).
+
+### Local time of day and DST
+
+`secondOfDay = (Unix time + the zone's UTC offset at that instant) mod 86 400`, using the injected
+calendar's time zone. On a fall-back day both 01:30s map to 01:30; on a spring-forward day nothing
+maps to 02:00–02:59. AGP buckets, the overnight window and the hypo histogram use wall-clock time.
+Anything that counts *expected* readings uses real elapsed seconds (a 23-hour day expects 276
+readings, a 25-hour day 300). Tests: `PeriodReadingsTests.testSecondOfDay*`,
+`AGPTests.testFallBack…`, `…SpringForward…`, `DataSufficiencyTests.test…Day…`.
+
+### Continuity: gaps and durations (`Continuity`)
+
+- A reading **covers** from its timestamp until the earliest of: +5 minutes, the next counted
+  reading, the end of the period. So no duration runs past `now` or the period end.
+- Consecutive readings **more than 15 minutes apart** are a gap. A gap ends every run and every
+  hypo event. 15 minutes exactly is bridged (as the chart draws a line across it, §7.5).
+- A run's **duration** = coverage end of its last reading − timestamp of its first. With regular
+  5-minute readings, 3 readings = 15 minutes.
+- Only durations bridge short gaps; no value is ever created for the unobserved minutes (S1).
+
+## Metrics
+
+### Time in ranges (`RangeDistribution`)
+
+Share of counted readings in each International Consensus bin (Battelino et al., *Diabetes Care*
+2019;42:1593, Table 2 "Standardized CGM Metrics for Clinical Care", items 6–10), using
+`GlucoseBand`/`GlucoseThresholds` from GlucoseCore:
+
+| Field | Range (mg/dL) | Notes |
+|---|---|---|
+| `veryLow` | < 54 | includes every LOW flag |
+| `low` | 54–69 | |
+| `inRange` | 70–180 | TIR, the Trends hero |
+| `high` | 181–250 | |
+| `veryHigh` | > 250 | includes every HIGH flag |
+| `tightRange` | 70–140 | TITR; numeric only, a subset of `inRange` |
+| `below70`, `above180` | < 70, > 180 | sums of the two bins each |
+
+`percent = count × 100 / readingCount`; the denominator includes LOW/HIGH. "% of readings", as
+HANDOFF §6 specifies (each 5-minute reading stands for 5 minutes). Tests: `RangeDistributionTests`
+(every boundary 53/54, 69/70, 140/141, 180/181, 250/251), `test_S4_lowCountsBelow54…`.
+
+### Mean, SD, CV (`MeanAndVariability`)
+
+- Mean = Σx / n over **numeric** readings only (LOW/HIGH excluded, S4).
+- **SD is the sample SD, √(Σ(x − mean)² / (n − 1))**, two-pass. Why: a period's readings sample
+  a continuous glucose curve; it matches what a reviewer would cross-check with (R `sd()` as used by
+  iglu/cgmanalysis, Excel `STDEV.S`); it is undefined for one reading, so a single value never
+  produces "CV 0 %". Over 14 days (~4 000 readings) sample and population SD differ by ~0.01 %.
+  Test `testStandardDeviationIsSampleNotPopulation`: [100, 200] → 70.71, not 50.
+- CV = SD / mean × 100 (%). `nil` when SD is `nil` or mean ≤ 0. Target **≤ 36 %**
+  (`coefficientOfVariationTargetPercent`, `isCoefficientOfVariationWithinTarget`). HANDOFF says
+  "≤ 36%"; the consensus table reads "<36%"; they differ only at exactly 36.0.
+
+### GMI (`GlucoseManagementIndicator`)
+
+GMI (%) = 3.31 + 0.02392 × mean (mg/dL) (Bergenstal et al., *Diabetes Care* 2018;41:2275).
+Mean 150 → 6.898 %. `isMeaningful` = the period touches ≥ 14 local calendar dates
+(`CalendarDays.count`); below that `percent` is **nil**, not merely flagged, so a 3-day GMI cannot
+be displayed by mistake ("needs 14 days", §7.3). The Trends "14 D" period (14 dates ending now)
+qualifies even though fewer than 14 × 24 h have elapsed. All-LOW input → no mean → no GMI.
+
+### Data sufficiency (`DataSufficiency`)
+
+- expected = ⌊period length in real seconds / 300⌋; present = counted readings.
+- percent = min(present, expected) × 100 / expected, capped at 100; `nil` when expected is 0.
+- `isBelowWarningThreshold` = percent < 70 (`warningThresholdPercent`), and also true when percent
+  is `nil`. Exactly 70 % is not a warning. Threshold: "Percentage of time CGM is active (recommend
+  70% of data from 14 days)" (Battelino 2019, Table 2 item 2). Shown for every period (§7.3).
+
+### AGP percentiles (`AGPProfile`)
+
+96 buckets of 15 minutes of local wall-clock time; each bucket pools every day's readings in that
+slot and reports p5, p25, p50, p75, p95 and `readingCount`.
+
+**Percentile method: nearest rank.** With the bucket's n readings in ascending order, the p-th
+percentile is the r-th smallest, r = ⌈p × n / 100⌉ (integer arithmetic `(p·n + 99) / 100`).
+Ordering puts every LOW below every number and every HIGH above. Consequences, all tested:
+
+- every percentile is a value that was actually read (no interpolation, S1:
+  `test_S1_everyAGPPercentileIsAnObservedReading`);
+- a percentile can be `.belowRange`/`.aboveRange`, never 40/400 (S4: `test_S4_agpPercentilesKeepTheFlags`);
+- with an even n the median is the lower middle value (n = 20 → p50 is the 10th value).
+
+An empty bucket has `nil` percentiles. §7.3: the UI replaces the AGP with real traces for 1 D/3 D.
+
+**Display smoothing (`AGPDisplaySmoothing.smoothedForDisplay`)** is a separate function that
+returns chart geometry (`AGPDisplayValue`), not readings: each line is smoothed with 1-2-1 weights
+over the bucket and its neighbours (the day wraps). Empty buckets stay empty, LOW/HIGH buckets stay
+flags, and flag or empty neighbours are left out with the weights renormalised. It never modifies
+the profile and no statistic contains its output (`test_S1_displaySmoothingLeavesTheProfileUntouched`,
+`test_S1_statisticsNeverContainDisplaySmoothedValues`, `test_S1_displaySmoothingNeverFillsAnEmptyBucket`,
+`test_S4_displaySmoothingNeverTurnsAFlagIntoANumber`).
+
+### Hypo events (`HypoEvents`, `HypoEventSummary`)
+
+As HANDOFF §6 defines them (Battelino 2019 Table 1 lists "Episodes … 15 min" as a core metric):
+
+| | Starts | Ends |
+|---|---|---|
+| Level 1 | a run of readings < 70 lasting ≥ 15 min | a run ≥ 70 lasting ≥ 15 min |
+| Level 2 | a run of readings < 54 lasting ≥ 15 min | a run ≥ 70 lasting ≥ 15 min |
+
+Durations use the Continuity rules. LOW counts as below 54 (and 70); HIGH as ≥ 70.
+
+- An event starts at the first reading of its qualifying run. A short excursion ≥ 70 (< 15 min)
+  does not end it. Readings of 54–69 continue a level 2 event.
+- `end` = coverage end of the event's last reading below 70; `duration` = end − start.
+- `endedBy`: `.recovery` (15 min ≥ 70), `.gap` (> 15 min without readings: the event is not
+  extended across it and a low after the gap is a new event), or `.noMoreReadings` (the period's
+  readings ran out; for "today so far" the low is ongoing).
+- Reported per level: `events`, `count`, `meanDuration` (s), `startHourHistogram` (24 local hours).
+  `busiestWindow(hourCount:)` gives e.g. "4 of 6 between 2–5 AM": the window with the most event
+  starts, considering only windows that start at an hour with an event; ties → earliest.
+- Consequence of bridging: two readings < 70 ten minutes apart with one missed reading between them
+  qualify (10 + 5 = 15 min). Two 10-minute lows split by a > 15-minute gap do not.
+
+Tests: `HypoEventTests` (qualify/not, merge, split, gap exactly 15 min and 15 min + 1 s, level 2
+tail, open at period end, clipping at `now`, sub-5-minute spacing, histogram, wrap past midnight,
+fall-back hour), `test_S1_hypoEventsAreNotJoinedAcrossGaps`, `test_S4_lowFlagIsALevel2Low`.
+
+**"Today so far → lows"** is `hypoEvents.level1.count` (every level 2 event also starts or extends
+a level 1 event, so level 1 is the complete count).
+
+### Overnight vs day TIR (`OvernightAndDayTimeInRange`)
+
+TIR (70–180) among readings whose local time of day is inside `StatisticsOptions.overnightWindow`
+(default 00:00–06:00, `[start, end)`, may wrap past midnight, e.g. 22:00–06:00) vs all other
+readings ("day"). `DailyWindow` rejects out-of-range bounds and empty windows.
+
+### Longest in-range streak (`InRangeStreak.longest`)
+
+Longest run of consecutive 70–180 readings with no gap > 15 min, measured with the Continuity
+rules; ties → earliest. LOW/HIGH break the run. `nil` without in-range readings.
+
+### Periods and comparison (`CalendarDayPeriod`, `PeriodComparison`)
+
+- Trends choices 1/3/7/14/30/90 D (default 14). Current = `[start of the day N − 1 days before
+  today, now)`; preceding = the **N full calendar days immediately before** it. So 1 D = today so
+  far vs all of yesterday; 14 D on Sep 23 = Sep 10 – Sep 23 vs Aug 27 – Sep 9.
+- Both periods span N calendar days; the current one ends `now`, so it is up to one day shorter in
+  elapsed time. All compared quantities are percentages, means or per-event averages, so they
+  compare fairly; data sufficiency uses each period's own elapsed time. Day arithmetic uses the
+  calendar (a DST day is 23 or 25 h).
+- Every metric has a delta = current − previous, `nil` when either side is `nil`. Event-count
+  deltas are `nil` if either period has no readings. `previousHasSufficientData` tells the UI when
+  the comparison rests on thin data.
+
+### After-exercise TIR (v1.1 stub)
+
+`AfterExerciseTimeInRange` has one case, `.unavailable`; `isImplemented` is `false`; every
+`PeriodStatistics` carries `.unavailable`. Nothing is computed (needs HealthKit workouts, §12).
+
+## Safety
+
+| Rule | Where | Tests |
+|---|---|---|
+| S1 | Metrics read only `CountedReading`s built from real readings; AGP percentiles are observed values (nearest rank); display smoothing is a separate type not stored in any statistic; gaps are never filled | `test_S1_displaySmoothingLeavesTheProfileUntouched`, `…StatisticsNeverContainDisplaySmoothedValues`, `…EveryAGPPercentileIsAnObservedReading`, `…NoMetricFabricatesValuesAcrossGaps`, `…DisplaySmoothingNeverFillsAnEmptyBucket`, `…HypoEventsAreNotJoinedAcrossGaps` |
+| S4 | LOW/HIGH excluded from mean/SD/CV/GMI, counted in < 54 / > 250, ordered as extremes in percentiles, kept as flags by smoothing | `test_S4_lowAndHighAreExcludedFromMeanSDAndGMI`, `…LowCountsBelow54AndHighCountsAbove250`, `…AllLowGivesNilMeanAndHundredPercentBelow54`, `…AllHighGivesNilMeanAndHundredPercentAbove250`, `…LowIsNeverTreatedAs40AndHighNeverAs400`, `…AgpPercentilesKeepTheFlags`, `…DisplaySmoothingNeverTurnsAFlagIntoANumber`, `…LowFlagIsALevel2Low` |
+
+## Performance
+
+Requirement (§6): all statistics for 90 days in < 100 ms on device-class hardware. Proxy asserted
+in `PerformanceTests`: < 50 ms on the host for 90 days (25 920 readings, New York time zone), and
+< 100 ms for the 90 D comparison (two 90-day periods from 51 840 readings). The assertion uses the
+best of 7 runs because the host is shared with parallel builds and contention only adds time; the
+median and worst runs are printed too.
+
+Measured on the host (Apple M4, Swift 6.2.3), best / median of 7, in separate runs while other
+builds shared the machine:
+
+| Build | 90-day `compute` | 90 D `compare` |
+|---|---|---|
+| Release (`swift test -c release`) | 4.9 / 5.2 ms | 9.8 / 10.0 ms |
+| Debug (`swift test`) | 19.9 / 20.8 ms | 42.8 / 43.0 ms |
+| Debug + coverage (`scripts/check.sh` gate run) | 21.0 / 21.2 ms | 43.3 / 44.1 ms |
+
+The app ships the Release build, so on a phone expect roughly 5–15 ms.
+
+Two implementation choices exist only because the gate times the *unoptimised* build, where
+generic standard-library code is not specialised:
+
+- Metrics iterate with `PeriodReadings.forEachReading` (a plain index loop) instead of `for … in`,
+  about 4× cheaper per element at `-Onone`.
+- AGP buckets are sorted with `OrderedValues.sortedAscending`, a counting sort (tally each mg/dL,
+  write the values back in order) that returns exactly `sorted()` (`testTallySortEqualsStandardSort`,
+  2 000 random arrays). Spreads over 4 096 mg/dL, only possible in corrupt imported data, fall back
+  to `sorted()`. The generic `sorted()` alone took ~20 ms for the 96 buckets at `-Onone`.
+
+## Open points
+
+- HANDOFF ends level 2 events at ≥ 70 mg/dL. Some later texts (e.g. clinical-trial analysis plans
+  citing the consensus) end level 2 at ≥ 54 for 15 min. I could not verify the primary source, so
+  HANDOFF's rule is implemented; switching is a one-constant change (`HypoLevel.exitThresholdMgdl`).
+- The "equal-length" previous period is equal in calendar days, not seconds (see Periods above).
+- Table numbers for Battelino 2019 are from the ADA-endorsed author manuscript
+  (eprints.whiterose.ac.uk/149168).

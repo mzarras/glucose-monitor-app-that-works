@@ -50,6 +50,28 @@ final class AGPTests: XCTestCase {
         }
     }
 
+    // MARK: Ordering used by the percentiles
+
+    func testTallySortEqualsStandardSort() {
+        // 2 000 pseudo-random arrays: spreads up to 4 096 use the tally, wider ones fall back to sorted().
+        var generator = LinearCongruentialGenerator(seed: 7)
+        let spreads = [1, 10, 360, 4_096, 5_000, 1_000_000]
+        for trial in 0..<2_000 {
+            let count = Int(generator.next() % 300)
+            let spread = spreads[trial % spreads.count]
+            let values = (0..<count).map { _ in Int(generator.next() % UInt64(spread + 1)) - spread / 2 }
+            XCTAssertEqual(OrderedValues.sortedAscending(values), values.sorted(), "trial \(trial)")
+        }
+    }
+
+    func testTallySortEdgeCases() {
+        XCTAssertEqual(OrderedValues.sortedAscending([]), [])
+        XCTAssertEqual(OrderedValues.sortedAscending([7]), [7])
+        XCTAssertEqual(OrderedValues.sortedAscending([400, 40, 400, 40, 41]), [40, 40, 41, 400, 400])
+        // Spread overflows Int → falls back to sorted() instead of trapping.
+        XCTAssertEqual(OrderedValues.sortedAscending([Int.max, Int.min, 0]), [Int.min, 0, Int.max])
+    }
+
     // MARK: Buckets
 
     func testNinetySixFifteenMinuteBuckets() {

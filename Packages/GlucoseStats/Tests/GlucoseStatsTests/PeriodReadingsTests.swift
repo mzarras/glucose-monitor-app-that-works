@@ -109,6 +109,21 @@ final class PeriodReadingsTests: XCTestCase {
         XCTAssertTrue(Fixture.period([sensor, importedInside], interval).containsImportedReadings)
     }
 
+    func testBandAndGapFlagsAreComputedPerCountedReading() {
+        // 00:00 LOW | 00:15 100 (15 min later: bridged) | 00:31 300 (16 min: gap) | 00:32 60
+        // plus an imported duplicate of 00:00, which must not affect the gap flags.
+        let readings = [
+            Fixture.reading(Fixture.at(0), .belowRange),
+            Fixture.reading(Fixture.at(0), .mgdl(90), source: .imported(.nightscout)),
+            Fixture.reading(Fixture.at(15), .mgdl(100)),
+            Fixture.reading(Fixture.at(31), .mgdl(300)),
+            Fixture.reading(Fixture.at(32), .mgdl(60)),
+        ]
+        let period = Fixture.period(readings, Fixture.interval(minutes: 60))
+        XCTAssertEqual(period.readings.map(\.band), [.veryLow, .inRange, .veryHigh, .low])
+        XCTAssertEqual(period.readings.map(\.startsAfterGap), [false, false, true, false])
+    }
+
     func testEmptyInput() {
         let period = Fixture.period([], Fixture.interval(minutes: 60))
         XCTAssertTrue(period.readings.isEmpty)

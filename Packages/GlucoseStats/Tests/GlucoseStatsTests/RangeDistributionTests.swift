@@ -67,6 +67,14 @@ final class RangeDistributionTests: XCTestCase {
         XCTAssertEqual(result.tightRange, RangeShare(count: 0, percent: 0))
     }
 
+    func testNumericValuesOutsideTheSensorRangeAreBinnedByBand() {
+        // Imported history may hold numbers outside the G7's 40–400 (GlucoseValue.sensorReportableRange).
+        // They are numbers, not flags, and go to their band: [30, 39, 401, 450] → < 54: 2, > 250: 2 (50 % each).
+        let result = distribution(Fixture.mg(30, 39, 401, 450))
+        XCTAssertEqual(result.veryLow, RangeShare(count: 2, percent: 50))
+        XCTAssertEqual(result.veryHigh, RangeShare(count: 2, percent: 50))
+    }
+
     func testShareOfBandMatchesNamedFields() {
         let result = distribution(Fixture.mg(40, 60, 100, 200, 300))
         XCTAssertEqual(result.share(of: .veryLow), result.veryLow)

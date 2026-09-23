@@ -64,6 +64,19 @@ final class MeanAndVariabilityTests: XCTestCase {
         XCTAssertEqual(result.coefficientOfVariationPercent!, 14.142135623730951, accuracy: 1e-9)
     }
 
+    func testNumericValuesOutsideTheSensorRangeAreUsedAsReported() {
+        // [30, 450] from imported history: mean (30 + 450) / 2 = 240; they are real numbers, not flags.
+        XCTAssertEqual(variability(Fixture.mg(30, 450)).meanMgdl, 240)
+    }
+
+    func testNoCoefficientOfVariationWithoutAPositiveMean() {
+        // [0, 0] (a corrupt import): mean 0, SD 0, CV = 0 / 0 is undefined → nil rather than NaN.
+        let result = variability(Fixture.mg(0, 0))
+        XCTAssertEqual(result.meanMgdl, 0)
+        XCTAssertEqual(result.standardDeviationMgdl, 0)
+        XCTAssertNil(result.coefficientOfVariationPercent)
+    }
+
     func testCoefficientOfVariationTargetIsInclusive() {
         XCTAssertEqual(MeanAndVariability.coefficientOfVariationTargetPercent, 36)
         XCTAssertTrue(MeanAndVariability.isWithinTarget(coefficientOfVariationPercent: 36))
