@@ -98,7 +98,7 @@ public struct PlacedScrubCallout: View {
     }
 
     /// Left edge of the callout, relative to the plot.
-    static func left(ruleX: CGFloat, width: CGFloat, plotWidth: CGFloat, gap: CGFloat = 8) -> CGFloat {
+    nonisolated static func left(ruleX: CGFloat, width: CGFloat, plotWidth: CGFloat, gap: CGFloat = 8) -> CGFloat {
         let right = ruleX + gap
         if right + width <= plotWidth { return right }
         return max(0, ruleX - gap - width)
