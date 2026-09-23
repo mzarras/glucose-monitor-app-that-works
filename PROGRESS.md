@@ -17,7 +17,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | WS | Agent | Branch / worktree | State | Review | Merged to `integration` |
 |---|---|---|---|---|---|
 | WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | dispatched | — | — |
-| WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | dispatched | — | — |
+| WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (4195211, 71b6c1a): 77 + 35 tests, 98.2% / 96.7% cov; applying D25 | pending | — |
 | WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (9e7cc08): 134 tests, 99.7% cov, 90 d in 4.9 ms release; fixing review items | **PASS** (0 blockers; M1 biased count/streak deltas, M2 flaky perf gate → fixing) | — |
 | WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | dispatched | — | — |
 | WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | dispatched | — | — |
@@ -58,6 +58,7 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D22 | No Trio patch. Michael selects Trio's existing **xDrip4iOS** CGM source. "Trio not consuming for 15 min" is not detectable (Trio writes nothing to the group) and is not built; bridge write failures still alert. Single upload: Trio → Nightscout → "Allow Uploading" ON, "Upload Glucose" OFF (this also stops Trio uploading manual fingersticks). | Michael, 2026-09-23 (WS6 findings, `docs/trio-bridge.md`). |
 | D23 | Chart scrubbing with haptic ticks (Now chart, Trends 1 D/3 D): drag selects the nearest **real** reading (never interpolated, S1), callout shows value/time (LOW/HIGH as text, S4), selection haptic on each change, no tick and "No data" inside gaps > 15 min; accessible via Swift Charts audio graph. Settings → Appearance: System (default) / Light / Dark; widgets follow the system. Dark mode itself was already in scope (§7.1). | Michael, 2026-09-23. |
 | D24 | Hypo events follow the 2023 consensus Table 4 (Battelino et al., Lancet Diabetes Endocrinol 2023;11:42–57, p. 50): level 1 ends after ≥ 15 consecutive min ≥ 70, **level 2 ends after ≥ 15 consecutive min ≥ 54** (changes HANDOFF §6, which ended both at ≥ 70). | Michael, 2026-09-23, after the WS3 reviewer verified the primary source. |
+| D25 | **Database lives in the app's own container** (Application Support, `completeUntilFirstUserAuthentication`, included in backup); only the widget snapshot lives in the App Group. Deviates from HANDOFF §4.5, which put both in the App Group. Both stores refuse numeric values outside 40...400 (`GlucoseReadingRepositoryError.implausibleValue`, whole batch). | WS2: iOS terminates a suspended app holding a SQLite lock on a file in a shared container (0xDEAD10CC); only the app opens the DB — the widget reads the snapshot (D10), which is what §4.5's locked-read requirement needs. Store-level range check is defence in depth for S1 (WS2 open question 4). |
 
 ## Discrepancies with HANDOFF (resolved)
 
@@ -78,6 +79,9 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 
 - Uploaders don't flush on their own: the app calls `ReadingUploader.flushIfDue()` after each submitted reading and on foreground/background time, `flush()` after credential changes; queue directory in the App Group container; Nightscout token + Share credentials via `KeychainCredentialStore`; import checkpoint via `UserDefaultsNightscoutImportCheckpointStore`; `deviceName` from `APP_DISPLAY_NAME` (WS7).
 - NOTICE.md at merge: xDrip4iOS Share files (WS7 list); cgm-remote-monitor (AGPL-3.0, reference only, no code); share2nightscout-bridge (**GPL-3.0-only** per its package.json — WS7 guessed MIT; reference only); LoopKit dexcom-share-client-swift (MIT, reference); micro-ecc etc. from WS1.
+
+- Store opening before first unlock (BLE state-restoration launch after reboot) throws by design: retry on `protectedDataDidBecomeAvailable`, surface S5 until open, and hold incoming readings in memory meanwhile (G7 backfill covers the rest); base backfill requests on the latest *stored* reading (WS2).
+- DEBUG accelerated replay: the app uses `ReplayClock.now()` for staleness, alerts and the gate's `now` in replay wiring (WS2).
 
 ## Open questions for Michael
 
