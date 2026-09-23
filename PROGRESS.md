@@ -21,7 +21,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (9e7cc08): 134 tests, 99.7% cov, 90 d in 4.9 ms release | in review | — |
 | WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | dispatched | — | — |
 | WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | dispatched | — | — |
-| WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (346d4e2): 46 tests, 97.8% cov | in review | — |
+| WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (346d4e2): 46 tests, 97.8% cov; fixing review minors | **PASS** (0 blockers; M1 heartbeat → Phase 2 must-do; M2 decided D21) | — |
 | WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | dispatched | — | — |
 
 ### Merge flow
@@ -68,6 +68,13 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Trends mockup shows a 7/14/30/90 D selector, a forecast line (Now), and an "In range after runs" row; §7.3/§7.5/§6 win: 1/3/7/14/30/90 D, no forecast, after-runs row hidden until v1.1.
 - xDrip4iOS has a `7.1.1` tag after `7.1.0`. Reference checkout is `7.1.0` as specified; WS1 reviews the `7.1.0..7.1.1` diff for G7 fixes and reports.
 - Trio's App Group key is resolved through Info.plist `AppGroupID`, not a hard-coded string (see D2).
+
+## Phase 2 must-dos (carried from reviews)
+
+- **Trio heartbeat (WS6 review M1):** publish the G7 peripheral + service/auth-characteristic UUIDs into Trio's App Group (xDrip4iOS 7.1.0 `CGMG7Transmitter.swift:875-876`) so Trio is woken every ~5 min; without it Trio will not loop in the background on DASH/Dana/Medtrum. Pending WS1's assessment of a second central on the authenticated sensor. §11 step 4 must verify closed loop, backgrounded, locked, 30+ min.
+- Wire `OutOfRangePolicy` to LOW→39 / HIGH→401 explicitly, citing D21; add a `check.sh` lint that `.writeSentinel` appears outside `Packages/TrioBridge` only in lines citing D21 (WS6 review m7).
+- App calls `TrioBridge.publish([], session:)` on foreground and on a timer so a failed write retries without waiting for the next reading (WS6 review m4); re-seed the last ~5 h of `.sensor` readings on launch.
+- In DEBUG builds keep Trio bridge and uploaders off unless the developer switch is on (D20).
 
 ## Open questions for Michael
 
