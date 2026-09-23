@@ -47,6 +47,8 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D11 | S6 vs §10 gate 4 / §11 step 1: the alert engine may accept `.replay` readings **in DEBUG builds only** (`LiveReadingGate.validateAllowingReplay`, compiled only under `#if DEBUG`). Trio bridge and uploaders never accept replay. | Gate 4 requires alerts to fire on replay scenarios; S6's purpose (no non-sensor data reaching live consumers in a real build) is preserved because replay code does not exist in Release (`check.sh` verifies with `nm`). |
 | D12 | All tests use XCTest; safety tests named `test_S<n>_…`. Packages declare iOS 17 + macOS 14 so `swift test` and coverage run on the host. | Gate 3 greps names; host tests are fast. |
 | D13 | Sounds and fonts are copied flat into the bundle root from `Resources/Sounds` and `Resources/Fonts` (file names must be unique). | `UNNotificationSound` requires sounds in the main bundle; `UIAppFonts` lists file names. |
+| D14 | Subagents are dispatched as general-purpose agents with the full role prompt (§2 verbatim, working rules, brief, return format) embedded; opus for ble/alerts/trio/reviewer roles. The `.claude/agents/*.md` definitions are committed and load in future sessions. | Custom agent types are read at session start, so this session could not select them by name. |
+| D15 | Branch model: `main` = Phase 0 bootstrap only until all §10 gates pass; day-to-day orchestrator work happens on `integration`; each workstream branches from `integration` in `../wt-<ws>`. | §10: every merge to `main` needs all gates; gate 4 needs Phase 2. The Phase 0 bootstrap commit itself could not pass gates 3–4 (no feature code yet). |
 
 ## Discrepancies with HANDOFF (resolved)
 
@@ -67,4 +69,5 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Scaffold: `LICENSE` (GPL-3.0), `NOTICE.md`, `README.md`, `project.yml` (XcodeGen 2.46.0), `Config/` xcconfigs, nine packages under `Packages/`, app + widget + test targets, `.claude/agents/*` (9 roles, §2 verbatim), `scripts/check.sh`.
 - Contracts in `GlucoseCore` with 17 contract tests (S2, S3, S4, S6 covered).
 - `vendor-ref/xdripswift` @ `7.1.0` (`0370937`), `vendor-ref/Trio` @ `29350e31a` with submodules.
+- Phase 0 contracts sent to an independent safety review (in progress).
 - Gate results on the scaffold: build Debug/Release pass with zero warnings; package tests pass; safety S2/S3/S4/S6 pass, S1/S5/S7/S8 have no tests yet; coverage minimums fail (no code yet); replay gate fails (Phase 2). Expected at this point.
