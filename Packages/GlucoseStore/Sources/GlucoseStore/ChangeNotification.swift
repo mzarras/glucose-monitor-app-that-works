@@ -58,8 +58,9 @@ final class ChangeBroadcaster: Sendable {
 
 /// Calls `onCommitWithChanges` after each committed transaction that inserted, updated or deleted
 /// at least one row of the `reading` table. Transactions that changed nothing (for example an
-/// insert whose every id already existed: `ON CONFLICT DO NOTHING` fires no update hook) and
-/// rolled-back transactions are not reported.
+/// insert whose every id was already stored: ReadingInsertion checks the id first and executes no
+/// write statement, so SQLite's update hook never fires) and rolled-back transactions are not
+/// reported.
 ///
 /// GRDB calls every method on its writer queue, one transaction at a time, so the mutable flag
 /// needs no lock. The class is not Sendable and is only ever touched by GRDB.

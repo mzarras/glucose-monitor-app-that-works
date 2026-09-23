@@ -34,7 +34,7 @@ final class StoreRoleTests: XCTestCase {
 
     func test_S6_productionStoreRefusesReplayAndMock() async throws {
         for source: ReadingSource in [.replay, .mock] {
-            var store: GlucoseStore? = try GlucoseStore.productionInMemory()
+            var store: GlucoseStore? = try GlucoseStore.productionInMemory(now: testClock)
             let changes = store!.changes()
             // A valid sensor reading in the same call: the whole call fails, nothing is written.
             let batch = [sensorReading(at: 0), replayReading(at: 300, source: source)]
@@ -57,7 +57,7 @@ final class StoreRoleTests: XCTestCase {
 
     func test_S6_mixedBatchIsRejectedWhole() async throws {
         // Production: allowed readings first and last, one mock in the middle.
-        let production = try GlucoseStore.productionInMemory()
+        let production = try GlucoseStore.productionInMemory(now: testClock)
         let mixed = [sensorReading(at: 0), replayReading(at: 300, source: .mock), importedReading(at: 3_600)]
         do {
             _ = try await production.insert(mixed)
@@ -70,7 +70,7 @@ final class StoreRoleTests: XCTestCase {
 
         #if DEBUG
         // Replay store: the mirror image.
-        let replay = try GlucoseStore.replay()
+        let replay = try GlucoseStore.replay(now: testClock)
         let mixedReplay = [replayReading(at: 0), sensorReading(at: 300), replayReading(at: 600, source: .mock)]
         do {
             _ = try await replay.insert(mixedReplay)
@@ -88,7 +88,7 @@ final class StoreRoleTests: XCTestCase {
         let sensor = sensorReading(at: 0)
         let imported = importedReading(at: -3_600)
         do {
-            let store = try await GlucoseStore.production(at: url)
+            let store = try await GlucoseStore.production(at: url, now: testClock)
             _ = try await store.insert([sensor, imported])
             try await writeRawRow(replayReading(at: 600), into: store)
             try await writeRawRow(replayReading(at: 900, source: .mock), into: store)
@@ -97,24 +97,24 @@ final class StoreRoleTests: XCTestCase {
         }
 
         let log = RecordingDiagnosticLog()
-        let reopened = try await GlucoseStore.production(at: url, diagnostics: log, now: { referenceInstant })
+        let reopened = try await GlucoseStore.production(at: url, diagnostics: log, now: testClock)
 
         let remaining = try await reopened.readings(from: referenceInstant.addingTimeInterval(-86_400), to: referenceInstant.addingTimeInterval(86_400))
         XCTAssertEqual(remaining, [imported, sensor])
         XCTAssertEqual(log.recorded, [DiagnosticEvent(
-            date: referenceInstant, category: .store,
+            date: testClockNow, category: .store,
             message: "Removed 2 replay/mock reading(s) from the production database on open (S6)"
         )])
     }
 
     func test_productionOpenWithNothingToPurgeRecordsNothing() async throws {
         let log = RecordingDiagnosticLog()
-        _ = try GlucoseStore.productionInMemory(diagnostics: log)
+        _ = try GlucoseStore.productionInMemory(diagnostics: log, now: testClock)
         XCTAssertEqual(log.recorded, [])
     }
 
     func test_S6_latestLiveReadingIsSensorOnlyInProduction() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let sensor = sensorReading(at: 0)
         _ = try await store.insert([sensor, importedReading(at: 3_600)])
         // Even a (forbidden) replay row newer than everything is not returned.
@@ -128,8 +128,8 @@ final class StoreRoleTests: XCTestCase {
     // MARK: Replay (DEBUG only: the replay role and its factories do not exist in Release)
 
     #if DEBUG
-    func test_S1_replayStoreRefusesSensorAndImported() async throws {
-        let store = try GlucoseStore.replay()
+    func test_S6_replayStoreRefusesSensorAndImported() async throws {
+        let store = try GlucoseStore.replay(now: testClock)
         for reading in [sensorReading(at: 0), importedReading(at: 600, origin: .nightscout), importedReading(at: 1_200, origin: .clarityCSV)] {
             do {
                 _ = try await store.insert([replayReading(at: 3_000), reading])
@@ -145,33 +145,65 @@ final class StoreRoleTests: XCTestCase {
     func test_replayStoreRefusesAFileHoldingLiveData() async throws {
         let url = directory.appendingPathComponent("readings.sqlite")
         do {
-            let production = try await GlucoseStore.production(at: url)
+            let production = try await GlucoseStore.production(at: url, now: testClock)
             _ = try await production.insert([sensorReading(at: 0), importedReading(at: 600)])
         }
         do {
-            _ = try await GlucoseStore.replay(at: url)
+            _ = try await GlucoseStore.replay(at: url, now: testClock)
             XCTFail("replay store opened the production file")
         } catch let error as GlucoseStoreError {
             XCTAssertEqual(error, .replayStoreFileContainsLiveData(rowCount: 2))
         }
-        let reopened = try await GlucoseStore.production(at: url)
+        let reopened = try await GlucoseStore.production(at: url, now: testClock)
         let rows = try await count(reopened)
         XCTAssertEqual(rows, 2, "the production rows are untouched")
+    }
+
+    func test_S6_refusingAProductionFileAsReplayChangesNothingInIt() async throws {
+        // An older (v1) production file, including a row v2 would drop: the replay check must run
+        // before any migration, so the file comes out exactly as it went in.
+        let url = directory.appendingPathComponent("readings.sqlite")
+        let base = referenceInstant.timeIntervalSinceReferenceDate
+        try makeV1Database(at: url, rows: [
+            ("S:0", base, "mgdl", 110, "sensor", nil),
+            ("imported:nightscout:1", base - 3_600, "mgdl", 90, "imported", "nightscout"),
+            ("bad:401", base + 300, "mgdl", 401, "sensor", nil),
+        ])
+        func snapshot() throws -> (migrations: [String], rows: [String]) {
+            let queue = try DatabaseQueue(path: url.path)
+            defer { try? queue.close() }
+            return try queue.read { db in
+                (try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"),
+                 try String.fetchAll(db, sql: "SELECT id || '|' || date || '|' || valueKind || '|' || ifnull(mgdl, '') FROM reading ORDER BY rowid"))
+            }
+        }
+        let before = try snapshot()
+
+        do {
+            _ = try await GlucoseStore.replay(at: url, now: testClock)
+            XCTFail("replay store opened a production file")
+        } catch let error as GlucoseStoreError {
+            XCTAssertEqual(error, .replayStoreFileContainsLiveData(rowCount: 3))
+        }
+
+        let after = try snapshot()
+        XCTAssertEqual(after.migrations, ["v1-create-reading"], "not migrated")
+        XCTAssertEqual(after.rows, before.rows, "no row changed or removed")
     }
 
     func test_replayStoreInItsOwnFileKeepsReplayRows() async throws {
         let url = directory.appendingPathComponent("replay.sqlite")
         do {
-            let store = try await GlucoseStore.replay(at: url)
+            let store = try await GlucoseStore.replay(at: url, now: testClock)
             _ = try await store.insert([replayReading(at: 0)])
         }
-        let reopened = try await GlucoseStore.replay(at: url)
+        let reopened = try await GlucoseStore.replay(at: url, now: testClock)
         let latest = try await reopened.latestLiveReading()
         XCTAssertEqual(latest, replayReading(at: 0))
     }
 
     func test_replayStoreLatestLiveReadingIsTheNewestReplayOrMockRow() async throws {
-        let store = try GlucoseStore.replay()
+        let store = try GlucoseStore.replay(now: testClock)
         _ = try await store.insert([replayReading(at: 0)])
         var latest = try await store.latestLiveReading()
         XCTAssertEqual(latest, replayReading(at: 0))
@@ -182,7 +214,7 @@ final class StoreRoleTests: XCTestCase {
     }
 
     func test_replayReadingsDedupeByIDButSkipTheImportOverlapRule() async throws {
-        let store = try GlucoseStore.replay()
+        let store = try GlucoseStore.replay(now: testClock)
         let first = replayReading(at: 0)
         let near = replayReading(at: 30, source: .mock)
         let newlyStored = try await store.insert([near, first, first])

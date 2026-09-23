@@ -7,6 +7,9 @@ import GlucoseCore
 /// shifted so the first entry lands on `origin` (spacing and gaps unchanged: nothing is filled in,
 /// S1). Pass `export.entries.first!.date` as the origin to keep the export's own timestamps.
 ///
+/// - Reading ids are `REPLAY-NIGHTSCOUT:<milliseconds since session start>`, so entries less than
+///   a second apart (two uploaders) stay distinct readings; entries with exactly the same `date`
+///   are dropped and counted by `NightscoutExport`.
 /// - Trend rate is always nil: Nightscout entries carry a direction name, not the sensor's rate,
 ///   and turning a name back into a number would fabricate one (S1).
 /// - The session is synthetic, serial `REPLAY-NIGHTSCOUT`: it starts 1 hour before the first
@@ -45,7 +48,7 @@ public final class NightscoutReplaySource: CGMSource {
         var events = [ReplayEvent(offset: 0, kind: .state(.active(sessionStart: session.start, expiresAt: session.expiresAt)))]
         for entry in export.entries {
             let date = entry.date.addingTimeInterval(shift)
-            let reading = factory.reading(at: date, entry.value, trend: nil)
+            let reading = factory.readingWithMillisecondID(at: date, entry.value, trend: nil)
             events.append(ReplayEvent(offset: date.timeIntervalSince(origin), kind: .reading(reading)))
         }
 

@@ -70,7 +70,7 @@ final class RetentionTests: XCTestCase {
     }
 
     func test_summaryReportsCountAndDateRange() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let empty = try await store.summary()
         XCTAssertEqual(empty, StoreSummary(readingCount: 0, earliest: nil, latest: nil, fileSizeBytes: nil))
 

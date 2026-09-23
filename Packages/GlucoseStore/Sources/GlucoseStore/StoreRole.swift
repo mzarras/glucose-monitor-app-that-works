@@ -27,7 +27,8 @@ enum StoreRole: Sendable, Equatable {
     }
 
     /// `latestLiveReading()`: the newest `.sensor` row in production, the newest `.replay`/`.mock`
-    /// row in a replay store; never `.imported`.
+    /// row in a replay store; never `.imported`. Equal dates: the row stored last wins (rowid, i.e.
+    /// delivery order; never id text order).
     var latestLiveReadingSQL: String {
         switch self {
         case .production:
@@ -36,7 +37,7 @@ enum StoreRole: Sendable, Equatable {
             return """
                 SELECT \(ReadingRow.selectColumns) FROM reading
                 WHERE sourceKind = 'sensor'
-                ORDER BY date DESC, id DESC
+                ORDER BY date DESC, rowid DESC
                 LIMIT 1
                 """
         #if DEBUG
@@ -44,7 +45,7 @@ enum StoreRole: Sendable, Equatable {
             return """
                 SELECT \(ReadingRow.selectColumns) FROM reading
                 WHERE sourceKind IN ('replay', 'mock')
-                ORDER BY date DESC, id DESC
+                ORDER BY date DESC, rowid DESC
                 LIMIT 1
                 """
         #endif

@@ -28,18 +28,26 @@ A store has one role for its whole life; the two roles never share a database.
 | `GlucoseStore.replay()` — `#if DEBUG` | replay, memory | `.replay`, `.mock` | newest `.replay`/`.mock` |
 | `GlucoseStore.replay(at:)` — `#if DEBUG` | replay, separate file | `.replay`, `.mock` | newest `.replay`/`.mock` |
 
-- `insert` checks the whole batch before writing (`ReadingInsertion.validate`). If any reading's
-  source is not allowed in the role it throws `GlucoseReadingRepositoryError.sourceNotAllowed(source)`;
-  if any numeric value is outside `GlucoseValue.sensorReportableRange` (40...400) it throws
-  `GlucoseReadingRepositoryError.implausibleValue(value)` (both roles, PROGRESS D25: such a number
-  can only come from a parse fault and would otherwise reach charts and stats, S1). Either way
-  nothing from the batch is stored.
+- `insert` checks the whole batch before writing (`ReadingInsertion.validate`) and, if any check
+  fails, throws and stores nothing from the batch. Both roles, in this order:
+  1. a source not allowed in the role → `GlucoseReadingRepositoryError.sourceNotAllowed(source)` (D20);
+  2. a numeric value outside `GlucoseValue.sensorReportableRange` (40...400) →
+     `.implausibleValue(value)` (D25);
+  3. a trend rate that is NaN or infinite → `.nonFiniteTrendRate` (D33);
+  4. a date later than the store's clock + `LiveReadingGate.futureTolerance` (60 s; exactly +60 s is
+     accepted, +61 s is not) → `.futureDated(date)` (D33). A future-dated row would otherwise
+     become the current value (S5).
+
+  Each can only come from a parse or clock fault; storing it would put it in charts, stats or the
+  current value (S1, S5). Nothing is ever rewritten to make it fit: `insert` returns the newly
+  stored readings **exactly as passed** (test `test_S2_insertReturnsReadingsExactlyAsPassed`).
 - Opening a **production** store deletes any `replay`/`mock` rows (a DEBUG build from before roles
   existed could have written them to the same file) and records a `DiagnosticEvent`
   (`"Removed N replay/mock reading(s) from the production database on open (S6)"`).
 - Opening a **replay** store on a file that contains `sensor`/`imported` rows throws
-  `GlucoseStoreError.replayStoreFileContainsLiveData(rowCount:)` and changes nothing, so the
-  production file can never be opened as a replay store by mistake.
+  `GlucoseStoreError.replayStoreFileContainsLiveData(rowCount:)`. The check is read-only and runs
+  **before any migration**, so the file comes out unchanged, even an older one that a migration
+  would have rewritten (test `test_S6_refusingAProductionFileAsReplayChangesNothingInIt`).
 - The replay role, both replay factories and their tests are compiled only in DEBUG.
 
 ## Schema
@@ -49,7 +57,7 @@ Migrations (append-only; `StoreSchema.swift`):
 | Migration | Change |
 |---|---|
 | `v1-create-reading` | the `reading` table and its two indexes |
-| `v2-mgdl-range-check` | PROGRESS D25: `mgdl` must be 40...400. SQLite cannot add a CHECK to an existing table, so v2 rebuilds it the standard way (create `reading_v2`, copy, drop, rename, recreate the indexes; https://www.sqlite.org/lang_altertable.html#otheralter). Rows with a number outside 40...400 are not copied; the store records `Migration v2-mgdl-range-check removed N stored reading(s) with a number outside 40...400 (parse faults, S1)`. |
+| `v2-mgdl-range-check` | PROGRESS D25: `mgdl` must be 40...400. SQLite cannot add a CHECK to an existing table, so v2 rebuilds it the standard way (create `reading_v2`, copy in rowid order, drop, rename, recreate the indexes; https://www.sqlite.org/lang_altertable.html#otheralter). Rows with a number outside 40...400 are not copied; the store records `Migration v2-mgdl-range-check removed N stored reading(s) with a number outside 40...400 (parse faults, S1)`. v2 also changes both indexes from `(date, id)` to `(date)` (see "Ordering"). |
 
 Current schema (after v2):
 
@@ -69,8 +77,8 @@ CREATE TABLE reading (
         CHECK (importOrigin IS NULL OR importOrigin IN ('nightscout', 'clarityCSV')),
     sensorSerial TEXT NOT NULL             -- '' when unknown
 );
-CREATE INDEX reading_on_date ON reading(date, id);
-CREATE INDEX reading_sensor_on_date ON reading(date, id) WHERE sourceKind = 'sensor';
+CREATE INDEX reading_on_date ON reading(date);
+CREATE INDEX reading_sensor_on_date ON reading(date) WHERE sourceKind = 'sensor';
 ```
 
 - **Rowid table on purpose.** SQLite does not call the update hook for `WITHOUT ROWID` tables, and
@@ -88,9 +96,10 @@ CREATE INDEX reading_sensor_on_date ON reading(date, id) WHERE sourceKind = 'sen
   `test_S1_schemaRejectsNumericValueOutsideSensorRange`, `test_migratesAV1DatabaseAddingTheRangeCheck`).
 - **Source and origin are exact** (S6): `sourceKind` + `importOrigin`, both CHECK-constrained. An
   imported row cannot come back as `.sensor`.
-- `trendRate` NaN: SQLite stores NaN as NULL, so the store normalises NaN to nil before storing and
-  before comparing; `TrendArrow` treats both as `.notComputable`. (`LiveReadingGate` refuses
-  non-finite rates anyway.)
+- `trendRate` is stored exactly as reported. A non-finite rate never reaches the table: the whole
+  batch is rejected with `.nonFiniteTrendRate` (D33; test `test_S2_nonFiniteTrendRateRejectsWholeBatch`).
+  It is never rewritten to nil, which would hide a parse fault from `LiveReadingGate` (and SQLite
+  would store NaN as NULL).
 - Decoding never guesses: a row with an unknown `valueKind`/`sourceKind`/`importOrigin` throws
   `GlucoseStoreError.unreadableRow`.
 - Migrations are append-only. A database containing migrations this version does not know (written
@@ -98,9 +107,13 @@ CREATE INDEX reading_sensor_on_date ON reading(date, id) WHERE sourceKind = 'sen
 
 ## Insert rules (`ReadingInsertion.swift`)
 
-First the whole batch is validated (role and 40...400, above); a refused batch writes nothing.
-Then one write transaction per `insert` call. Readings in the call are applied in ascending date
-order (ties by id), so every rule holds inside a batch exactly as across batches.
+First the whole batch is validated (the four checks above); a refused batch writes nothing. Then
+one write transaction per `insert` call. Readings in the call are applied in ascending date order,
+equal dates in the order they were passed, so every rule holds inside a batch exactly as across
+batches. If the write itself fails partway (an SQL error, or the calling task being cancelled —
+GRDB then interrupts the connection) the transaction rolls back: nothing is stored, nothing is
+returned, `changes()` does not yield (tests `test_S5_insertFailingMidBatchWithASQLErrorStoresNothing`,
+`test_S5_insertCancelledMidBatchStoresNothing`).
 
 1. **Same id already stored** → nothing is written; the stored row wins (S3: dedupe by the
    sensor-reported timestamp, which the id encodes).
@@ -124,8 +137,9 @@ order (ties by id), so every rule holds inside a batch exactly as across batches
    the same call (they are removed from the returned list too). One diagnostic per call:
    `Removed N imported reading(s) within ±150 s of new sensor readings`.
 
-`insert` returns only the rows newly stored and still present at commit, ascending by date. The
-pipeline passes each through `LiveReadingGate` before Trio, alerts or uploads.
+`insert` returns only the readings newly stored and still present at commit, exactly as the caller
+passed them, ascending by date (equal dates in the order passed). The pipeline passes each through
+`LiveReadingGate` before Trio, alerts or uploads.
 
 The SQL, in order, per reading:
 
@@ -139,12 +153,19 @@ DELETE FROM reading WHERE sourceKind = 'imported' AND date BETWEEN ? AND ?;
 
 ## Queries
 
-- `readings(from:to:)`: `WHERE date >= ? AND date < ? ORDER BY date, id` (half-open), served by
+**Ordering.** Everything is ordered by `date`, and readings with the *same* date by storage order
+(`rowid`): the one stored later comes later, and `latestLiveReading()` returns the one stored last.
+Storage order is delivery order (separate calls in call order; one call in the order passed), never
+the text order of ids (`"S:10"` sorts before `"S:9"`). Equal dates happen when, for example, an old
+and a new sensor report the same instant. Every index on a rowid table ends with the rowid, so
+`ORDER BY date, rowid` is read straight from the `(date)` indexes with no sort step (tests
+`test_latestLiveReadingOnEqualDatesIsTheReadingStoredLast`, `test_orderedQueriesNeedNoSortStep`).
+
+- `readings(from:to:)`: `WHERE date >= ? AND date < ? ORDER BY date, rowid` (half-open), served by
   `reading_on_date`. Returns stored rows only; gaps stay gaps (S1).
-- `latestLiveReading()`: production `WHERE sourceKind = 'sensor' ORDER BY date DESC, id DESC
-  LIMIT 1`, served by the partial index `reading_sensor_on_date` with no sort step (test
-  `test_latestLiveReadingUsesThePartialIndex` checks the query plan). Replay role:
-  `WHERE sourceKind IN ('replay', 'mock')`.
+- `latestLiveReading()`: production `WHERE sourceKind = 'sensor' ORDER BY date DESC, rowid DESC
+  LIMIT 1`, served by the partial index `reading_sensor_on_date`, one index entry read. Replay role:
+  `WHERE sourceKind IN ('replay', 'mock')`, same ordering.
 - `changes()`: a new `AsyncStream<Void>` per call (unbounded). A GRDB `TransactionObserver` on the
   `reading` table notes the first changed row of a transaction and yields once to every stream on
   commit. Transactions that changed nothing (all ids already stored, all imports skipped, a purge
@@ -165,18 +186,21 @@ synchronous (for previews).
   container, e.g. `Application Support/GlucoseStore/readings.sqlite`, not in the App Group
   container. Only the widget snapshot (WidgetCore, D10) lives in the App Group; that snapshot is
   what the widget reads while the phone is locked. The caller passes the database file URL; the
-  parent directory is created if needed.
-- On every open the store applies `FileProtectionType.completeUntilFirstUserAuthentication` to the
-  database, `-wal` and `-shm` files (after migration, when all three exist; a missing one is
-  recorded as a diagnostic). BLE wakes the app in the background while the phone is locked, and
+  parent directory is created if needed. Give the database a directory of its own (as above): the
+  store sets the protection class on that directory too.
+- On every open the store applies `FileProtectionType.completeUntilFirstUserAuthentication` first
+  to the **parent directory** (so a `-wal`/`-shm` that SQLite deletes on close and recreates later
+  inherits the class rather than the app's default), then to the database, `-wal` and `-shm` files
+  (after migration, when all three exist; a missing one is recorded as a diagnostic). BLE wakes the app in the background while the phone is locked, and
   with `.complete` those writes would start failing after the phone locks. The seam
   (`FileProtectionApplying`) lets a host test prove the exact value requested for each file
-  (`test_openRequestsProtectionForTheDatabaseAndItsWALFiles`); the real `SystemFileProtection`
+  (`test_openRequestsProtectionForTheDirectoryTheDatabaseAndItsWALFiles`); the real `SystemFileProtection`
   calls `FileManager.setAttributes` under `#if os(iOS)` and does nothing on macOS.
   **The effect itself can only be verified on a device** (HANDOFF §11 step 3a: readings keep
   saving while the phone stays locked for hours).
-- Before the first unlock after a reboot the file is unreadable by design (class C). Opening the
-  store then throws; the app must retry after first unlock (Phase 2 wiring).
+- Before the first unlock after a reboot the files are unreadable by design (that is what this
+  class means), so opening the store then throws; the app must retry once protected data becomes
+  available (Phase 2 must-do). The `production(at:)` doc comment says so.
 - The database is **not** excluded from backup (test `test_databaseIsNotExcludedFromBackup`);
   it goes into iCloud/device backups. Nightscout is the off-device copy.
 
@@ -212,7 +236,8 @@ not shrink (SQLite reuses the freed pages); no `VACUUM` is run. The app decides 
 `exportCSV(to:)` streams every row through a cursor, writing 64 KB chunks to a hidden
 `.<name>.partial` file next to the destination and moving it into place only when complete; a
 failed export leaves nothing at the destination. Returns the row count. UTF-8, no BOM, LF line
-endings, RFC 4180 quoting where a field contains `,` `"` CR or LF. Rows ascending by date, then id.
+endings, RFC 4180 quoting where a field contains `,` `"` CR or LF. Rows ascending by date, equal
+dates in storage order.
 
 ```
 date_utc,glucose_mgdl,trend_mgdl_per_min,is_backfill,source,import_origin,sensor_serial,id
@@ -259,16 +284,29 @@ Re-measured after migration v2 and the insert-time range check (debug, load ~15)
 90-day query 77 ms, `latestLiveReading()` 0.24 ms, `summary()` 74 ms, export 1.83 s — the same
 range as before.
 
+Re-measured after the D33 checks and the `(date)` indexes (debug): insert 9.4 s, 90-day query
+53 ms, `latestLiveReading()` 0.10 ms warm, `summary()` 20 ms, export 1.18 s; file size down to
+**30.3 MB** (the indexes no longer repeat the id text).
+
 The test asserts the 90-day query takes < 1 s and the warm `latestLiveReading()` < 50 ms (loose
 bounds so a loaded CI host still passes; the numbers above are what matter). Device numbers are for
 the Phase 3 "90-day dataset performance" pass.
 
 ## Tests
 
-`swift test` in `Packages/GlucoseStore` (83 tests in DEBUG; in `-c release` the 8 replay-role tests are compiled out, as the
-replay role does not exist). Safety tests: `test_S1_*` (range queries return stored rows only; the
-replay store refuses sensor/imported; numbers outside 40...400 refused by insert and schema), `test_S3_*` (dedupe, same-id conflicts vs benign re-deliveries, ordering, ±150 s
-rule both directions incl. 150/151 s, cross-origin, within a batch, backfill), `test_S4_*` (flags
-round-trip and are enforced by CHECK), `test_S6_*` (source/origin round-trip, imported never
-`.sensor`, `latestLiveReading` sensor-only, role refusals, mixed batches rejected whole, purge on
-open).
+`swift test` in `Packages/GlucoseStore` (92 tests in DEBUG; in `-c release` the replay-role tests
+are compiled out, as the replay role does not exist). Tests never use the wall clock: every store
+gets an injected clock (`testClock`, 2030-01-01, or a test's own). Safety tests:
+- `test_S1_*`: range queries return stored rows only; numbers outside 40...400 refused by insert
+  and by the schema;
+- `test_S2_*`: non-finite trend rate rejects the whole batch; `insert` returns readings exactly as
+  passed, ties in the order passed;
+- `test_S3_*`: dedupe, same-id conflicts vs benign re-deliveries, ordering, ±150 s rule both
+  directions incl. 150/151 s, cross-origin, both origins deleted by one sensor reading, within a
+  batch, backfill;
+- `test_S4_*`: flags round-trip and are enforced by CHECK;
+- `test_S5_*`: future-dated reading rejects the whole batch (+60 s accepted, +61 s not); an insert
+  failing mid-batch (SQL error, task cancellation) stores nothing and does not yield;
+- `test_S6_*`: source/origin round-trip, imported never `.sensor`, `latestLiveReading` sensor-only,
+  role refusals both ways, mixed batches rejected whole, purge on open, refusing a production file
+  as replay leaves it untouched.

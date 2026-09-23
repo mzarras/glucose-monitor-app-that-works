@@ -30,7 +30,7 @@ final class TimestampTests: XCTestCase {
         // the wall clock reads 03:30 EDT.
         let start = Date(timeIntervalSince1970: 1_772_951_400) // 2026-03-08T06:30:00Z
         XCTAssertEqual(start, localDate(2026, 3, 8, 1, 30))
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let expected = readings(startingAt: start)
         _ = try await store.insert(expected)
 
@@ -45,7 +45,7 @@ final class TimestampTests: XCTestCase {
         // 2026-11-01 02:00 EDT → 01:00 EST (06:00 UTC). 01:30 EDT = 05:30 UTC and 01:30 EST =
         // 06:30 UTC are different instants with the same wall-clock time.
         let start = Date(timeIntervalSince1970: 1_793_511_000) // 2026-11-01T05:30:00Z = 01:30 EDT
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let expected = readings(startingAt: start)
         _ = try await store.insert(expected)
 
@@ -59,7 +59,7 @@ final class TimestampTests: XCTestCase {
     }
 
     func test_storedDateIsSecondsSinceReferenceDateInUTC() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         _ = try await store.insert([sensorReading(at: 0)])
         let raw = try await store.writer.read { db in
             try Double.fetchOne(db, sql: "SELECT date FROM reading")

@@ -46,7 +46,8 @@ extension GlucoseStore {
         return total
     }
 
-    /// "Export all data (CSV)": streams every row, ascending by date, to `destination` in the
+    /// "Export all data (CSV)": streams every row, ascending by date (equal dates in storage
+    /// order), to `destination` in the
     /// format documented in CSVExport.swift and docs/storage.md. Memory use is constant: rows are
     /// read through a cursor and written in 64 KB chunks. The file is written next to the
     /// destination first and moved into place only when complete. Returns the number of rows.
@@ -54,7 +55,7 @@ extension GlucoseStore {
     public func exportCSV(to destination: URL) async throws -> Int {
         try await writer.read { db in
             try CSVFileWriter.write(to: destination) { emit in
-                let rows = try Row.fetchCursor(db, sql: "SELECT \(ReadingRow.selectColumns) FROM reading ORDER BY date, id")
+                let rows = try Row.fetchCursor(db, sql: "SELECT \(ReadingRow.selectColumns) FROM reading ORDER BY date, rowid")
                 var count = 0
                 while let row = try rows.next() {
                     try emit(CSVExport.line(for: try ReadingRow(row: row).reading()))

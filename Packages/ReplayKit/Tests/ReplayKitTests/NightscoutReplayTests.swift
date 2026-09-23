@@ -98,8 +98,10 @@ final class NightscoutReplayTests: XCTestCase {
         let ids = original.timeline.readingsInDeliveryOrder.map(\.id)
         XCTAssertEqual(Set(ids).count, 20)
         XCTAssertEqual(ids, shifted.timeline.readingsInDeliveryOrder.map(\.id), "ids do not depend on the origin")
-        // Session starts 1 h before the first entry: first id is serial:3600.
-        XCTAssertEqual(ids.first, GlucoseReading.sensorID(serial: NightscoutReplaySource.serial, sensorTimestamp: 3_600))
+        // Session starts 1 h before the first entry; ids are milliseconds since the session start.
+        XCTAssertEqual(ids.first, "REPLAY-NIGHTSCOUT:3600000")
+        // Last entry 14:50Z = first + 6 h 50 min = 24 600 s, plus the 3 600 s lead-in.
+        XCTAssertEqual(ids.last, "REPLAY-NIGHTSCOUT:28200000")
     }
 
     func test_S6_everyNightscoutReplayReadingIsReplay() async throws {
@@ -189,6 +191,23 @@ final class NightscoutReplayTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? NightscoutReplaySource.ReplayError, .noReadings)
         }
+    }
+
+    func test_S3_entriesLessThanASecondApartStayDistinct() async throws {
+        // Two uploaders posted the same reading 400 ms apart; a third copy has exactly the same
+        // date as the first. The replay keeps the two distinct instants and drops (and counts) only
+        // the exact duplicate.
+        let json = """
+            [{"type":"sgv","sgv":120,"date":1768032000000},
+             {"type":"sgv","sgv":121,"date":1768032000400},
+             {"type":"sgv","sgv":120,"date":1768032000000}]
+            """
+        let export = try NightscoutExport.parse(Data(json.utf8))
+        XCTAssertEqual(export.droppedDuplicateDateCount, 1)
+        let source = try NightscoutReplaySource(export: export, origin: segmentA, clock: ImmediateReplayClock(start: segmentA))
+        let readings = try await play(source)
+        XCTAssertEqual(readings.map(\.id), ["REPLAY-NIGHTSCOUT:3600000", "REPLAY-NIGHTSCOUT:3600400"])
+        XCTAssertEqual(readings.map(\.value), [.mgdl(120), .mgdl(121)])
     }
 
     func test_numericStringsAreAcceptedAndBooleansAreNot() throws {

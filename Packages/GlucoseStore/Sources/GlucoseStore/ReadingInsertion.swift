@@ -18,12 +18,18 @@ enum ReadingInsertion {
     /// land a second or so away. Inclusive.
     static let benignDateDifference: TimeInterval = 2
 
-    /// Checks the whole batch before anything is written, so a refused batch stores nothing:
-    /// 1. every source is allowed in the store's role (PROGRESS.md D20);
-    /// 2. every numeric value is inside `GlucoseValue.sensorReportableRange`, 40...400 (D25): a
-    ///    number outside it can only come from a parse fault, and storing it would put it in charts
-    ///    and stats (S1). The schema CHECK (migration v2) enforces the same range as a backstop.
-    static func validate(_ readings: [GlucoseReading], role: StoreRole) throws(GlucoseReadingRepositoryError) {
+    /// Checks the whole batch before anything is written, so a refused batch stores nothing. In
+    /// this order:
+    /// 1. every source is allowed in the store's role (PROGRESS.md D20) → `.sourceNotAllowed`;
+    /// 2. every numeric value is inside `GlucoseValue.sensorReportableRange`, 40...400 (D25) →
+    ///    `.implausibleValue`. The schema CHECK (migration v2) enforces the same range as a backstop;
+    /// 3. every trend rate is finite or nil (D33) → `.nonFiniteTrendRate`. Never rewritten to nil:
+    ///    the fault must stay visible to `LiveReadingGate`, and SQLite would store NaN as NULL;
+    /// 4. no reading is dated later than `now + LiveReadingGate.futureTolerance` (60 s, inclusive)
+    ///    (D33) → `.futureDated`. A future-dated row would become the current value (S5).
+    /// Each can only come from a parse or clock fault; storing it would put it in charts, stats or
+    /// the current value (S1, S5).
+    static func validate(_ readings: [GlucoseReading], role: StoreRole, now: Date) throws(GlucoseReadingRepositoryError) {
         if let refused = readings.first(where: { !role.allows($0.source) }) {
             throw .sourceNotAllowed(refused.source)
         }
@@ -31,6 +37,13 @@ enum ReadingInsertion {
             if case .mgdl(let value) = reading.value, !GlucoseValue.sensorReportableRange.contains(value) {
                 throw .implausibleValue(value)
             }
+        }
+        if readings.contains(where: { $0.trendRate.map { !$0.isFinite } ?? false }) {
+            throw .nonFiniteTrendRate
+        }
+        let latestAllowed = now.addingTimeInterval(LiveReadingGate.futureTolerance)
+        if let future = readings.first(where: { $0.date > latestAllowed }) {
+            throw .futureDated(future.date)
         }
     }
 
@@ -41,7 +54,8 @@ enum ReadingInsertion {
     }
 
     struct Outcome: Sendable {
-        /// Newly stored readings still present at commit, ascending by date (ties broken by id).
+        /// Newly stored readings still present at commit, exactly as the caller passed them,
+        /// ascending by date (equal dates in the order they were passed).
         var inserted: [GlucoseReading] = []
         /// Same id already stored with a real difference (value, trend rate, source, serial, or a
         /// date more than `benignDateDifference` away). The stored row was kept.
@@ -55,8 +69,9 @@ enum ReadingInsertion {
         var skippedImportedCount = 0
     }
 
-    /// Applies the rules to each reading, in ascending date order (ties by id) so they hold within
-    /// one batch exactly as across batches:
+    /// Applies the rules to each reading, in ascending date order (equal dates in the order they
+    /// were passed, so storage order — the tie-break everywhere — follows delivery order), so they
+    /// hold within one batch exactly as across batches:
     ///
     /// 1. Same id already stored → nothing is written; the stored row wins (S3: dedupe by
     ///    sensor-reported timestamp). A difference only in `isBackfill` and/or ≤ 2 s in date is
@@ -69,10 +84,13 @@ enum ReadingInsertion {
     /// `.replay` and `.mock` readings get rules 1 and 3 only.
     static func insert(_ readings: [GlucoseReading], in db: Database) throws -> Outcome {
         var outcome = Outcome()
-        var insertedRows: [ReadingRow] = []
-        let ordered = readings.map(ReadingRow.init).sorted { ($0.date, $0.id) < ($1.date, $1.id) }
+        var inserted: [GlucoseReading] = []
+        let ordered = readings.enumerated()
+            .sorted { ($0.element.date, $0.offset) < ($1.element.date, $1.offset) }
+            .map(\.element)
 
-        for row in ordered {
+        for reading in ordered {
+            let row = ReadingRow(reading)
             if let stored = try fetchRow(id: row.id, db) {
                 if stored == row {
                     // Identical re-delivery: nothing to note.
@@ -91,17 +109,18 @@ enum ReadingInsertion {
             }
 
             try insertRow(row, db)
-            insertedRows.append(row)
+            inserted.append(reading)
 
             if row.sourceKind == "sensor" {
                 let removed = try deleteImportedRows(near: row.date, db)
                 outcome.replacedImportedCount += removed.count
-                insertedRows.removeAll { removed.contains($0.id) }
+                inserted.removeAll { removed.contains($0.id) }
             }
         }
 
-        // Already ascending: rows were appended in date order and only removals happened since.
-        outcome.inserted = try insertedRows.map { try $0.reading() }
+        // Already ascending: appended in date order, only removals since. These are the caller's
+        // own values, not rows read back (D33: returned exactly as passed).
+        outcome.inserted = inserted
         return outcome
     }
 

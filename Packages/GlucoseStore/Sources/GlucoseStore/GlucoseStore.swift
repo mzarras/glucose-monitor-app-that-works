@@ -22,10 +22,11 @@ public final class GlucoseStore: GlucoseReadingRepository {
     let now: @Sendable () -> Date
     private let broadcaster = ChangeBroadcaster()
 
-    /// Migrates, then enforces the role on what is already stored:
-    /// - production: deletes any `.replay`/`.mock` rows (a DEBUG build from before roles existed may
-    ///   have written them to the same file) and records how many (S6);
-    /// - replay: refuses a file that holds `.sensor`/`.imported` rows (it is the wrong file).
+    /// Enforces the role on what is already stored, and migrates:
+    /// - replay: refuses a file that holds `.sensor`/`.imported` rows (it is the wrong file). This
+    ///   check runs before migrating, so refusing a production file changes nothing in it;
+    /// - production: after migrating, deletes any `.replay`/`.mock` rows (a DEBUG build from before
+    ///   roles existed may have written them to the same file) and records how many (S6).
     init(
         role: StoreRole,
         writer: any DatabaseWriter,
@@ -46,6 +47,18 @@ public final class GlucoseStore: GlucoseReadingRepository {
         guard unknownMigrations.isEmpty else {
             throw GlucoseStoreError.databaseFromNewerAppVersion(unknownMigrations: unknownMigrations)
         }
+        #if DEBUG
+        if role == .replay {
+            // Read-only, before any migration: a production file must come out of this untouched.
+            let liveRows = try writer.read { db -> Int in
+                guard try db.tableExists(StoreSchema.readingTable) else { return 0 }
+                return try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM reading WHERE sourceKind IN ('sensor', 'imported')") ?? 0
+            }
+            guard liveRows == 0 else {
+                throw GlucoseStoreError.replayStoreFileContainsLiveData(rowCount: liveRows)
+            }
+        }
+        #endif
         let removedByV2 = try writer.read { db in try StoreSchema.rowsRemovedByV2(db, migrator: migrator) }
         try migrator.migrate(writer)
         if removedByV2 > 0 {
@@ -69,12 +82,7 @@ public final class GlucoseStore: GlucoseReadingRepository {
             }
         #if DEBUG
         case .replay:
-            let liveRows = try writer.read { db in
-                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM reading WHERE sourceKind IN ('sensor', 'imported')") ?? 0
-            }
-            guard liveRows == 0 else {
-                throw GlucoseStoreError.replayStoreFileContainsLiveData(rowCount: liveRows)
-            }
+            break // checked before migrating, above
         #endif
         }
 
@@ -97,10 +105,12 @@ public final class GlucoseStore: GlucoseReadingRepository {
     /// One write transaction per call: either the whole batch is applied or nothing is.
     ///
     /// Throws, and writes nothing from the batch, if any reading's source is not allowed in this
-    /// store's role (`sourceNotAllowed`) or any numeric value is outside 40...400
-    /// (`implausibleValue`). See `ReadingInsertion.validate`.
+    /// store's role, a numeric value is outside 40...400, a trend rate is not finite, or a date is
+    /// later than the store's clock + 60 s. See `ReadingInsertion.validate`. Returns the newly
+    /// stored readings exactly as passed. If the write itself fails (SQL error, task cancellation),
+    /// the transaction rolls back, nothing is stored and `changes()` does not yield.
     public func insert(_ readings: [GlucoseReading]) async throws -> [GlucoseReading] {
-        try ReadingInsertion.validate(readings, role: role)
+        try ReadingInsertion.validate(readings, role: role, now: now())
         guard !readings.isEmpty else { return [] }
         let outcome = try await writer.write { db in
             try ReadingInsertion.insert(readings, in: db)
@@ -122,11 +132,12 @@ public final class GlucoseStore: GlucoseReadingRepository {
         guard start < end else { return [] }
         let bounds: StatementArguments = [start.timeIntervalSinceReferenceDate, end.timeIntervalSinceReferenceDate]
         return try await writer.read { db in
-            // Half-open [start, end): a reading exactly at `end` belongs to the next range.
+            // Half-open [start, end): a reading exactly at `end` belongs to the next range. Equal
+            // dates in storage order (rowid), read straight from reading_on_date(date).
             let rows = try Row.fetchCursor(db, sql: """
                 SELECT \(ReadingRow.selectColumns) FROM reading
                 WHERE date >= ? AND date < ?
-                ORDER BY date, id
+                ORDER BY date, rowid
                 """, arguments: bounds)
             var result: [GlucoseReading] = []
             while let row = try rows.next() {

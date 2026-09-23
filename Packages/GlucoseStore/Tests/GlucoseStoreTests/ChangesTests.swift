@@ -31,7 +31,7 @@ final class ChangesTests: XCTestCase {
     }
 
     func test_eachCallReturnsAnIndependentStream() async throws {
-        var store: GlucoseStore? = try GlucoseStore.productionInMemory()
+        var store: GlucoseStore? = try GlucoseStore.productionInMemory(now: testClock)
         let first = store!.changes()
         let second = store!.changes()
         _ = try await store!.insert([sensorReading(at: 0)])
@@ -45,7 +45,7 @@ final class ChangesTests: XCTestCase {
 
     func test_rolledBackWriteDoesNotYield() async throws {
         struct Abort: Error {}
-        var store: GlucoseStore? = try GlucoseStore.productionInMemory()
+        var store: GlucoseStore? = try GlucoseStore.productionInMemory(now: testClock)
         let stream = store!.changes()
         do {
             try await store!.writer.write { db in
@@ -65,7 +65,7 @@ final class ChangesTests: XCTestCase {
     }
 
     func test_cancelledConsumerIsRemoved() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let task = Task {
             for await _ in store.changes() {}
         }

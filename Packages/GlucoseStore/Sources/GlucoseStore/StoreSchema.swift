@@ -81,7 +81,12 @@ enum StoreSchema {
     /// (GlucoseValue.sensorReportableRange). SQLite cannot add a CHECK to an existing table, so the
     /// table is rebuilt the standard way (https://www.sqlite.org/lang_altertable.html#otheralter):
     /// create the new table, copy the rows, drop the old table, rename, recreate the indexes.
-    /// Rows with a number outside 40...400 are not copied (GlucoseStore records how many).
+    /// Rows with a number outside 40...400 are not copied (GlucoseStore records how many). Rows are
+    /// copied in rowid order, so insertion order (the tie-break for equal dates) is preserved.
+    ///
+    /// v2 also changes both indexes from (date, id) to (date): every index on a rowid table ends
+    /// with the rowid, so `ORDER BY date, rowid` — equal dates in insertion order, never in id text
+    /// order — is read straight from the index with no sort step.
     ///
     /// This is the current schema; see docs/storage.md for the column reference.
     private static func addMgdlRangeCheck(_ db: Database) throws {
@@ -116,13 +121,17 @@ enum StoreSchema {
             SELECT id, date, valueKind, mgdl, trendRate, isBackfill, sourceKind, importOrigin, sensorSerial
             FROM reading
             WHERE mgdl IS NULL OR mgdl BETWEEN 40 AND 400
+            ORDER BY rowid
             """)
-        // Dropping the table drops its indexes too; they are recreated below, unchanged from v1.
+        // Dropping the table drops its indexes too; they are recreated below.
         try db.execute(sql: "DROP TABLE reading")
         try db.execute(sql: "ALTER TABLE reading_v2 RENAME TO reading")
-        try db.execute(sql: "CREATE INDEX reading_on_date ON reading(date, id)")
+        // Range queries, retention purge and the ±150 s import rule filter or sort on date.
+        try db.execute(sql: "CREATE INDEX reading_on_date ON reading(date)")
+        // latestLiveReading() in a production store: newest sensor row. The partial index holds
+        // only sensor rows, so the query reads one entry even when newer imported rows exist.
         try db.execute(sql: """
-            CREATE INDEX reading_sensor_on_date ON reading(date, id)
+            CREATE INDEX reading_sensor_on_date ON reading(date)
             WHERE sourceKind = 'sensor'
             """)
     }

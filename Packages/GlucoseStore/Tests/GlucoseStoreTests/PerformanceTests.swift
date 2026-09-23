@@ -11,7 +11,7 @@ final class PerformanceTests: XCTestCase {
     func test_twoYearsOfFiveMinuteDataThenQuery90Days() async throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = try await GlucoseStore.production(at: directory.appendingPathComponent("perf.sqlite"))
+        let store = try await GlucoseStore.production(at: directory.appendingPathComponent("perf.sqlite"), now: testClock)
 
         // 730 days × 288 readings/day = 210 240 rows: the first 720 days as imported history in
         // 7-day batches (the Nightscout import pages in 7-day windows, HANDOFF §4.5 step 1), the

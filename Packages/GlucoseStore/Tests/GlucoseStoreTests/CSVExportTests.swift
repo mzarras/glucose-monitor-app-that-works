@@ -16,7 +16,7 @@ final class CSVExportTests: XCTestCase {
     }
 
     func test_exportMatchesGoldenFile() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         _ = try await store.insert([
             sensorReading(at: 0, .mgdl(112), trendRate: 0.2),
             sensorReading(at: 300, .belowRange, trendRate: nil),
@@ -53,7 +53,7 @@ final class CSVExportTests: XCTestCase {
 
     #if DEBUG
     func test_replayStoreExportNamesReplayAndMockSources() async throws {
-        let store = try GlucoseStore.replay()
+        let store = try GlucoseStore.replay(now: testClock)
         _ = try await store.insert([replayReading(at: 0, .belowRange), replayReading(at: 300, .mgdl(99), source: .mock)])
         let url = directory.appendingPathComponent("replay.csv")
         try await store.exportCSV(to: url)
@@ -67,7 +67,7 @@ final class CSVExportTests: XCTestCase {
     #endif
 
     func test_emptyStoreExportsTheHeaderOnly() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let url = directory.appendingPathComponent("empty.csv")
         let count = try await store.exportCSV(to: url)
         XCTAssertEqual(count, 0)
@@ -75,7 +75,7 @@ final class CSVExportTests: XCTestCase {
     }
 
     func test_exportReplacesAnExistingFileAndLeavesNoPartialFile() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         _ = try await store.insert([sensorReading(at: 0)])
         let url = directory.appendingPathComponent("export.csv")
         try Data("old content".utf8).write(to: url)
@@ -88,7 +88,7 @@ final class CSVExportTests: XCTestCase {
 
     func test_exportStreamsLargeTablesInChunks() async throws {
         // More than one 64 KB chunk: 3 000 lines of ~60 bytes.
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         _ = try await store.insert((0..<3_000).map { sensorReading(at: TimeInterval($0) * 300) })
         let url = directory.appendingPathComponent("big.csv")
         let count = try await store.exportCSV(to: url)

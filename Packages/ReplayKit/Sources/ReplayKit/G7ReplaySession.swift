@@ -51,5 +51,23 @@ struct ReplayReadingFactory {
             sensorSerial: session.serial
         )
     }
+
+    /// For replayed history whose timestamps are not on whole seconds (a Nightscout export carries
+    /// milliseconds): id = `<serial>:<milliseconds since session start>`, so two entries less than
+    /// a second apart get distinct ids instead of colliding and being dropped as re-deliveries.
+    /// Not the G7 id format (seconds); used only by NightscoutReplaySource.
+    func readingWithMillisecondID(at date: Date, _ value: GlucoseValue, trend: Double?) -> GlucoseReading {
+        let millisecondsIntoSession = (date.timeIntervalSince(session.start) * 1000).rounded()
+        precondition(millisecondsIntoSession >= 0, "reading before its session")
+        return GlucoseReading(
+            id: "\(session.serial):\(Int64(millisecondsIntoSession))",
+            date: date,
+            value: value,
+            trendRate: trend,
+            isBackfill: false,
+            source: .replay,
+            sensorSerial: session.serial
+        )
+    }
 }
 #endif

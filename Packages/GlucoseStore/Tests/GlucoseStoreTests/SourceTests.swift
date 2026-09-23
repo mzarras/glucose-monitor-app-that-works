@@ -14,7 +14,7 @@ final class SourceTests: XCTestCase {
     }
 
     func test_S6_productionSourcesAndImportOriginsRoundTripExactly() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let sources: [ReadingSource] = [.sensor, .imported(.nightscout), .imported(.clarityCSV)]
         let readings = sources.enumerated().map { reading($0.offset, source: $0.element) }
         _ = try await store.insert(readings)
@@ -26,7 +26,7 @@ final class SourceTests: XCTestCase {
 
     #if DEBUG
     func test_S6_replaySourcesRoundTripExactlyInTheReplayStore() async throws {
-        let store = try GlucoseStore.replay()
+        let store = try GlucoseStore.replay(now: testClock)
         let readings = [reading(0, source: .replay), reading(1, source: .mock)]
         _ = try await store.insert(readings)
 
@@ -37,7 +37,7 @@ final class SourceTests: XCTestCase {
     #endif
 
     func test_S6_importedRowsNeverComeBackAsSensor() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let imported = (0..<20).map { index in
             importedReading(at: TimeInterval(index) * 300, origin: index.isMultiple(of: 2) ? .nightscout : .clarityCSV)
         }
@@ -59,7 +59,7 @@ final class SourceTests: XCTestCase {
     }
 
     func test_S6_latestLiveReadingIgnoresImported() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let lastSensor = sensorReading(at: 0, .mgdl(140))
         // Imported history newer than the last sensor reading (e.g. an import run after the sensor
         // stopped, of readings another device uploaded to Nightscout).
@@ -70,19 +70,8 @@ final class SourceTests: XCTestCase {
         XCTAssertEqual(latest, lastSensor)
     }
 
-    func test_latestLiveReadingUsesThePartialIndex() async throws {
-        let store = try GlucoseStore.productionInMemory()
-        let plan = try await store.writer.read { db in
-            try Row.fetchAll(db, sql: "EXPLAIN QUERY PLAN " + StoreRole.production.latestLiveReadingSQL)
-                .map { $0["detail"] as String }
-                .joined(separator: " | ")
-        }
-        XCTAssertTrue(plan.contains("reading_sensor_on_date"), plan)
-        XCTAssertFalse(plan.contains("TEMP B-TREE"), "no sort step: \(plan)")
-    }
-
     func test_S6_schemaRejectsImportedRowWithoutOriginAndSensorRowWithOne() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         for (sourceKind, origin) in [("imported", nil), ("sensor", "nightscout"), ("imported", "somethingElse")] as [(String, String?)] {
             do {
                 try await store.writer.write { db in

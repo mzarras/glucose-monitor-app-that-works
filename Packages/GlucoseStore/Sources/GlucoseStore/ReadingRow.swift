@@ -35,14 +35,9 @@ struct ReadingRow: Equatable, Sendable {
             valueKind = "aboveRange"
             mgdl = nil
         }
-        // SQLite converts a NaN REAL to NULL (https://www.sqlite.org/floatingpoint.html), so NaN is
-        // normalised to nil here, before storage and before the same-id comparison. TrendArrow maps
-        // nil and NaN to the same `.notComputable`, so nothing downstream changes.
-        if let rate = reading.trendRate, !rate.isNaN {
-            trendRate = rate
-        } else {
-            trendRate = nil
-        }
+        // Stored exactly as reported. Non-finite rates never get here: `ReadingInsertion.validate`
+        // rejects the whole batch first (D33), because SQLite would turn NaN into NULL.
+        trendRate = reading.trendRate
         isBackfill = reading.isBackfill
         sourceKind = Self.sourceKind(of: reading.source)
         if case .imported(let origin) = reading.source {

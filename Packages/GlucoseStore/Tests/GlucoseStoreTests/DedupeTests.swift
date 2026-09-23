@@ -5,7 +5,7 @@ import XCTest
 /// S3: dedupe by sensor-reported timestamp (the id), keep the first stored copy, ascending order.
 final class DedupeTests: XCTestCase {
     func test_S3_insertingTheSameReadingsTwiceChangesNothing() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let batch = [sensorReading(at: 0), sensorReading(at: 300), sensorReading(at: 600, .belowRange)]
 
         let first = try await store.insert(batch)
@@ -22,7 +22,7 @@ final class DedupeTests: XCTestCase {
 
     func test_S3_sameIDWithDifferentContentKeepsTheStoredRowAndRecordsDiagnostic() async throws {
         let log = RecordingDiagnosticLog()
-        let store = try GlucoseStore.productionInMemory(diagnostics: log, now: { referenceInstant })
+        let store = try GlucoseStore.productionInMemory(diagnostics: log, now: testClock)
         let live = sensorReading(at: 300, .mgdl(110), trendRate: 0.2, isBackfill: false)
         // Same sensor timestamp (same id), arriving again through backfill with other content.
         let backfilled = GlucoseReading(
@@ -38,7 +38,7 @@ final class DedupeTests: XCTestCase {
         XCTAssertEqual(latest, live, "the original row is kept")
         XCTAssertEqual(log.recorded.count, 1)
         XCTAssertEqual(log.recorded.first?.category, .store)
-        XCTAssertEqual(log.recorded.first?.date, referenceInstant)
+        XCTAssertEqual(log.recorded.first?.date, testClockNow)
         XCTAssertEqual(
             log.recorded.first?.message,
             "Kept stored reading \(live.id); a re-delivered copy differed in: date, value, trendRate, isBackfill"
@@ -47,14 +47,14 @@ final class DedupeTests: XCTestCase {
 
     func test_S3_identicalRedeliveryRecordsNoDiagnostic() async throws {
         let log = RecordingDiagnosticLog()
-        let store = try GlucoseStore.productionInMemory(diagnostics: log)
+        let store = try GlucoseStore.productionInMemory(diagnostics: log, now: testClock)
         _ = try await store.insert([sensorReading(at: 300)])
         _ = try await store.insert([sensorReading(at: 300)])
         XCTAssertEqual(log.recorded, [])
     }
 
     func test_S3_duplicateIDWithinOneBatchIsStoredOnce() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let reading = sensorReading(at: 300)
         let newlyStored = try await store.insert([reading, reading])
         XCTAssertEqual(newlyStored, [reading])
@@ -63,7 +63,7 @@ final class DedupeTests: XCTestCase {
     }
 
     func test_S3_insertReturnsOnlyNewReadingsAscendingByDate() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let r0 = sensorReading(at: 0), r1 = sensorReading(at: 300), r2 = sensorReading(at: 600)
         let r3 = sensorReading(at: 900), r4 = sensorReading(at: 1_200)
 
@@ -76,7 +76,7 @@ final class DedupeTests: XCTestCase {
     }
 
     func test_S3_rangeQueryIsAscendingWhateverTheInsertOrder() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let readings = (0..<12).map { sensorReading(at: TimeInterval($0) * 300) }
         for reading in readings.reversed() {
             _ = try await store.insert([reading])
@@ -86,7 +86,7 @@ final class DedupeTests: XCTestCase {
     }
 
     func test_S3_backfillFlagAndOriginalTimestampAreKept() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let backfilled = sensorReading(at: 1_500, .mgdl(95), trendRate: -0.4, isBackfill: true)
         _ = try await store.insert([sensorReading(at: 3_000)])
         let newlyStored = try await store.insert([backfilled])
@@ -98,7 +98,7 @@ final class DedupeTests: XCTestCase {
     }
 
     func test_S3_datesRoundTripBitExact() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         // A derived date with sub-millisecond detail, as G7 dates are (phone clock − session age).
         let date = Date(timeIntervalSinceReferenceDate: 790_171_234.123_456_7)
         let reading = GlucoseReading(
@@ -114,21 +114,8 @@ final class DedupeTests: XCTestCase {
         XCTAssertEqual(stored, reading)
     }
 
-    func test_nanTrendRateIsStoredAsNil() async throws {
-        // SQLite stores NaN as NULL; the store normalises first so the same-id comparison and the
-        // returned reading agree with what a later query returns.
-        let store = try GlucoseStore.productionInMemory()
-        let reading = sensorReading(at: 300, trendRate: .nan)
-        let newlyStored = try await store.insert([reading])
-        XCTAssertEqual(newlyStored.first?.trendRate, nil)
-        let redelivered = try await store.insert([reading])
-        XCTAssertEqual(redelivered, [])
-        let latest = try await store.latestLiveReading()
-        XCTAssertEqual(latest?.trendRate, nil)
-    }
-
     func test_emptyInsertIsANoOp() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let newlyStored = try await store.insert([])
         XCTAssertEqual(newlyStored, [])
     }
@@ -148,7 +135,7 @@ final class DedupeTests: XCTestCase {
 
     func test_S3_benignRedeliveriesAreCountedNotLoggedPerReading() async throws {
         let log = RecordingDiagnosticLog()
-        let store = try GlucoseStore.productionInMemory(diagnostics: log, now: { referenceInstant })
+        let store = try GlucoseStore.productionInMemory(diagnostics: log, now: testClock)
         let live = [sensorReading(at: 0), sensorReading(at: 300), sensorReading(at: 600)]
         _ = try await store.insert(live)
 
@@ -181,7 +168,7 @@ final class DedupeTests: XCTestCase {
         ]
         for (redelivery, fields) in cases {
             let log = RecordingDiagnosticLog()
-            let store = try GlucoseStore.productionInMemory(diagnostics: log)
+            let store = try GlucoseStore.productionInMemory(diagnostics: log, now: testClock)
             _ = try await store.insert([base])
             let newlyStored = try await store.insert([redelivery])
             XCTAssertEqual(newlyStored, [])

@@ -5,7 +5,7 @@ import XCTest
 
 final class MigrationTests: XCTestCase {
     func test_migratesAnEmptyDatabaseToTheCurrentSchema() async throws {
-        let store = try GlucoseStore.productionInMemory()
+        let store = try GlucoseStore.productionInMemory(now: testClock)
         let (applied, columns, indexes) = try await store.writer.read { db in
             (
                 try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"),
@@ -25,7 +25,7 @@ final class MigrationTests: XCTestCase {
             "importOrigin TEXT NULL",
             "sensorSerial TEXT NOT NULL",
         ])
-        XCTAssertEqual(indexes.sorted(), ["reading_on_date(date,id)", "reading_sensor_on_date(date,id)", "sqlite_autoindex_reading_1(id)"])
+        XCTAssertEqual(indexes.sorted(), ["reading_on_date(date)", "reading_sensor_on_date(date)", "sqlite_autoindex_reading_1(id)"])
         let liveIndexSQL = try await store.writer.read { db in
             try String.fetchOne(db, sql: "SELECT sql FROM sqlite_master WHERE name = 'reading_sensor_on_date'")
         }
@@ -41,10 +41,10 @@ final class MigrationTests: XCTestCase {
         let reading = sensorReading(at: 300)
 
         do {
-            let store = try await GlucoseStore.production(at: url)
+            let store = try await GlucoseStore.production(at: url, now: testClock)
             _ = try await store.insert([reading])
         }
-        let reopened = try await GlucoseStore.production(at: url)
+        let reopened = try await GlucoseStore.production(at: url, now: testClock)
         let latest = try await reopened.latestLiveReading()
         XCTAssertEqual(latest, reading)
         let applied = try await reopened.writer.read { db in
@@ -59,33 +59,17 @@ final class MigrationTests: XCTestCase {
         let url = directory.appendingPathComponent("readings.sqlite")
 
         do {
-            let store = try await GlucoseStore.production(at: url)
+            let store = try await GlucoseStore.production(at: url, now: testClock)
             try await store.writer.write { db in
                 try db.execute(sql: "INSERT INTO grdb_migrations (identifier) VALUES ('v99-from-the-future')")
             }
         }
         do {
-            _ = try await GlucoseStore.production(at: url)
+            _ = try await GlucoseStore.production(at: url, now: testClock)
             XCTFail("expected databaseFromNewerAppVersion")
         } catch let error as GlucoseStoreError {
             XCTAssertEqual(error, .databaseFromNewerAppVersion(unknownMigrations: ["v99-from-the-future"]))
         }
-    }
-
-    /// Builds a database at the v1 schema only (as a build from before v2 left it) and writes rows
-    /// directly, including numbers v1 still allowed but v2 does not.
-    private func makeV1Database(at url: URL, rows: [(id: String, date: Double, kind: String, mgdl: Int?, source: String, origin: String?)]) throws {
-        let queue = try DatabaseQueue(path: url.path)
-        try StoreSchema.makeMigrator().migrate(queue, upTo: StoreSchema.v1CreateReading)
-        try queue.write { db in
-            for row in rows {
-                try db.execute(sql: """
-                    INSERT INTO reading (id, date, valueKind, mgdl, trendRate, isBackfill, sourceKind, importOrigin, sensorSerial)
-                    VALUES (?, ?, ?, ?, 0.2, 0, ?, ?, 'S')
-                    """, arguments: [row.id, row.date, row.kind, row.mgdl, row.source, row.origin])
-            }
-        }
-        try queue.close()
     }
 
     func test_migratesAV1DatabaseAddingTheRangeCheck() async throws {
@@ -104,7 +88,7 @@ final class MigrationTests: XCTestCase {
         ])
 
         let log = RecordingDiagnosticLog()
-        let store = try await GlucoseStore.production(at: url, diagnostics: log, now: { referenceInstant })
+        let store = try await GlucoseStore.production(at: url, diagnostics: log, now: testClock)
 
         let applied = try await store.writer.read { db in try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid") }
         XCTAssertEqual(applied, ["v1-create-reading", "v2-mgdl-range-check"])
@@ -140,7 +124,7 @@ final class MigrationTests: XCTestCase {
         let url = directory.appendingPathComponent("readings.sqlite")
         try makeV1Database(at: url, rows: [("S:0", referenceInstant.timeIntervalSinceReferenceDate, "mgdl", 110, "sensor", nil)])
         let log = RecordingDiagnosticLog()
-        let store = try await GlucoseStore.production(at: url, diagnostics: log)
+        let store = try await GlucoseStore.production(at: url, diagnostics: log, now: testClock)
         XCTAssertEqual(log.recorded, [])
         let count = try await store.summary().readingCount
         XCTAssertEqual(count, 1)

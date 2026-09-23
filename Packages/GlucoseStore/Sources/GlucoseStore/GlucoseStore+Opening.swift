@@ -16,7 +16,13 @@ extension GlucoseStore {
     /// database and its -wal/-shm files (HANDOFF §4.5). The file is not excluded from backup.
     ///
     /// The app passes a file in its own container (Application Support), not the App Group
-    /// container (PROGRESS.md D25); only the widget snapshot lives in the App Group.
+    /// container (PROGRESS.md D25); only the widget snapshot lives in the App Group. Use a
+    /// directory of its own (e.g. `Application Support/GlucoseStore/`): the store also sets the
+    /// protection class on that directory.
+    ///
+    /// Before the first unlock after a reboot the files are unreadable (that is what this
+    /// protection class means), so opening then throws; the app retries once protected data
+    /// becomes available.
     ///
     /// `@concurrent` so the migration and file work never run on the caller's actor.
     ///
@@ -84,10 +90,11 @@ extension GlucoseStore {
         observesSuspensionNotifications: Bool,
         now: @escaping @Sendable () -> Date
     ) throws -> GlucoseStore {
-        try FileManager.default.createDirectory(
-            at: databaseURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
+        let directory = databaseURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // On the directory first, so any file SQLite creates in it later (a -wal or -shm deleted on
+        // close and recreated on the next open) inherits the class instead of the app default.
+        try fileProtection.apply(StoreFileProtection.required, toItemAt: directory)
         var configuration = Configuration()
         configuration.label = "GlucoseStore"
         configuration.observesSuspensionNotifications = observesSuspensionNotifications

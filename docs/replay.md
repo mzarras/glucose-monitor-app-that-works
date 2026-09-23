@@ -217,7 +217,11 @@ let source = try NightscoutReplaySource(export: export, origin: Date(), clock: S
 - **Session** (synthetic, serial `REPLAY-NIGHTSCOUT`): starts 1 h before the first entry
   (warm-up over 30 min before it), expires at the later of start + 10 days and the last entry,
   plus 12 h grace. State: `.searching`, then `.active` at +0. Reading ids:
-  `REPLAY-NIGHTSCOUT:<seconds since session start>` (the first is `:3600`).
+  `REPLAY-NIGHTSCOUT:<milliseconds since session start>` (the first is `:3600000`). Milliseconds,
+  not the G7's seconds, because an export carries millisecond timestamps: two entries less than a
+  second apart (two uploaders) stay two distinct readings instead of colliding on one id and being
+  dropped as a re-delivery. Entries with exactly the same `date` are dropped and counted by
+  `NightscoutExport` (test `test_S3_entriesLessThanASecondApartStayDistinct`).
 
 ### Fixture
 
@@ -233,7 +237,7 @@ newest first, device `synthetic-fixture`:
 
 ## Tests
 
-`swift test` in `Packages/ReplayKit` (38 tests; every test file is also inside `#if DEBUG`):
+`swift test` in `Packages/ReplayKit` (39 tests; every test file is also inside `#if DEBUG`):
 
 - determinism: same origin → same timeline and same streams; ids independent of the origin;
 - `test_S1_*`: a source emits exactly the script/export and nothing else (the playback log is the
