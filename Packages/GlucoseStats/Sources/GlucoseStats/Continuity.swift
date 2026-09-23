@@ -6,8 +6,11 @@ import Foundation
 /// How readings join into continuous stretches of time.
 ///
 /// - A reading **covers** the time from its timestamp until the earliest of: 5 minutes later (the
-///   G7's reading interval), the next counted reading, or the end of the period. Coverage never
-///   reaches past the period's end, so no duration can exceed the period.
+///   G7's reading interval), the next counted reading, or a limit. For the in-range streak the
+///   limit is the period end, so a streak never exceeds the period. Hypo events are detected over
+///   the period plus 24 h of context each side (`PeriodReadings.contextDuration`), so their limit
+///   is the end of that window: an event can run past the period end, and the last reading before
+///   "now" covers its full 5 minutes.
 /// - Consecutive readings more than 15 minutes apart are separated by a **gap**. A gap ends every
 ///   run (in-range streak, low run, recovery run) and every hypo event. Spacing of 15 minutes or
 ///   less is bridged, the same way the chart draws a line across it (§7.5).
@@ -26,13 +29,13 @@ public enum Continuity {
         later.timeIntervalSince(earlier) > maximumBridgedGap
     }
 
-    /// The end of the time covered by `period.readings[index]` (see the type's documentation).
-    static func coverageEnd(ofReadingAt index: Int, in period: PeriodReadings) -> Date {
-        let readings = period.readings
+    /// The end of the time covered by `readings[index]`, never after `limit` (see the type's
+    /// documentation). `readings` must be ascending.
+    static func coverageEnd(ofReadingAt index: Int, in readings: [CountedReading], notAfter limit: Date) -> Date {
         var end = readings[index].date.addingTimeInterval(readingInterval)
         if index + 1 < readings.count {
             end = min(end, readings[index + 1].date)
         }
-        return min(end, period.interval.end)
+        return min(end, limit)
     }
 }

@@ -1,14 +1,14 @@
-// CGM hypoglycaemia events, as HANDOFF §6 defines them. Battelino et al. (Diabetes Care 2019;42:1593,
-// Table 1) lists "Episodes (hypoglycemia and hyperglycemia) 15 min" as a core metric; the begin/end
-// rules below are HANDOFF §6's.
+// CGM hypoglycaemia events. Definition: Battelino T et al., "Continuous glucose monitoring and
+// metrics for clinical trials: an international consensus statement", Lancet Diabetes Endocrinol
+// 2023;11:42–57, Table 4 (p. 50) — the owner's choice, refining HANDOFF §6:
 //
-//   Level 1: starts with ≥ 15 consecutive minutes < 70 mg/dL.
-//   Level 2: starts with ≥ 15 consecutive minutes < 54 mg/dL.
-//   Either ends after ≥ 15 consecutive minutes ≥ 70 mg/dL (one rule for both levels, as HANDOFF §6
-//   states it; some later texts end a level 2 event at ≥ 54 — see docs/statistics.md).
+//   Level 1: starts with ≥ 15 consecutive minutes < 70 mg/dL; ends after ≥ 15 consecutive min ≥ 70.
+//   Level 2: starts with ≥ 15 consecutive minutes < 54 mg/dL; ends after ≥ 15 consecutive min ≥ 54.
 //
-// Minutes are measured with the `Continuity` rules: a reading covers up to 5 minutes, gaps of more
-// than 15 minutes end runs and events, and nothing is counted past the end of the period.
+// Minutes are measured with the `Continuity` rules: a reading covers up to 5 minutes, and a gap of
+// more than 15 minutes ends runs and events. Detection runs over the period plus 24 hours of
+// context on each side (`PeriodReadings.contextDuration`); each event belongs to the period that
+// contains its start, so a low crossing midnight is counted once, in the day it began.
 
 import Foundation
 import GlucoseCore
@@ -17,7 +17,7 @@ public enum HypoLevel: String, Sendable, Equatable, Hashable, CaseIterable {
     case level1
     case level2
 
-    /// A run of readings below this starts an event: 70 (level 1) or 54 (level 2) mg/dL.
+    /// A run of readings below this for ≥ 15 min starts an event: 70 (level 1) or 54 (level 2) mg/dL.
     public var entryThresholdMgdl: Int {
         switch self {
         case .level1: return GlucoseThresholds.lowBelow
@@ -25,26 +25,35 @@ public enum HypoLevel: String, Sendable, Equatable, Hashable, CaseIterable {
         }
     }
 
-    /// A run of readings at or above this ends an event, for both levels (HANDOFF §6).
-    public static let exitThresholdMgdl = GlucoseThresholds.lowBelow
+    /// A run of readings at or above this for ≥ 15 min ends an event: 70 (level 1) or 54 (level 2)
+    /// mg/dL (Battelino et al. 2023, Table 4). Readings below it continue the event.
+    public var exitThresholdMgdl: Int {
+        switch self {
+        case .level1: return GlucoseThresholds.lowBelow
+        case .level2: return GlucoseThresholds.veryLowBelow
+        }
+    }
 }
 
 /// Why an event ended.
 public enum HypoEventEnd: String, Sendable, Equatable, Hashable {
-    /// ≥ 15 consecutive minutes at or above 70 mg/dL.
+    /// ≥ 15 consecutive minutes at or above the level's exit threshold.
     case recovery
     /// A gap of more than 15 minutes without readings. What happened in the gap is unknown, so the
     /// event is not extended across it; a low after the gap is a new event.
     case gap
-    /// The period's readings ran out before a recovery (for "today so far": the low is ongoing).
+    /// The readings ran out (within the 24 h look-ahead) before a recovery. For "today so far" this
+    /// means the low is still going on.
     case noMoreReadings
 }
 
 public struct HypoEvent: Sendable, Equatable {
     public let level: HypoLevel
-    /// Timestamp of the first reading of the qualifying run.
+    /// Timestamp of the first reading of the qualifying run. Always inside the period the event is
+    /// reported for.
     public let start: Date
-    /// Coverage end of the event's last reading below 70 mg/dL.
+    /// Coverage end of the event's last reading below the level's exit threshold (70 for level 1,
+    /// 54 for level 2). May lie after the period end: the event is followed into the look-ahead.
     public let end: Date
     public let endedBy: HypoEventEnd
     /// Local wall-clock hour (0–23) of `start`.
@@ -63,15 +72,15 @@ public struct HourWindow: Sendable, Equatable {
     public var endHour: Int { (startHour + hourCount) % 24 }
 }
 
-/// The events of one level in a period.
+/// The events of one level that start in a period.
 public struct HypoEventSummary: Sendable, Equatable {
-    /// A run must last this long (seconds) to start an event.
+    /// A run below the entry threshold must last this long (seconds) to start an event.
     public static let minimumDuration: TimeInterval = 15 * 60
-    /// A run at or above 70 must last this long (seconds) to end an event.
+    /// A run at or above the exit threshold must last this long (seconds) to end an event.
     public static let recoveryDuration: TimeInterval = 15 * 60
 
     public let level: HypoLevel
-    /// Ascending by start.
+    /// Events starting inside the period, ascending by start.
     public let events: [HypoEvent]
     /// Mean of `duration`, seconds; `nil` without events.
     public let meanDuration: TimeInterval?
@@ -81,7 +90,8 @@ public struct HypoEventSummary: Sendable, Equatable {
     public var count: Int { events.count }
 
     init(level: HypoLevel, period: PeriodReadings) {
-        let events = Self.detect(level, in: period)
+        let interval = period.interval
+        let events = Self.detect(level, in: period).filter { interval.start <= $0.start && $0.start < interval.end }
         var histogram = Array(repeating: 0, count: 24)
         var totalDuration: TimeInterval = 0
         for event in events {
@@ -113,23 +123,29 @@ public struct HypoEventSummary: Sendable, Equatable {
         return best
     }
 
-    /// One pass over the readings with two states.
+    /// Every event in the look-back, the period and the look-ahead, in one pass with two states.
+    /// The caller keeps the ones that start inside the period.
     ///
     /// Outside an event: track the current run of readings below the entry threshold; when it
     /// lasts ≥ 15 min, an event starts at the run's first reading.
-    /// Inside an event: a reading below 70 extends the event (and resets any recovery run); a
-    /// reading at or above 70 extends the recovery run; when that lasts ≥ 15 min the event ends.
-    /// A gap > 15 min ends the event and any run; so does running out of readings.
+    /// Inside an event: a reading below the exit threshold extends the event (and resets any
+    /// recovery run); a reading at or above it extends the recovery run; when that lasts ≥ 15 min
+    /// the event ends. A gap > 15 min ends the event and any run; so does running out of readings.
     static func detect(_ level: HypoLevel, in period: PeriodReadings) -> [HypoEvent] {
-        let readings = period.readings
+        let readings = period.lookBackReadings + period.readings + period.lookAheadReadings
+        let coverageLimit = period.interval.end.addingTimeInterval(PeriodReadings.contextDuration)
+        let entryThreshold = level.entryThresholdMgdl
+        let exitThreshold = level.exitThresholdMgdl
+
         var events: [HypoEvent] = []
         var lowRunStart: Int?       // outside an event: first reading of the current low run
         var eventStart: Int?        // inside an event: the event's first reading
-        var lastBelowExit = 0       // inside an event: latest reading below 70
-        var recoveryRunStart: Int?  // inside an event: first reading of the current ≥ 70 run
+        var lastBelowExit = 0       // inside an event: latest reading below the exit threshold
+        var recoveryRunStart: Int?  // inside an event: first reading of the current recovery run
 
         func runDuration(from first: Int, to last: Int) -> TimeInterval {
-            Continuity.coverageEnd(ofReadingAt: last, in: period).timeIntervalSince(readings[first].date)
+            Continuity.coverageEnd(ofReadingAt: last, in: readings, notAfter: coverageLimit)
+                .timeIntervalSince(readings[first].date)
         }
 
         func endEvent(_ reason: HypoEventEnd) {
@@ -137,7 +153,7 @@ public struct HypoEventSummary: Sendable, Equatable {
             events.append(HypoEvent(
                 level: level,
                 start: readings[first].date,
-                end: Continuity.coverageEnd(ofReadingAt: lastBelowExit, in: period),
+                end: Continuity.coverageEnd(ofReadingAt: lastBelowExit, in: readings, notAfter: coverageLimit),
                 endedBy: reason,
                 startHourOfDay: readings[first].secondOfDay / 3_600
             ))
@@ -145,17 +161,13 @@ public struct HypoEventSummary: Sendable, Equatable {
             recoveryRunStart = nil
         }
 
-        let entryThreshold = level.entryThresholdMgdl
-        let exitThreshold = HypoLevel.exitThresholdMgdl
-        period.forEachReading { index, reading in
+        forEachCountedReading(in: readings) { index, reading in
             if reading.startsAfterGap {
                 endEvent(.gap)
                 lowRunStart = nil
             }
-            let value = reading.value
-
             if eventStart != nil {
-                if isBelow(value, exitThreshold) {
+                if isBelow(reading.value, exitThreshold) {
                     lastBelowExit = index
                     recoveryRunStart = nil
                 } else {
@@ -165,7 +177,7 @@ public struct HypoEventSummary: Sendable, Equatable {
                         endEvent(.recovery)
                     }
                 }
-            } else if isBelow(value, entryThreshold) {
+            } else if isBelow(reading.value, entryThreshold) {
                 let first = lowRunStart ?? index
                 lowRunStart = first
                 if runDuration(from: first, to: index) >= minimumDuration {
@@ -191,8 +203,10 @@ public struct HypoEventSummary: Sendable, Equatable {
     }
 }
 
-/// Level 1 and level 2 events of a period. "Today so far → lows" on the Now screen is
-/// `level1.count` (every level 2 event also starts or extends a level 1 event).
+/// Level 1 and level 2 events that start in a period. "Today so far → lows" on the Now screen is
+/// `level1.count`. Every run below 54 lasting 15 min also lies below 70, so every level 2 event
+/// starts or falls inside a level 1 event: one long level 1 low can hold several level 2 events,
+/// and a level 2 event today can sit inside a level 1 event that began (and is counted) yesterday.
 public struct HypoEvents: Sendable, Equatable {
     public let level1: HypoEventSummary
     public let level2: HypoEventSummary

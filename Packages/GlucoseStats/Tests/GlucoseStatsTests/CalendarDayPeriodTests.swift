@@ -69,6 +69,24 @@ final class CalendarDayPeriodTests: XCTestCase {
         XCTAssertEqual(CalendarDays.count(in: current, calendar: calendar), 90)
     }
 
+    func testSantiagoDayThatStartsAt0100() {
+        let santiago = Fixture.santiago
+        // Now = Sep 6 2026 10:00 −03. Today starts at 01:00; yesterday = [Sep 5 00:00 −04, Sep 6 01:00 −03) = 24 h.
+        let now = Fixture.santiagoSep6.addingTimeInterval(9 * Fixture.hour)
+        XCTAssertEqual(CalendarDayPeriod.today.interval(endingAt: now, calendar: santiago).start, Fixture.santiagoSep6)
+        let yesterday = CalendarDayPeriod.today.precedingInterval(endingAt: now, calendar: santiago)
+        XCTAssertEqual(yesterday, DateInterval(start: Fixture.santiagoSep5, end: Fixture.santiagoSep6))
+        XCTAssertEqual(yesterday.duration, 24 * Fixture.hour)
+
+        // Now = Sep 8 10:00: "3 D" starts on Sep 6 at 01:00; it and the 3 days before each touch 3 dates.
+        let later = Fixture.santiagoSep8.addingTimeInterval(10 * Fixture.hour)
+        let current = CalendarDayPeriod.threeDays.interval(endingAt: later, calendar: santiago)
+        let preceding = CalendarDayPeriod.threeDays.precedingInterval(endingAt: later, calendar: santiago)
+        XCTAssertEqual(current.start, Fixture.santiagoSep6)
+        XCTAssertEqual(CalendarDays.count(in: current, calendar: santiago), 3)
+        XCTAssertEqual(CalendarDays.count(in: preceding, calendar: santiago), 3)
+    }
+
     func testNowExactlyAtMidnight() {
         // Now = Mar 10 00:00 EDT: "today so far" is empty; the preceding day is Mar 9.
         let midnight = newYorkMidnight(month: 3, day: 10)

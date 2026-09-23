@@ -62,6 +62,17 @@ final class GMIAndCalendarDaysTests: XCTestCase {
         XCTAssertEqual(CalendarDays.count(in: DateInterval(start: Fixture.day0, duration: 0), calendar: Fixture.utc), 0)
     }
 
+    func testDayThatStartsAt0100IsStillOneDay() {
+        // America/Santiago, 2026-09-06: clocks jump 00:00 → 01:00, so the date starts at 01:00 and lasts 23 h.
+        // Counted by y/m/d, not by whole 24-hour steps from the day's first instant.
+        let calendar = Fixture.santiago
+        XCTAssertEqual(CalendarDays.count(in: DateInterval(start: Fixture.santiagoSep6, end: Fixture.santiagoSep7), calendar: calendar), 1)
+        XCTAssertEqual(CalendarDays.count(in: DateInterval(start: Fixture.santiagoSep6, duration: 11 * Fixture.hour), calendar: calendar), 1)
+        XCTAssertEqual(CalendarDays.count(in: DateInterval(start: Fixture.santiagoSep5, end: Fixture.santiagoSep8), calendar: calendar), 3)
+        // Ending exactly at Sep 6's first instant (01:00) does not touch Sep 6.
+        XCTAssertEqual(CalendarDays.count(in: DateInterval(start: Fixture.santiagoSep5, end: Fixture.santiagoSep6), calendar: calendar), 1)
+    }
+
     func testDSTDaysAreStillOneDayEach() {
         // 23-hour and 25-hour days are one calendar day each.
         let spring = DateInterval(start: Fixture.springForwardDayStart, duration: 23 * Fixture.hour)

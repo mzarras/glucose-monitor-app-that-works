@@ -2,10 +2,13 @@ import XCTest
 import GlucoseCore
 @testable import GlucoseStats
 
-/// Hypoglycaemia events (Battelino et al. 2019). Conventions used in the arithmetic below:
-/// - A reading covers from its timestamp to the earliest of (+5 min, the next reading, the period end).
+/// Hypoglycaemia events (Battelino et al., Lancet Diabetes Endocrinol 2023;11:42, Table 4).
+/// Conventions used in the arithmetic below:
+/// - A reading covers from its timestamp to the earliest of (+5 min, the next reading, the end of the
+///   detection window = period end + 24 h). With no later readings that is simply +5 min.
 /// - A run's duration = coverage end of its last reading − its first reading.
 /// - A gap between consecutive readings of more than 15 min ends any run and any event.
+/// - Level 1 ends after 15 min ≥ 70; level 2 after 15 min ≥ 54.
 final class HypoEventTests: XCTestCase {
 
     /// Readings every 5 min from 00:00 UTC on day0; period [00:00, 02:00) unless given.
@@ -17,10 +20,15 @@ final class HypoEventTests: XCTestCase {
         HypoEvents(Fixture.period(readings, Fixture.interval(minutes: periodMinutes)))
     }
 
+    private func events(_ readings: [GlucoseReading], in interval: DateInterval) -> HypoEvents {
+        HypoEvents(Fixture.period(readings, interval))
+    }
+
     func testThresholds() {
         XCTAssertEqual(HypoLevel.level1.entryThresholdMgdl, 70)
         XCTAssertEqual(HypoLevel.level2.entryThresholdMgdl, 54)
-        XCTAssertEqual(HypoLevel.exitThresholdMgdl, 70)
+        XCTAssertEqual(HypoLevel.level1.exitThresholdMgdl, 70)
+        XCTAssertEqual(HypoLevel.level2.exitThresholdMgdl, 54)
         XCTAssertEqual(HypoEventSummary.minimumDuration, 15 * 60)
         XCTAssertEqual(HypoEventSummary.recoveryDuration, 15 * 60)
     }
@@ -113,16 +121,42 @@ final class HypoEventTests: XCTestCase {
         XCTAssertEqual(events(readings).level1.count, 0)
     }
 
-    func testLevel2EventEndsOnlyWhenBackAtOrAbove70() {
+    func testLevel2EventEndsAfterFifteenMinutesAtOrAbove54() {
         // 50 50 50 | 60 60 | 100 100 100   (00:00 … 00:35)
-        //   level 2: run < 54 00:00–00:15 = 15 min → starts 00:00; 60s are < 70 so the event continues;
-        //            recovery 00:25–00:40 = 15 min; last reading < 70 is 00:20 → end 00:25 → 25 min
-        //   level 1: the same readings are all < 70 until 00:25 → same event, 25 min
+        //   level 2: run < 54 00:00–00:15 = 15 min → starts 00:00; recovery ≥ 54 from 00:15:
+        //            coverage end of 00:25 = 00:30 → 30 − 15 = 15 min → ends; last reading < 54 is 00:10
+        //            → end 00:15 → 15 min
+        //   level 1: all < 70 until 00:25; recovery ≥ 70 00:25–00:40 = 15 min; last < 70 is 00:20
+        //            → end 00:25 → 25 min
         let result = events(Fixture.mg(50, 50, 50, 60, 60, 100, 100, 100))
         XCTAssertEqual(result.level2.events, [
-            HypoEvent(level: .level2, start: Fixture.at(0), end: Fixture.at(25), endedBy: .recovery, startHourOfDay: 0),
+            HypoEvent(level: .level2, start: Fixture.at(0), end: Fixture.at(15), endedBy: .recovery, startHourOfDay: 0),
         ])
-        XCTAssertEqual(result.level1.events.map(\.duration), [1_500])
+        XCTAssertEqual(result.level1.events, [
+            HypoEvent(level: .level1, start: Fixture.at(0), end: Fixture.at(25), endedBy: .recovery, startHourOfDay: 0),
+        ])
+    }
+
+    func testLongLevel1LowHoldsTwoLevel2Events() {
+        // Reviewer probe: 50 ×3 (00:00–00:10) | 60 ×20 (00:15–01:50) | 50 ×3 (01:55–02:05); period [0, 3 h).
+        //   level 2 event A: run < 54 00:00–00:10, coverage end 00:15 → 15 min → starts 00:00;
+        //                    ≥ 54 from 00:15, coverage end of 00:25 = 00:30 → 15 min → recovered;
+        //                    end = coverage end of 00:10 = 00:15 → 15 min
+        //   level 2 event B: run < 54 01:55–02:05, coverage end 02:10 → 15 min → starts 01:55;
+        //                    readings stop → end 02:10 → 15 min, endedBy .noMoreReadings
+        //   level 1: all 26 readings < 70 → one event 00:00 → coverage end of 02:05 = 02:10 → 130 min
+        let values = Fixture.mg(50, 50, 50) + Array(repeating: GlucoseValue.mgdl(60), count: 20) + Fixture.mg(50, 50, 50)
+        let result = events(values, periodMinutes: 180)
+
+        XCTAssertEqual(result.level2.events, [
+            HypoEvent(level: .level2, start: Fixture.at(0), end: Fixture.at(15), endedBy: .recovery, startHourOfDay: 0),
+            HypoEvent(level: .level2, start: Fixture.at(115), end: Fixture.at(130), endedBy: .noMoreReadings, startHourOfDay: 1),
+        ])
+        XCTAssertEqual(result.level2.meanDuration, 900)
+        XCTAssertEqual(result.level1.events, [
+            HypoEvent(level: .level1, start: Fixture.at(0), end: Fixture.at(130), endedBy: .noMoreReadings, startHourOfDay: 0),
+        ])
+        XCTAssertEqual(result.level1.events.first?.duration, 7_800)
     }
 
     func testLevel1WithoutFifteenMinutesBelow54IsNotLevel2() {
@@ -141,11 +175,61 @@ final class HypoEventTests: XCTestCase {
         ])
     }
 
-    func testCoverageIsCutAtThePeriodEnd() {
-        // 65 at 00:00, 00:05, 00:10. Period [0, 12): coverage end of 00:10 = 00:12 → 12 min → no event yet.
-        // Period [0, 15): coverage end 00:15 → 15 min → event.
-        XCTAssertEqual(events(Fixture.mg(65, 65, 65), periodMinutes: 12).level1.count, 0)
-        XCTAssertEqual(events(Fixture.mg(65, 65, 65), periodMinutes: 15).level1.count, 1)
+    func testLastReadingCoversItsFiveMinutesEvenPastThePeriodEnd() {
+        // 65 at 00:00, 00:05, 00:10; period [0, 12). Hypo detection looks 24 h past the period end, so
+        // the last reading covers to 00:15 (no later reading) → 15 min → one event, ending after the period.
+        let result = events(Fixture.mg(65, 65, 65), periodMinutes: 12)
+        XCTAssertEqual(result.level1.events, [
+            HypoEvent(level: .level1, start: Fixture.at(0), end: Fixture.at(15), endedBy: .noMoreReadings, startHourOfDay: 0),
+        ])
+    }
+
+    // MARK: Period boundaries (events belong to the period containing their start)
+
+    /// Day A = [day0, day0 + 1 d), day B = [day0 + 1 d, day0 + 2 d).
+    private let dayA = DateInterval(start: Fixture.day0, duration: Fixture.day)
+    private let dayB = DateInterval(start: Fixture.day0.addingTimeInterval(Fixture.day), duration: Fixture.day)
+
+    func testLowCrossingMidnightIsCountedOnceInThePeriodWhereItStarts() {
+        // 65 at 23:50, 23:55 (day A), 00:00, 00:05 (day B); 100 at 00:10, 00:15, 00:20.
+        //   Neither day alone holds 15 min of lows (10 min each). With 24 h of context on each side:
+        //   day A: run 23:50 → coverage end of 00:05 = next reading 00:10 → 20 min → event starts 23:50 (in A);
+        //          recovery 00:10–00:20, coverage end 00:25 → 15 min; end 00:10 → 20 min
+        //   day B: the same event is seen through the look-back; it started in A, so B counts none.
+        let readings = Fixture.series(from: Fixture.at(1_430), Fixture.mg(65, 65, 65, 65, 100, 100, 100))
+
+        let a = events(readings, in: dayA)
+        XCTAssertEqual(a.level1.events, [
+            HypoEvent(level: .level1, start: Fixture.at(1_430), end: Fixture.at(1_450), endedBy: .recovery, startHourOfDay: 23),
+        ])
+        XCTAssertEqual(a.level1.startHourHistogram[23], 1)
+        XCTAssertEqual(events(readings, in: dayB).level1.count, 0)
+    }
+
+    func testOngoingLowAtPeriodStartIsNotANewEvent() {
+        // A low from 23:30 (day A) to 00:30 (day B), then recovery. Day B sees its readings after 00:00
+        // (30 min < 70) but the look-back shows they continue an event that started in A.
+        let readings = Fixture.series(from: Fixture.at(1_410), Array(repeating: GlucoseValue.mgdl(60), count: 12) + Fixture.mg(100, 100, 100))
+        XCTAssertEqual(events(readings, in: dayA).level1.events.map(\.start), [Fixture.at(1_410)])
+        XCTAssertEqual(events(readings, in: dayB).level1.count, 0)
+    }
+
+    func testEventStartingAfterThePeriodIsNotCounted() {
+        // Day A's look-ahead sees a low starting 01:00 on day B; it belongs to B only.
+        let readings = Fixture.series(from: Fixture.at(1_500), Fixture.mg(65, 65, 65, 100, 100, 100))
+        XCTAssertEqual(events(readings, in: dayA).level1.count, 0)
+        XCTAssertEqual(events(readings, in: dayB).level1.events.map(\.start), [Fixture.at(1_500)])
+    }
+
+    func testContextOlderThanTwentyFourHoursIsNotUsed() {
+        // Lows from day A 00:00 to 00:10 are 24 h before day B … exactly at the look-back limit (kept);
+        // they start an event in A, which day B never counts. A reading 1 s before the limit is dropped.
+        XCTAssertEqual(PeriodReadings.contextDuration, 24 * 3_600)
+        let readings = Fixture.series(from: Fixture.day0, Fixture.mg(65, 65, 65, 100, 100, 100))
+        let period = Fixture.period(readings, dayB)
+        XCTAssertEqual(period.lookBackReadings.count, 6)
+        let older = Fixture.period([Fixture.reading(Fixture.day0.addingTimeInterval(-1), .mgdl(65))], dayB)
+        XCTAssertTrue(older.lookBackReadings.isEmpty)
     }
 
     func testReadingsCloserThanFiveMinutesCoverOnlyUntilTheNextOne() {

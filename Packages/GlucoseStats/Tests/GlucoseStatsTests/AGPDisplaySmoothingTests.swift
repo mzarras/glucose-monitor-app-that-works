@@ -56,6 +56,53 @@ final class AGPDisplaySmoothingTests: XCTestCase {
         XCTAssertEqual(smoothed[95].p50, .mgdl(100))
     }
 
+    func testNeighbourWithAnyFlagIsDroppedForAllLinesSoLinesCannotCross() {
+        // Reviewer probe. Bucket 9 = [LOW, LOW, 60, 60, 60]; bucket 10 = [90, 100, 101, 110, 120];
+        // bucket 11 = [101 ×5].
+        //   Per-line neighbour choice would give bucket 10 p25 = (2×100 + 101) / 3 = 100.33 but
+        //   p50 = (60 + 2×101 + 101) / 4 = 90.75: p25 above p50, crossing lines.
+        //   Bucket 9 holds a flag, so it is dropped for all five lines of bucket 10:
+        //   p5 (180+101)/3 = 93.67, p25 (200+101)/3 = 100.33, p50 (202+101)/3 = 101, p75 (220+101)/3 = 107,
+        //   p95 (240+101)/3 = 113.67.
+        let buckets = (0..<96).map { index -> AGPBucket in
+            switch index {
+            case 9: return AGPBucket(startMinuteOfDay: 135, readingCount: 5, p5: .belowRange, p25: .belowRange, p50: .mgdl(60), p75: .mgdl(60), p95: .mgdl(60))
+            case 10: return AGPBucket(startMinuteOfDay: 150, readingCount: 5, p5: .mgdl(90), p25: .mgdl(100), p50: .mgdl(101), p75: .mgdl(110), p95: .mgdl(120))
+            case 11: return AGPBucket(startMinuteOfDay: 165, readingCount: 5, p5: .mgdl(101), p25: .mgdl(101), p50: .mgdl(101), p75: .mgdl(101), p95: .mgdl(101))
+            default: return AGPBucket(startMinuteOfDay: index * 15, readingCount: 0, p5: nil, p25: nil, p50: nil, p75: nil, p95: nil)
+            }
+        }
+        let smoothed = AGPDisplaySmoothing.smoothedForDisplay(AGPProfile(buckets: buckets))
+
+        XCTAssertEqual(smoothed[10], AGPDisplayBucket(
+            startMinuteOfDay: 150,
+            p5: .mgdl(281.0 / 3.0), p25: .mgdl(301.0 / 3.0), p50: .mgdl(101), p75: .mgdl(107), p95: .mgdl(341.0 / 3.0)
+        ))
+        // Bucket 9 keeps its flags; its numeric lines use bucket 10 (bucket 8 is empty):
+        //   p50 (2×60 + 101)/3 = 73.67, p75 (120 + 110)/3 = 76.67, p95 (120 + 120)/3 = 80.
+        XCTAssertEqual(smoothed[9], AGPDisplayBucket(
+            startMinuteOfDay: 135,
+            p5: .belowRange, p25: .belowRange, p50: .mgdl(221.0 / 3.0), p75: .mgdl(230.0 / 3.0), p95: .mgdl(80)
+        ))
+    }
+
+    func testSmoothedLinesNeverCrossOnNinetyDaysOfData() {
+        // Every bucket of the 90-day fixture (with LOW/HIGH flags): p5 ≤ p25 ≤ p50 ≤ p75 ≤ p95 after
+        // smoothing, ordering LOW below and HIGH above every number.
+        func rank(_ value: AGPDisplayValue) -> Double {
+            switch value {
+            case .belowRange: return -Double.infinity
+            case .aboveRange: return Double.infinity
+            case .mgdl(let mgdl): return mgdl
+            }
+        }
+        let period = Fixture.period(Fixture.ninetyDays(), DateInterval(start: Fixture.day0, duration: 90 * Fixture.day))
+        for bucket in AGPDisplaySmoothing.smoothedForDisplay(AGPProfile(period)) {
+            let lines = [bucket.p5, bucket.p25, bucket.p50, bucket.p75, bucket.p95].map { rank($0!) }
+            XCTAssertEqual(lines, lines.sorted(), "bucket at minute \(bucket.startMinuteOfDay)")
+        }
+    }
+
     func testEmptyProfileStaysEmpty() {
         let smoothed = AGPDisplaySmoothing.smoothedForDisplay(AGPProfile(buckets: []))
         XCTAssertTrue(smoothed.isEmpty)

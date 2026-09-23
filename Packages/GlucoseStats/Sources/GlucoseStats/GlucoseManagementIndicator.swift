@@ -7,7 +7,9 @@
 /// Table 2 item 1, "Number of Days CGM Worn (recommend 14 days)"), and the Trends screen shows GMI
 /// only for 14 D and longer (HANDOFF §7.3 item 2). So `percent` is withheld (nil) below 14 calendar
 /// days rather than left for the UI to hide: a short-period GMI cannot be displayed by mistake.
-/// The 70 % data-sufficiency warning is reported separately (`DataSufficiency`) and applies too.
+/// The 70 % data-sufficiency rule applies too but is not folded in here: `PeriodStatistics` carries
+/// `gmi` next to `dataSufficiency`, and the UI should show the < 70 % warning beside the GMI row
+/// (`dataSufficiency.isBelowWarningThreshold`), as HANDOFF §7.3 asks for every period.
 public struct GlucoseManagementIndicator: Sendable, Equatable {
     /// Minimum period length, in local calendar days (see `CalendarDays`).
     public static let minimumCalendarDays = 14

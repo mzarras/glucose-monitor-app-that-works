@@ -48,22 +48,47 @@ final class GlucoseStatisticsTests: XCTestCase {
         XCTAssertEqual(stats.gmi, GlucoseManagementIndicator(meanMgdl: stats.meanAndVariability.meanMgdl, calendarDayCount: 1))
     }
 
-    func testReadingsOutsideTheIntervalChangeNothing() {
+    func testReadingsMoreThanADayOutsideTheIntervalChangeNothing() {
+        // Beyond the 24 h context window (look-back starts at day0 − 24 h, look-ahead ends at end + 24 h,
+        // exclusive), readings are ignored entirely.
         let inside = Fixture.series(from: Fixture.at(60), Fixture.mg(100, 110, 65, 65, 65, 120))
         let outside = [
-            Fixture.reading(Fixture.day0.addingTimeInterval(-1), .belowRange),
-            Fixture.reading(oneDay.end, .aboveRange),
-            Fixture.reading(oneDay.end.addingTimeInterval(Fixture.day), .mgdl(300)),
+            Fixture.reading(Fixture.day0.addingTimeInterval(-Fixture.day - 1), .belowRange),
+            Fixture.reading(oneDay.end.addingTimeInterval(Fixture.day), .aboveRange),
+            Fixture.reading(oneDay.end.addingTimeInterval(2 * Fixture.day), .mgdl(300)),
         ]
         let clean = GlucoseStatistics.compute(readings: inside, interval: oneDay, options: Fixture.utcOptions)
         let noisy = GlucoseStatistics.compute(readings: outside + inside, interval: oneDay, options: Fixture.utcOptions)
-
         XCTAssertEqual(noisy.ranges, clean.ranges)
         XCTAssertEqual(noisy.meanAndVariability, clean.meanAndVariability)
         XCTAssertEqual(noisy.agp, clean.agp)
         XCTAssertEqual(noisy.hypoEvents, clean.hypoEvents)
         XCTAssertEqual(noisy.longestInRangeStreak, clean.longestInRangeStreak)
         XCTAssertEqual(noisy.dataSufficiency, clean.dataSufficiency)
+    }
+
+    func testReadingsWithinADayOutsideTheIntervalAreOnlyHypoContext() {
+        // A LOW 1 s before the interval and a HIGH at its end are context: every interval metric is
+        // unchanged. The low at 01:10 (15 min) is the same event; only why it ended differs — with the
+        // HIGH 22 h later in view, the readings did not run out, a gap followed.
+        let inside = Fixture.series(from: Fixture.at(60), Fixture.mg(100, 110, 65, 65, 65, 120))
+        let outside = [
+            Fixture.reading(Fixture.day0.addingTimeInterval(-1), .belowRange),
+            Fixture.reading(oneDay.end, .aboveRange),
+        ]
+        let clean = GlucoseStatistics.compute(readings: inside, interval: oneDay, options: Fixture.utcOptions)
+        let noisy = GlucoseStatistics.compute(readings: outside + inside, interval: oneDay, options: Fixture.utcOptions)
+        XCTAssertEqual(noisy.readingCount, clean.readingCount)
+        XCTAssertEqual(noisy.ranges, clean.ranges)
+        XCTAssertEqual(noisy.meanAndVariability, clean.meanAndVariability)
+        XCTAssertEqual(noisy.agp, clean.agp)
+        XCTAssertEqual(noisy.longestInRangeStreak, clean.longestInRangeStreak)
+        XCTAssertEqual(noisy.dataSufficiency, clean.dataSufficiency)
+        XCTAssertEqual(noisy.overnightAndDay, clean.overnightAndDay)
+        XCTAssertEqual(noisy.hypoEvents.level1.events.map(\.start), clean.hypoEvents.level1.events.map(\.start))
+        XCTAssertEqual(noisy.hypoEvents.level1.events.map(\.duration), [900])
+        XCTAssertEqual(clean.hypoEvents.level1.events.map(\.endedBy), [.noMoreReadings])
+        XCTAssertEqual(noisy.hypoEvents.level1.events.map(\.endedBy), [.gap])
     }
 
     func testDuplicateTimestampsAreCountedOnce() {

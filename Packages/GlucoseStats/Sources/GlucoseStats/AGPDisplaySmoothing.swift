@@ -29,31 +29,42 @@ public struct AGPDisplayBucket: Sendable, Equatable {
 }
 
 public enum AGPDisplaySmoothing {
-    /// Each percentile line smoothed independently with 1-2-1 weights over the bucket and its two
-    /// neighbours (the day wraps: 23:45 neighbours 00:00):
+    /// Each percentile line smoothed with 1-2-1 weights over the bucket and its two neighbours (the
+    /// day wraps: 23:45 neighbours 00:00):
     ///
     ///     smoothed[i] = (v[i−1] + 2·v[i] + v[i+1]) / 4
     ///
     /// - An empty bucket stays empty (`nil`): smoothing never fills a gap (S1).
-    /// - A LOW or HIGH bucket stays the flag (S4).
-    /// - A neighbour that is empty or a flag is left out and the weights renormalised, e.g.
-    ///   (2·v[i] + v[i+1]) / 3. A flag is never averaged as 40 or 400.
+    /// - A LOW or HIGH percentile stays the flag (S4).
+    /// - A neighbour bucket is used only if all five of its percentiles are numbers. Otherwise it
+    ///   is left out **for all five lines** and the weights renormalised, e.g. (2·v[i] + v[i+1]) / 3.
+    ///   Using the same neighbours and weights for every line of a bucket keeps the smoothed lines
+    ///   in order (p5 ≤ p25 ≤ p50 ≤ p75 ≤ p95), so bands can never cross. A flag is never
+    ///   averaged as 40 or 400.
     public static func smoothedForDisplay(_ profile: AGPProfile) -> [AGPDisplayBucket] {
         let buckets = profile.buckets
         let count = buckets.count
         return buckets.indices.map { index in
-            let previous = buckets[(index + count - 1) % count]
+            let previous = usableNeighbour(buckets[(index + count - 1) % count])
             let current = buckets[index]
-            let next = buckets[(index + 1) % count]
+            let next = usableNeighbour(buckets[(index + 1) % count])
             return AGPDisplayBucket(
                 startMinuteOfDay: current.startMinuteOfDay,
-                p5: smooth(previous.p5, current.p5, next.p5),
-                p25: smooth(previous.p25, current.p25, next.p25),
-                p50: smooth(previous.p50, current.p50, next.p50),
-                p75: smooth(previous.p75, current.p75, next.p75),
-                p95: smooth(previous.p95, current.p95, next.p95)
+                p5: smooth(previous?.p5, current.p5, next?.p5),
+                p25: smooth(previous?.p25, current.p25, next?.p25),
+                p50: smooth(previous?.p50, current.p50, next?.p50),
+                p75: smooth(previous?.p75, current.p75, next?.p75),
+                p95: smooth(previous?.p95, current.p95, next?.p95)
             )
         }
+    }
+
+    /// The neighbour itself if all five percentiles are numeric, else `nil` (not used for any line).
+    static func usableNeighbour(_ bucket: AGPBucket) -> AGPBucket? {
+        for percentile in [bucket.p5, bucket.p25, bucket.p50, bucket.p75, bucket.p95] {
+            guard case .mgdl? = percentile else { return nil }
+        }
+        return bucket
     }
 
     static func smooth(_ previous: GlucoseValue?, _ current: GlucoseValue?, _ next: GlucoseValue?) -> AGPDisplayValue? {

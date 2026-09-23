@@ -16,6 +16,9 @@ final class PeriodReadingsTests: XCTestCase {
 
         XCTAssertEqual(period.readings.map(\.date), [Fixture.at(0), Fixture.at(30)])
         XCTAssertEqual(period.outsideIntervalCount, 3)
+        // Outside the interval but within 24 h: kept only as hypo-detection context.
+        XCTAssertEqual(period.lookBackReadings.map(\.date), [Fixture.at(-5)])
+        XCTAssertEqual(period.lookAheadReadings.map(\.date), [Fixture.at(60), Fixture.at(65)])
         XCTAssertEqual(period.duplicateCount, 0)
         XCTAssertEqual(period.interval, interval)
     }
@@ -122,6 +125,33 @@ final class PeriodReadingsTests: XCTestCase {
         let period = Fixture.period(readings, Fixture.interval(minutes: 60))
         XCTAssertEqual(period.readings.map(\.band), [.veryLow, .inRange, .veryHigh, .low])
         XCTAssertEqual(period.readings.map(\.startsAfterGap), [false, false, true, false])
+    }
+
+    func testContextReadingsAroundTheInterval() {
+        // Interval [01:00, 02:00). Input: 00:40 sensor + an imported copy of it (look-back), 01:00, 01:05 and
+        // an imported copy of 01:05 (interval), 02:00, 02:10 (look-ahead).
+        //   01:00 is 20 min after 00:40 → it starts after a gap, judged against the look-back reading.
+        //   duplicateCount and containsImportedReadings describe the interval only: 1 and false.
+        //   outsideIntervalCount = 7 inputs − 3 inside = 4.
+        let interval = DateInterval(start: Fixture.at(60), duration: Fixture.hour)
+        let readings = [
+            Fixture.reading(Fixture.at(40), .mgdl(100)),
+            Fixture.reading(Fixture.at(40), .mgdl(100), source: .imported(.nightscout)),
+            Fixture.reading(Fixture.at(60), .mgdl(100)),
+            Fixture.reading(Fixture.at(65), .mgdl(100)),
+            Fixture.reading(Fixture.at(65), .mgdl(90), source: .imported(.nightscout)),
+            Fixture.reading(Fixture.at(120), .mgdl(100)),
+            Fixture.reading(Fixture.at(130), .mgdl(100)),
+        ]
+        let period = Fixture.period(readings, interval)
+
+        XCTAssertEqual(period.lookBackReadings.map(\.date), [Fixture.at(40)])
+        XCTAssertEqual(period.readings.map(\.date), [Fixture.at(60), Fixture.at(65)])
+        XCTAssertEqual(period.lookAheadReadings.map(\.date), [Fixture.at(120), Fixture.at(130)])
+        XCTAssertEqual(period.readings.map(\.startsAfterGap), [true, false])
+        XCTAssertEqual(period.duplicateCount, 1)
+        XCTAssertFalse(period.containsImportedReadings)
+        XCTAssertEqual(period.outsideIntervalCount, 4)
     }
 
     func testEmptyInput() {

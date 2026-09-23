@@ -10,9 +10,13 @@ import Foundation
 ///
 /// So "1 D" is today so far (the same interval as the Now screen's "Today so far") compared with
 /// all of yesterday, and "14 D" on Sep 23 is Sep 10 – Sep 23 compared with Aug 27 – Sep 9. Both
-/// periods span N calendar days; the current one is shorter in elapsed time because it ends now.
-/// All percentages compare fairly; data sufficiency is computed against each period's own
-/// elapsed time. Day arithmetic uses the calendar, so a DST day is 23 or 25 hours long.
+/// periods span N calendar days, but the current one ends now, so it is shorter in elapsed time
+/// (at 06:00 a "1 D" holds 6 hours against yesterday's 24). Consequences, handled in
+/// `PeriodComparison`: counts and the longest streak, which grow with time, get no delta unless the
+/// periods are equally long; percentages and means get a delta but compare a partial period, whose
+/// time-of-day mix differs (early in the day "1 D" is mostly overnight). Data sufficiency is
+/// computed against each period's own elapsed time. Day arithmetic uses the calendar, so a DST day
+/// is 23 or 25 hours long.
 public struct CalendarDayPeriod: Sendable, Equatable, Hashable {
     public let dayCount: Int
 

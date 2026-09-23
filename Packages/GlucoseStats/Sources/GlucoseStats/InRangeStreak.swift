@@ -4,8 +4,9 @@
 import Foundation
 import GlucoseCore
 
-/// A run of consecutive in-range (70–180 mg/dL) readings with no gap over 15 minutes, measured with
-/// the `Continuity` rules. LOW and HIGH are out of range (S4).
+/// A run of consecutive in-range (70–180 mg/dL) readings inside the period with no gap over
+/// 15 minutes, measured with the `Continuity` rules and cut at the period end. LOW and HIGH are out
+/// of range (S4).
 public struct InRangeStreak: Sendable, Equatable {
     /// Timestamp of the run's first reading.
     public let start: Date
@@ -26,7 +27,7 @@ public struct InRangeStreak: Sendable, Equatable {
             guard let first = runStart else { return }
             let run = InRangeStreak(
                 start: readings[first].date,
-                end: Continuity.coverageEnd(ofReadingAt: lastIndex, in: period),
+                end: Continuity.coverageEnd(ofReadingAt: lastIndex, in: readings, notAfter: period.interval.end),
                 readingCount: lastIndex - first + 1
             )
             if run.duration > (best?.duration ?? 0) { best = run }

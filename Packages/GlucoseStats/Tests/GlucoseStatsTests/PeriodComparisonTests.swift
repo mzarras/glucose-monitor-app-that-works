@@ -48,15 +48,16 @@ final class PeriodComparisonTests: XCTestCase {
         XCTAssertNil(comparison.gmiDeltaPoints)
         // Sufficiency: current 4 / (12 h / 5 min = 144) × 100 = 2.777…; previous 4/288 × 100 = 1.388… → +1.388…
         XCTAssertEqual(comparison.dataSufficiencyDeltaPoints!, 400.0 / 144.0 - 400.0 / 288.0, accuracy: 1e-12)
-        // No lows in either period.
-        XCTAssertEqual(comparison.level1EventCountDelta, 0)
-        XCTAssertEqual(comparison.level2EventCountDelta, 0)
+        // Counts and the longest streak grow with elapsed time: 12 h today vs 24 h yesterday is not a
+        // like-for-like comparison, so those deltas are nil.
+        XCTAssertFalse(comparison.periodsHaveEqualLength)
+        XCTAssertNil(comparison.level1EventCountDelta)
+        XCTAssertNil(comparison.level2EventCountDelta)
+        XCTAssertNil(comparison.longestInRangeStreakDeltaSeconds)
         XCTAssertNil(comparison.level1MeanDurationDeltaSeconds)
         // All readings are at 08:00 → none overnight; day TIR delta equals the overall one.
         XCTAssertNil(comparison.overnightInRangeDeltaPoints)
         XCTAssertEqual(comparison.dayInRangeDeltaPoints, 25)
-        // Streak: current 08:00–08:15 (15 min), previous 08:00–08:10 (10 min) → +300 s.
-        XCTAssertEqual(comparison.longestInRangeStreakDeltaSeconds, 300)
         XCTAssertFalse(comparison.previousHasSufficientData)
     }
 
@@ -75,20 +76,56 @@ final class PeriodComparisonTests: XCTestCase {
         XCTAssertFalse(comparison.previousHasSufficientData)
     }
 
-    func testEventCountAndDurationDeltas() {
-        // Previous day: one 15-min level 1 event. Current: two events, 15 and 20 min (mean 17.5 min).
+    func testEventCountAndDurationDeltasBetweenEqualLengthPeriods() {
+        // Two complete days. Jan 5: one 15-min level 1 event. Jan 6: two events, 15 and 20 min (mean 17.5 min).
         //   count delta +1; mean duration delta 1 050 − 900 = +150 s.
         let previous = Fixture.series(from: Fixture.day0.addingTimeInterval(3 * Fixture.hour), Fixture.mg(65, 65, 65, 100, 100, 100))
         let current = Fixture.series(
             from: jan6.addingTimeInterval(3 * Fixture.hour),
             Fixture.mg(65, 65, 65, 100, 100, 100, 65, 65, 65, 65, 100, 100, 100)
         )
-        let comparison = GlucoseStatistics.compare(readings: previous + current, period: .today, now: now, options: Fixture.utcOptions)
+        let readings = previous + current
+        let comparison = PeriodComparison(
+            current: GlucoseStatistics.compute(readings: readings, interval: DateInterval(start: jan6, duration: Fixture.day), options: Fixture.utcOptions),
+            previous: GlucoseStatistics.compute(readings: readings, interval: DateInterval(start: Fixture.day0, duration: Fixture.day), options: Fixture.utcOptions)
+        )
+        XCTAssertTrue(comparison.periodsHaveEqualLength)
         XCTAssertEqual(comparison.level1EventCountDelta, 1)
         XCTAssertEqual(comparison.level1MeanDurationDeltaSeconds, 150)
         // Both periods' readings are at 03:00 → all overnight, so the overnight delta exists and the day one does not.
         XCTAssertNotNil(comparison.overnightInRangeDeltaPoints)
         XCTAssertNil(comparison.dayInRangeDeltaPoints)
+    }
+
+    func testIdenticalDaysReadAtSixAMShowNoSpuriousChange() {
+        // Reviewer probe: Jan 5 and Jan 6 are identical — 100 every 5 min, with 15-min lows at 03:00 and 12:00.
+        // Read at Jan 6 06:00, "1 D" holds 6 h of today (one low, a 3-hour streak) against all of
+        // yesterday (two lows, an ~11.75-hour streak). Reporting "−1 low" or "shorter streak" would be an
+        // artefact of the partial day, so those deltas are nil. Compared as complete days they are 0.
+        func day(from start: Date) -> [GlucoseReading] {
+            let values: [GlucoseValue] = (0..<288).map { slot in
+                (36..<39).contains(slot) || (144..<147).contains(slot) ? .mgdl(65) : .mgdl(100)
+            }
+            return Fixture.series(from: start, values)
+        }
+        let readings = day(from: Fixture.day0) + day(from: jan6)
+
+        let atSix = GlucoseStatistics.compare(
+            readings: readings, period: .today, now: jan6.addingTimeInterval(6 * Fixture.hour), options: Fixture.utcOptions
+        )
+        XCTAssertEqual(atSix.current.hypoEvents.level1.count, 1)
+        XCTAssertEqual(atSix.previous.hypoEvents.level1.count, 2)
+        XCTAssertNil(atSix.level1EventCountDelta)
+        XCTAssertNil(atSix.level2EventCountDelta)
+        XCTAssertNil(atSix.longestInRangeStreakDeltaSeconds)
+
+        let wholeDays = PeriodComparison(
+            current: GlucoseStatistics.compute(readings: readings, interval: DateInterval(start: jan6, duration: Fixture.day), options: Fixture.utcOptions),
+            previous: GlucoseStatistics.compute(readings: readings, interval: DateInterval(start: Fixture.day0, duration: Fixture.day), options: Fixture.utcOptions)
+        )
+        XCTAssertEqual(wholeDays.level1EventCountDelta, 0)
+        XCTAssertEqual(wholeDays.longestInRangeStreakDeltaSeconds, 0)
+        XCTAssertEqual(wholeDays.inRangeDeltaPoints, 0)
     }
 
     func testFourteenDayComparisonHasGMIDelta() {

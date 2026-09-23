@@ -8,6 +8,8 @@ import GlucoseCore
 enum Fixture {
     static let utc = calendar("UTC")
     static let newYork = calendar("America/New_York")
+    /// Chile springs forward at midnight: on 2026-09-06 the day starts at 01:00.
+    static let santiago = calendar("America/Santiago")
 
     static func calendar(_ identifier: String) -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
@@ -22,6 +24,14 @@ enum Fixture {
     static let springForwardDayStart = Date(timeIntervalSince1970: 1_772_946_000)
     /// 2026-11-01 00:00 EDT = 04:00 UTC. New York falls back at 02:00 EDT that day: a 25-hour day.
     static let fallBackDayStart = Date(timeIntervalSince1970: 1_793_505_600)
+    /// 2026-09-05 00:00 −04 (Santiago) = 04:00 UTC.
+    static let santiagoSep5 = Date(timeIntervalSince1970: 1_788_580_800)
+    /// 2026-09-06 01:00 −03 = 04:00 UTC: the first instant of Sep 6 in Santiago (00:00 → 01:00 at midnight).
+    static let santiagoSep6 = Date(timeIntervalSince1970: 1_788_667_200)
+    /// 2026-09-07 00:00 −03 = 03:00 UTC. Sep 6 lasted 23 h.
+    static let santiagoSep7 = Date(timeIntervalSince1970: 1_788_750_000)
+    /// 2026-09-08 00:00 −03.
+    static let santiagoSep8 = Date(timeIntervalSince1970: 1_788_836_400)
 
     static let minute: TimeInterval = 60
     static let hour: TimeInterval = 3_600
