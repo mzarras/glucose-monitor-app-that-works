@@ -22,7 +22,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | dispatched | — | — |
 | WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | dispatched | — | — |
 | WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (346d4e2): 46 tests, 97.8% cov; fixing review minors | **PASS** (0 blockers; M1 heartbeat → Phase 2 must-do; M2 decided D21) | — |
-| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | dispatched | — | — |
+| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (8e4889c): 96 tests, 90.3% cov | in review | — |
 
 ### Merge flow
 
@@ -75,6 +75,9 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Wire `OutOfRangePolicy` to LOW→39 / HIGH→401 explicitly, citing D21; add a `check.sh` lint that `.writeSentinel` appears outside `Packages/TrioBridge` only in lines citing D21 (WS6 review m7).
 - App calls `TrioBridge.publish([], session:)` on foreground and on a timer so a failed write retries without waiting for the next reading (WS6 review m4); re-seed the last ~5 h of `.sensor` readings on launch.
 - In DEBUG builds keep Trio bridge and uploaders off unless the developer switch is on (D20).
+
+- Uploaders don't flush on their own: the app calls `ReadingUploader.flushIfDue()` after each submitted reading and on foreground/background time, `flush()` after credential changes; queue directory in the App Group container; Nightscout token + Share credentials via `KeychainCredentialStore`; import checkpoint via `UserDefaultsNightscoutImportCheckpointStore`; `deviceName` from `APP_DISPLAY_NAME` (WS7).
+- NOTICE.md at merge: xDrip4iOS Share files (WS7 list); cgm-remote-monitor (AGPL-3.0, reference only, no code); share2nightscout-bridge (**GPL-3.0-only** per its package.json — WS7 guessed MIT; reference only); LoopKit dexcom-share-client-swift (MIT, reference); micro-ecc etc. from WS1.
 
 ## Open questions for Michael
 
