@@ -54,6 +54,8 @@ struct BuildBannerView: View {
         .padding(.vertical, 6)
         .padding(.horizontal, 12)
         .background(Theme.ink)
+        // Stays unmissable without taking over the screen at accessibility sizes.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .layoutProbe("build.banner")
         .accessibilityElement(children: .combine)
     }

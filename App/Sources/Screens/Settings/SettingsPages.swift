@@ -263,9 +263,9 @@ struct AlertDeliveryView: View {
 
     private func statusBlock(title: String, status: String, note: String?, isProblem: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline) {
+            AdaptiveRow {
                 Text(verbatim: title).font(Typography.body(size: 15, weight: .medium))
-                Spacer()
+            } trailing: {
                 Text(verbatim: status)
                     .font(Typography.label(size: 12, medium: true))
                     .foregroundStyle(isProblem ? AnyShapeStyle(Theme.alert) : AnyShapeStyle(Theme.ink))

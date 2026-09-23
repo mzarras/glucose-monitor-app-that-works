@@ -69,46 +69,65 @@ struct TrendsContent: View {
     }
 
     private var hero: some View {
-        HStack(alignment: .bottom, spacing: 14) {
-            HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Text(verbatim: state.timeInRange.map { String(Int($0.rounded())) } ?? "—")
-                    .font(Typography.statHero(size: 104))
-                    .tracking(-2)
-                if state.timeInRange != nil {
-                    Text(verbatim: "%").font(Typography.statHero(size: 48))
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .bottom, spacing: 14) {
+                heroNumber
+                heroCaption.fixedSize()
             }
-            .lineLimit(1)
-            .minimumScaleFactor(0.5)
-            .padding(.vertical, -10)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: "time in range")
-                    .font(Typography.body(size: 14))
-                Text(verbatim: "70–180 mg/dL")
-                    .font(Typography.label(size: 11))
-                    .foregroundStyle(Theme.muted)
-                Text(verbatim: TrendsText.change(state.timeInRangeChange, period: state.period))
-                    .font(Typography.label(size: 11, medium: true))
-                    .foregroundStyle(state.timeInRangeChange == nil ? AnyShapeStyle(Theme.muted) : AnyShapeStyle(Theme.accent))
+            VStack(alignment: .leading, spacing: 10) {
+                // Full size: "100%" at 104 pt is ~250 pt, narrower than any supported screen.
+                heroNumber.fixedSize()
+                heroCaption
             }
-            .padding(.bottom, 4)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: TrendsText.heroSpeech(state)))
+    }
+
+    private var heroNumber: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text(verbatim: state.timeInRange.map { String(Int($0.rounded())) } ?? "—")
+                .font(Typography.statHero(size: 104))
+                .tracking(-2)
+            if state.timeInRange != nil {
+                Text(verbatim: "%").font(Typography.statHero(size: 48))
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.5)
+        .padding(.vertical, -10)
+    }
+
+    private var heroCaption: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(verbatim: "time in range")
+                .font(Typography.body(size: 14))
+            Text(verbatim: "70–180 mg/dL")
+                .font(Typography.label(size: 11))
+                .foregroundStyle(Theme.muted)
+            Text(verbatim: TrendsText.change(state.timeInRangeChange, period: state.period))
+                .font(Typography.label(size: 11, medium: true))
+                .foregroundStyle(state.timeInRangeChange == nil ? AnyShapeStyle(Theme.muted) : AnyShapeStyle(Theme.accent))
+        }
+        // Wrap rather than truncate when stacked at large text sizes.
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.bottom, 4)
     }
 
     @ViewBuilder
     private var profileSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Hairline(strong: true)
-            HStack(alignment: .firstTextBaseline) {
-                Text(verbatim: profileTitle)
-                    .font(Typography.title(size: 20))
-                    .accessibilityAddTraits(.isHeader)
-                Spacer()
-                Text(verbatim: profileLegend)
-                    .font(Typography.label(size: 10))
-                    .foregroundStyle(Theme.muted)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline) {
+                    profileTitleText.fixedSize()
+                    Spacer()
+                    profileLegendText.fixedSize()
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    profileTitleText
+                    profileLegendText
+                }
             }
             switch state.profile {
             case .none:
@@ -124,6 +143,19 @@ struct TrendsContent: View {
                     .frame(height: 160)
             }
         }
+    }
+
+    private var profileTitleText: some View {
+        Text(verbatim: profileTitle)
+            .font(Typography.title(size: 20))
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private var profileLegendText: some View {
+        Text(verbatim: profileLegend)
+            .font(Typography.label(size: 10))
+            .foregroundStyle(Theme.muted)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var profileTitle: String {
@@ -187,23 +219,48 @@ struct RangeBarView: View {
             }
             .frame(height: 8)
             .accessibilityHidden(true)
-            HStack(alignment: .top, spacing: 4) {
-                ForEach(bands, id: \.0) { band, label in
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(verbatim: label)
-                            .font(Typography.label(size: 10))
-                            .foregroundStyle(Theme.muted)
-                        Text(verbatim: TrendsText.binPercent(bins.percent(for: band)))
-                            .font(Typography.label(size: 12))
-                            .foregroundStyle(Theme.ink)
+            // Five columns when they fit; one row per bin at large text sizes, so "54–69" or
+            // "78%" never breaks in the middle.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 4) {
+                    ForEach(bands, id: \.0) { band, label in
+                        VStack(alignment: .leading, spacing: 1) {
+                            binLabel(label)
+                            binPercent(band)
+                        }
+                        .fixedSize()
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(bands, id: \.0) { band, label in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Rectangle().fill(Theme.band(band)).frame(width: 10, height: 10)
+                            binLabel(label)
+                            Spacer(minLength: 8)
+                            binPercent(band)
+                        }
+                    }
                 }
             }
             .accessibilityHidden(true)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: TrendsText.binsSpeech(bins)))
+    }
+
+    private func binLabel(_ label: String) -> some View {
+        Text(verbatim: label)
+            .font(Typography.label(size: 10))
+            .foregroundStyle(Theme.muted)
+            .lineLimit(1)
+    }
+
+    private func binPercent(_ band: GlucoseBand) -> some View {
+        Text(verbatim: TrendsText.binPercent(bins.percent(for: band)))
+            .font(Typography.label(size: 12))
+            .foregroundStyle(Theme.ink)
+            .lineLimit(1)
     }
 }
 
@@ -232,36 +289,56 @@ struct MetricRowsView: View {
         }
     }
 
+    /// Title (and note) left, value right when they fit on one line each; otherwise the value goes
+    /// under the title, so nothing is truncated or broken mid-word at large text sizes.
     private func row(_ title: String, note: String?, value: String, unit: String? = nil, valueIsNote: Bool = false, isLast: Bool = false) -> some View {
         VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: title).font(Typography.body(size: 14))
-                    if let note {
-                        Text(verbatim: note)
-                            .font(Typography.body(size: 12))
-                            .foregroundStyle(Theme.muted)
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    titleBlock(title, note: note).fixedSize()
+                    Spacer(minLength: 8)
+                    valueBlock(value, unit: unit, valueIsNote: valueIsNote).fixedSize()
                 }
-                Spacer(minLength: 8)
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    if valueIsNote {
-                        Text(verbatim: value)
-                            .font(Typography.label(size: 11))
-                            .foregroundStyle(Theme.muted)
-                    } else {
-                        Text(verbatim: value).font(Typography.title(size: 22))
-                    }
-                    if let unit {
-                        Text(verbatim: unit)
-                            .font(Typography.label(size: 11))
-                            .foregroundStyle(Theme.muted)
-                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    titleBlock(title, note: note)
+                    valueBlock(value, unit: unit, valueIsNote: valueIsNote)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.vertical, 12)
             if !isLast { Hairline() }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private func titleBlock(_ title: String, note: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(verbatim: title).font(Typography.body(size: 14))
+            if let note {
+                Text(verbatim: note)
+                    .font(Typography.body(size: 12))
+                    .foregroundStyle(Theme.muted)
+            }
+        }
+        // Wrap rather than truncate when stacked at large text sizes.
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func valueBlock(_ value: String, unit: String?, valueIsNote: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            if valueIsNote {
+                Text(verbatim: value)
+                    .font(Typography.label(size: 11))
+                    .foregroundStyle(Theme.muted)
+            } else {
+                Text(verbatim: value).font(Typography.title(size: 22))
+            }
+            if let unit {
+                Text(verbatim: unit)
+                    .font(Typography.label(size: 11))
+                    .foregroundStyle(Theme.muted)
+            }
+        }
+        .lineLimit(1)
     }
 }

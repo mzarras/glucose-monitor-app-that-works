@@ -59,7 +59,7 @@ enum Fixtures {
     // MARK: - Now
 
     enum NowScenario: String, CaseIterable, Identifiable {
-        case normal, low, high, lowFlag, highFlag, stale, noData, warmUp, expired, bluetoothOff, trioFailing, sensorError, notPaired, manyProblems
+        case normal, low, high, lowFlag, highFlag, stale, noData, warmUp, expired, bluetoothOff, trioFailing, sensorError, notPaired, clockMismatch, manyProblems
         var id: String { rawValue }
     }
 
@@ -129,6 +129,9 @@ enum Fixtures {
             sensor = .expired
         case .bluetoothOff:
             sensor = .bluetoothUnavailable(.poweredOff)
+        case .clockMismatch:
+            // The phone clock was moved back an hour: the latest reading is dated in the future.
+            points = dayOfPoints(now: now, lastReadingAge: -60)
         case .trioFailing:
             health.trio = .failing(since: now.addingTimeInterval(-18 * 60), message: "App Group write failed")
         case .sensorError:

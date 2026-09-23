@@ -41,6 +41,10 @@ struct SectionLabel: View {
 
 /// Row of text buttons with the selected one underlined in the accent (mockup "3H 6H 12H 24H").
 struct TextSegmentPicker<Option: Identifiable & Equatable>: View {
+    /// A compact control: labels grow with Dynamic Type up to this size, then stay put so the
+    /// segments never run together; each segment is still ≥ 44 pt.
+    static var maxTypeSize: DynamicTypeSize { .xxxLarge }
+
     let options: [Option]
     let selected: Option
     let label: (Option) -> String
@@ -69,8 +73,12 @@ struct TextSegmentPicker<Option: Identifiable & Equatable>: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text(verbatim: spokenLabel(option)))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .accessibilityShowsLargeContentViewer {
+                    Text(verbatim: label(option))
+                }
             }
         }
+        .dynamicTypeSize(...Self.maxTypeSize)
     }
 }
 

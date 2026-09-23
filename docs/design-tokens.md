@@ -33,6 +33,8 @@ accent follows the ink token in dark mode.
 
 ### Changes from the §7.1 table
 
+**Accepted (PROGRESS D32, WS5 safety review).**
+
 - **light `high` `#C58A2B` → `#B07B26`.** The table value is 2.64:1 on the background, below the
   3:1 minimum for large text and graphics; the hero numeral (132 pt) and the range-bar segment use
   it. `#B07B26` is the same hue, 3.26:1.
@@ -44,10 +46,22 @@ accent follows the ink token in dark mode.
 ## Contrast (WCAG AA)
 
 Body text needs 4.5:1; text ≥ 24 pt (18.66 pt bold) and graphical marks need 3:1. "Need" is the
-threshold the test applies to that pair. Opacity-reduced content is deliberate and exempt: stale
-widget numbers are drawn at 40 % so an old number never looks current (the "STALE · 12 min ago"
-label next to them is full contrast), the two earlier days in the 3 D overlay are 60 % context lines,
-and disabled buttons are 35 %.
+threshold the test applies to that pair.
+
+### Reduced emphasis
+
+Nothing informative is faded below these thresholds. Reduced-opacity content is checked after
+compositing onto what is behind it (`SRGBColor.blended(over:opacity:)`,
+`DesignTokenContrastTests.test_reducedOpacityContentStillMeetsAA`); constants in `Emphasis`.
+
+| Content | Treatment | Worst ratio (light / dark) | Need |
+|---|---|---|---|
+| Stale widget number | `muted` at full opacity (not faded), next to "STALE · 12 min ago" in `low` | 5.06 / 6.69 | 3 (large) |
+| Dimmed widget chart (stale / no data) | whole chart at 0.6 (`Emphasis.dimmedChartOpacity`), no "latest" dot | ink line over band 4.18 / 5.60 | 3 (graphic) |
+| 3 D overlay, earlier days' lines | `muted` at full opacity, 1 pt (today: ink, 2 pt) | muted over band 4.42 / 5.88 | 3 (graphic) |
+| 3 D overlay, earlier days' LOW/HIGH | labels at full opacity; ticks at 0.85 (`Emphasis.otherDayFlagTickOpacity`) | labels as veryLow/veryHigh; ticks 4.67 / 4.76 | 4.5 text / 3 graphic |
+| Disabled buttons | 35 % | — | exempt (WCAG: inactive controls) |
+| AGP 25–75 band | accent at 22 % fill, bounded by the ink median and dashed muted lines | — | decorative fill; the lines carry the data |
 
 | Mode | Foreground | On | Ratio | Need | Where |
 |---|---|---|---|---|---|

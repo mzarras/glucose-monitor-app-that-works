@@ -387,27 +387,53 @@ struct TodaySoFarView: View {
         VStack(alignment: .leading, spacing: 10) {
             Hairline(strong: true)
             SectionLabel("TODAY SO FAR")
-            HStack(alignment: .top, spacing: 12) {
-                figure(today.timeInRangePercent.map(String.init) ?? "—", suffix: today.timeInRangePercent == nil ? nil : "%", caption: "in range")
-                figure(today.averageMgdl.map(String.init) ?? "—", suffix: nil, caption: "average")
-                figure(today.lowCount.map(String.init) ?? "—", suffix: nil, caption: "lows")
+            // Three columns when they fit; one per row at large text sizes, so a caption never
+            // breaks mid-word.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 12) {
+                    figures(columns: true)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    figures(columns: false)
+                }
             }
         }
     }
 
-    private func figure(_ value: String, suffix: String?, caption: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 0) {
-                Text(verbatim: value).font(Typography.figure(size: 36))
-                if let suffix {
-                    Text(verbatim: suffix).font(Typography.figure(size: 20))
+    @ViewBuilder
+    private func figures(columns: Bool) -> some View {
+        figure(today.timeInRangePercent.map(String.init) ?? "—", suffix: today.timeInRangePercent == nil ? nil : "%", caption: "in range", column: columns)
+        figure(today.averageMgdl.map(String.init) ?? "—", suffix: nil, caption: "average", column: columns)
+        figure(today.lowCount.map(String.init) ?? "—", suffix: nil, caption: "lows", column: columns)
+    }
+
+    private func figure(_ value: String, suffix: String?, caption: String, column: Bool) -> some View {
+        let number = HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text(verbatim: value).font(Typography.figure(size: 36))
+            if let suffix {
+                Text(verbatim: suffix).font(Typography.figure(size: 20))
+            }
+        }
+        let label = Text(verbatim: caption)
+            .font(Typography.body(size: 12))
+            .foregroundStyle(Theme.muted)
+            .lineLimit(1)
+            .fixedSize()
+        return Group {
+            if column {
+                VStack(alignment: .leading, spacing: 2) {
+                    number
+                    label
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    number
+                    label
                 }
             }
-            Text(verbatim: caption)
-                .font(Typography.body(size: 12))
-                .foregroundStyle(Theme.muted)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: !column, vertical: false)
         .accessibilityElement(children: .combine)
     }
 }

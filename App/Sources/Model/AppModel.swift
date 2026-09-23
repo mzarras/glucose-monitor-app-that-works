@@ -47,7 +47,7 @@ final class AppModel {
             scenario = chosen
         }
         let current = Date()
-        return AppModel(
+        let model = AppModel(
             now: Fixtures.now(scenario, at: current),
             trends: Fixtures.trends(.default, at: current),
             alerts: Fixtures.alerts,
@@ -55,6 +55,12 @@ final class AppModel {
             calibration: Fixtures.calibration(.available, at: current),
             onboarding: arguments.contains("-onboarding") ? .initial : nil
         )
+        // `-tab alerts` etc. opens a tab (for simctl screenshots).
+        if let index = arguments.firstIndex(of: "-tab"), index + 1 < arguments.count,
+           let tab = AppTab(rawValue: arguments[index + 1]) {
+            model.selectedTab = tab
+        }
+        return model
         #else
         return AppModel(
             now: .empty,

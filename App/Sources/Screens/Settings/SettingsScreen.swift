@@ -123,9 +123,9 @@ struct SettingsContent: View {
             SettingsButtonRow(title: "Import history", detail: importDetail, action: actions.startImport)
             SettingsButtonRow(title: "Export all data (CSV)", detail: nil, action: actions.exportCSV)
             SettingsButtonRow(title: "Export diagnostics", detail: "BLE state changes and Trio/upload events, for bug reports.", action: actions.exportDiagnostics)
-            HStack {
+            AdaptiveRow {
                 Text(verbatim: "Keep readings for").font(Typography.body(size: 15))
-                Spacer()
+            } trailing: {
                 Picker(selection: Binding(get: { state.retention }, set: { actions.setRetention($0) })) {
                     ForEach(DataRetention.allCases) { Text(verbatim: $0.label).tag($0) }
                 } label: {
@@ -171,13 +171,16 @@ struct SettingsContent: View {
             }
             .padding(.vertical, 8)
             Hairline()
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 2) {
+                AdaptiveRow {
                     Text(verbatim: "Units").font(Typography.body(size: 15))
-                    Text(verbatim: "mmol/L is planned for a later version.").font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
+                } trailing: {
+                    Text(verbatim: GlucoseText.unit).font(Typography.label(size: 12))
                 }
-                Spacer()
-                Text(verbatim: GlucoseText.unit).font(Typography.label(size: 12))
+                Text(verbatim: "mmol/L is planned for a later version.")
+                    .font(Typography.body(size: 12))
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(minHeight: Layout.minTarget)
         }
@@ -224,21 +227,46 @@ struct SettingsLinkRow: View {
     let route: SettingsRoute
     var valueIsAlert = false
 
+    private var titleText: some View {
+        Text(verbatim: title).font(Typography.body(size: 15))
+    }
+
+    private var valueText: some View {
+        Text(verbatim: value)
+            .font(Typography.label(size: 11))
+            .foregroundStyle(valueIsAlert ? AnyShapeStyle(Theme.alert) : AnyShapeStyle(Theme.muted))
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 12, weight: .regular))
+            .foregroundStyle(Theme.muted)
+            .accessibilityHidden(true)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             NavigationLink(value: route) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(verbatim: title).font(Typography.body(size: 15))
-                    Spacer(minLength: 8)
-                    Text(verbatim: value)
-                        .font(Typography.label(size: 11))
-                        .foregroundStyle(valueIsAlert ? AnyShapeStyle(Theme.alert) : AnyShapeStyle(Theme.muted))
-                        .multilineTextAlignment(.trailing)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(Theme.muted)
-                        .accessibilityHidden(true)
+                // One line when it fits; value under the title at large text sizes, so nothing
+                // breaks mid-word.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        titleText.fixedSize()
+                        Spacer(minLength: 8)
+                        valueText.fixedSize()
+                        chevron
+                    }
+                    HStack(alignment: .center, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            titleText
+                            valueText
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        chevron
+                    }
                 }
+                .padding(.vertical, 4)
                 .frame(minHeight: Layout.minTarget)
                 .contentShape(Rectangle())
             }
@@ -254,14 +282,37 @@ struct SettingsValueRow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
+            AdaptiveRow {
                 Text(verbatim: title).font(Typography.body(size: 15))
-                Spacer()
+            } trailing: {
                 Text(verbatim: value).font(Typography.label(size: 12))
             }
             .frame(minHeight: Layout.minTarget)
             .accessibilityElement(children: .combine)
             Hairline()
+        }
+    }
+}
+
+/// Leading and trailing content on one line when both fit at their natural width; otherwise the
+/// trailing content goes under the leading content (large text sizes), so neither breaks mid-word.
+struct AdaptiveRow<Leading: View, Trailing: View>: View {
+    @ViewBuilder let leading: Leading
+    @ViewBuilder let trailing: Trailing
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                leading.fixedSize()
+                Spacer(minLength: 8)
+                trailing.fixedSize()
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                leading.fixedSize(horizontal: false, vertical: true)
+                trailing.fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
         }
     }
 }

@@ -191,4 +191,17 @@ struct ScrubPreview: View {
         .editorialScreen()
     }
 }
+
+// MARK: - Review fixes: accessibility sizes, clock mismatch, retype
+
+#Preview("Now · lowFlag · AX5 · light") { PreviewScreen(scheme: .light) { NowContent(state: Fixtures.now(.lowFlag, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop) }.environment(\.dynamicTypeSize, .accessibility5) }
+#Preview("Now · highFlag · AX5 · light") { PreviewScreen(scheme: .light) { NowContent(state: Fixtures.now(.highFlag, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop) }.environment(\.dynamicTypeSize, .accessibility5) }
+#Preview("Now · normal · AX5 · light") { PreviewScreen(scheme: .light) { NowContent(state: Fixtures.now(.normal, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop) }.environment(\.dynamicTypeSize, .accessibility5) }
+#Preview("Calibration · retype, value hidden · light") { CalibrationFlowView(state: Fixtures.calibration(.available, at: previewNow), initialFlow: CalibrationFlow(step: .confirm(value: 112, takenAt: CalibrationPreviews.takenAt), confirmText: "1"), submit: { _ in }, close: {}).environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("Calibration · retype matches · light") { CalibrationFlowView(state: Fixtures.calibration(.available, at: previewNow), initialFlow: CalibrationFlow(step: .confirm(value: 112, takenAt: CalibrationPreviews.takenAt), confirmText: "112"), submit: { _ in }, close: {}).environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("Now · lowFlag · AX5 · dark") { PreviewScreen(scheme: .dark) { NowContent(state: Fixtures.now(.lowFlag, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop) }.environment(\.dynamicTypeSize, .accessibility5) }
+#Preview("Now · highFlag · AX5 · dark") { PreviewScreen(scheme: .dark) { NowContent(state: Fixtures.now(.highFlag, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop) }.environment(\.dynamicTypeSize, .accessibility5) }
+#Preview("Now · normal · AX5 · dark") { PreviewScreen(scheme: .dark) { NowContent(state: Fixtures.now(.normal, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop) }.environment(\.dynamicTypeSize, .accessibility5) }
+#Preview("Calibration · retype, value hidden · dark") { CalibrationFlowView(state: Fixtures.calibration(.available, at: previewNow), initialFlow: CalibrationFlow(step: .confirm(value: 112, takenAt: CalibrationPreviews.takenAt), confirmText: "1"), submit: { _ in }, close: {}).environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+#Preview("Calibration · retype matches · dark") { CalibrationFlowView(state: Fixtures.calibration(.available, at: previewNow), initialFlow: CalibrationFlow(step: .confirm(value: 112, takenAt: CalibrationPreviews.takenAt), confirmText: "112"), submit: { _ in }, close: {}).environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
 #endif

@@ -50,6 +50,12 @@ final class ScreenshotTests: XCTestCase {
         try render(phone(tab: .now, hasProblems: false) { nowContent(.lowFlag) }, name: "now-low-flag-light", scheme: .light)
         try render(phone(tab: .now, hasProblems: true) { nowContent(.manyProblems) }, name: "now-banners-light", scheme: .light, height: nil)
         try render(phone(tab: .now, hasProblems: false) { nowContent(.warmUp) }, name: "now-warm-up-dark", scheme: .dark)
+        try render(phone(tab: .now, hasProblems: true) { nowContent(.clockMismatch) }, name: "now-clock-mismatch-light", scheme: .light)
+        // Review B1: the hero at the largest accessibility text size.
+        try render(phone(tab: .now, hasProblems: false) { nowContent(.lowFlag) }.environment(\.dynamicTypeSize, .accessibility5),
+                   name: "now-low-flag-ax5-light", scheme: .light, height: nil)
+        try render(phone(tab: .now, hasProblems: false) { nowContent(.normal) }.environment(\.dynamicTypeSize, .accessibility5),
+                   name: "now-ax5-dark", scheme: .dark, height: nil)
     }
 
     @MainActor
@@ -59,6 +65,11 @@ final class ScreenshotTests: XCTestCase {
         }
         try render(phone(tab: .trends, hasProblems: false) { trendsContent(.threeDays) }, name: "trends-3d-light", scheme: .light, height: nil)
         try render(phone(tab: .trends, hasProblems: false) { trendsContent(.thirtyDays) }, name: "trends-30d-low-coverage-dark", scheme: .dark, height: nil)
+        try render(phone(tab: .trends, hasProblems: false) { trendsContent(.fourteenDays) }.environment(\.dynamicTypeSize, .accessibility5),
+                   name: "trends-14d-ax5-light", scheme: .light, height: nil)
+        try render(phone(tab: .settings, hasProblems: false) { SettingsContent(state: Fixtures.settings(at: now), now: now, actions: .noop, context: context) }
+                    .environment(\.dynamicTypeSize, .accessibility5),
+                   name: "settings-ax5-light", scheme: .light, height: nil)
     }
 
     @MainActor
@@ -66,6 +77,8 @@ final class ScreenshotTests: XCTestCase {
         let takenAt = now.addingTimeInterval(-60)
         let confirm = CalibrationFlow(step: .confirm(value: 112, takenAt: takenAt), confirmText: "121")
         try render(calibration(.available, confirm), name: "calibration-mismatch-light", scheme: .light)
+        let matched = CalibrationFlow(step: .confirm(value: 112, takenAt: takenAt), confirmText: "112")
+        try render(calibration(.available, matched), name: "calibration-retype-matched-dark", scheme: .dark)
         let large = CalibrationFlow(step: .largeDifference(value: 155, takenAt: takenAt, difference: .large(sensorMgdl: 105, difference: 50, limit: 21)))
         try render(calibration(.available, large), name: "calibration-big-difference-dark", scheme: .dark)
     }
@@ -189,13 +202,23 @@ final class ScreenshotTests: XCTestCase {
             .environment(\.colorScheme, scheme)
             .environment(\.accentChoice, .forest)
         let renderer = ImageRenderer(content: content)
-        renderer.scale = 2
         renderer.proposedSize = ProposedViewSize(width: width, height: height)
+        // 2× unless the page is very tall (accessibility sizes), where the bitmap would exceed
+        // what the PNG encoder accepts; keep it under ~10k pixels.
+        renderer.scale = 1
+        let pointHeight = try XCTUnwrap(renderer.uiImage, "\(name) did not render").size.height
+        renderer.scale = min(2, max(1, 10_000 / pointHeight))
         let image = try XCTUnwrap(renderer.uiImage, "\(name) did not render")
         XCTAssertGreaterThan(image.size.height, 100, name)
         guard Self.shouldWrite else { return }
         try FileManager.default.createDirectory(at: Self.outputDirectory, withIntermediateDirectories: true)
-        let data = try XCTUnwrap(image.pngData())
+        // Redraw into a standard-range sRGB bitmap: some renders (UIKit-backed controls) come back
+        // in an extended-range format the PNG encoder refuses.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        format.preferredRange = .standard
+        let flattened = UIGraphicsImageRenderer(size: image.size, format: format).image { _ in image.draw(at: .zero) }
+        let data = try XCTUnwrap(flattened.pngData(), "\(name): no PNG for a \(image.size) image at scale \(image.scale)")
         try data.write(to: Self.outputDirectory.appendingPathComponent("\(name).png"))
     }
 }

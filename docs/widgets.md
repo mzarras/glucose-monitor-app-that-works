@@ -21,13 +21,13 @@ store change / sensor state change
 
 | Piece | File | Notes |
 |---|---|---|
-| Snapshot model | `Packages/WidgetCore/Sources/WidgetCore/Snapshot/WidgetSnapshot.swift` | `WidgetSnapshot.make` only *selects* stored readings: the latest **live** reading (never imported history, S6 / repository `latestLiveReading()`), the live reading before it for the delta, and everything in the last 3 h for the chart. |
-| File I/O | `…/Snapshot/WidgetSnapshotStore.swift` | `[.atomic, .completeFileProtectionUntilFirstUserAuthentication]` (HANDOFF §4.5); App Group from Info.plist `AppGroupID`. |
+| Snapshot model | `Packages/WidgetCore/Sources/WidgetCore/Snapshot/WidgetSnapshot.swift` | `WidgetSnapshot.make(latestLive:previousLive:recent:…)` only *selects*: the repository's `latestLiveReading()` however old (so a reading older than 3 h still reads "Last reading 4 h ago"), the live reading before it for the delta, and the last 3 h of stored readings for the chart. An imported reading passed as "live" is ignored (S6). |
+| File I/O | `…/Snapshot/WidgetSnapshotStore.swift` | `[.atomic, .completeFileProtectionUntilFirstUserAuthentication]` (HANDOFF §4.5); App Group from Info.plist `AppGroupID`. The widget reads through `snapshotForWidget()` / `readOrNil()`: empty, truncated, corrupt or other-schema files all read as nil (tested). |
 | Timeline | `…/Timeline/WidgetTimeline.swift` | Pure: entries and reload date from a snapshot and `now`. |
 | Display rules | `…/Formatting/GlucoseDisplayState.swift` | Shared with the Now screen: fresh / stale / no data / warm-up / expired / error / not paired. |
 | Layouts | `…/Views/WidgetViews.swift` | Plain SwiftUI (no WidgetKit) so the app's tests can render them to `docs/screenshots/`. |
 | Extension | `Widgets/Sources/SensorWidgets.swift` | Provider, `containerBackground`, `widgetURL`. Previews: `Widgets/Sources/WidgetPreviews.swift`. |
-| App side | `App/Sources/WidgetBridge/WidgetSnapshotPublisher.swift` | Phase 2 calls `publish(readings:sensorState:accent:now:)` after every committed store change and every sensor-state change. |
+| App side | `App/Sources/WidgetBridge/WidgetSnapshotPublisher.swift` | Phase 2 calls `publish(latestLive:previousLive:recent:sensorState:accent:now:)` after every committed store change and every sensor-state change. |
 
 The widget **never computes or guesses a value** (S1): every number it shows is the snapshot's
 `latest` exactly as written, and the chart draws the snapshot's `recent` points through the same
@@ -85,7 +85,8 @@ runs again (S5):
 | When | Entry |
 |---|---|
 | now | current state |
-| latest + 10 min | **stale**: number dimmed to 40 %, "STALE · 10 min ago" in the alert colour, chart dimmed |
+| latest − 60 s | only when the reading is dated ahead of the phone's clock (clock moved back): until then **"Check phone clock"**, no number |
+| latest + 10 min | **stale**: number in the muted colour (≥ 3:1, not faded), VoiceOver "Stale: 105 …", "STALE · 10 min ago" in the alert colour, chart dimmed to 0.6 without the "latest" dot |
 | latest + 20 min | **no data**: the number is gone; "No data · Last reading 20 min ago" |
 | warm-up end | stops claiming warm-up; *No data* until the app writes a reading |
 | grace-period end | *Sensor expired* |
@@ -110,7 +111,10 @@ the same scheme in `App/Info.plist` `CFBundleURLTypes`). The app selects the Now
   `completeUntilFirstUserAuthentication` on iOS), live-only current value (`test_S6_…`).
 - `WidgetTimelineTests`: fresh / stale / no-data / LOW / HIGH / warm-up / expired / grace-period
   timelines, `test_S5_timelineAlwaysEndsWithoutAStaleNumberOnScreen`,
-  `test_S1_widgetTimelineNeverSynthesizesAValue`, reload policy.
+  `test_S5_futureDatedReadingIsNeverShownAsCurrent`, `test_S1_widgetTimelineNeverSynthesizesAValue`,
+  reload policy.
+- `WidgetSnapshotTests`: also `test_S5_oldLatestReadingIsKeptOutsideTheChartWindow` and
+  `test_S5_corruptTruncatedOrEmptyFileReadsAsNoData`.
 - Previews for every family × state, light and dark: `Widgets/Sources/WidgetPreviews.swift`.
 - Rendered: `docs/screenshots/widget-medium-*.png`, `widget-small-*.png`.
 

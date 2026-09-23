@@ -7,7 +7,7 @@ import GlucoseCore
 
 public enum WidgetSamples {
     public enum State: String, CaseIterable, Identifiable, Sendable {
-        case normal, low, high, lowFlag, highFlag, stale, noData, warmingUp, expired, sensorError, notPaired
+        case normal, low, high, lowFlag, highFlag, stale, noData, warmingUp, expired, sensorError, notPaired, clockMismatch
         public var id: String { rawValue }
     }
 
@@ -57,6 +57,8 @@ public enum WidgetSamples {
             sensor = .error(code: 7, description: "Sensor signal error")
         case .notPaired:
             sensor = .notPaired; hasReading = false
+        case .clockMismatch:
+            age = -60
         }
         let recent = hasReading ? Self.recent(now: now, age: age, shape: shape) : []
         let latest: LatestReading? = recent.last.map { last in
