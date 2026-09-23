@@ -5,12 +5,18 @@
 /// S4: LOW and HIGH are flags, not numbers. Never turn `.belowRange` into 40 or
 /// `.aboveRange` into 400 and present or transmit it as an ordinary value.
 public enum GlucoseValue: Sendable, Equatable, Hashable, Codable {
-    /// 40...400 as reported by the sensor.
+    /// A numeric value inside `GlucoseValue.sensorReportableRange` (40...400), as reported.
+    /// Values outside that range are refused by `LiveReadingGate` (S2).
     case mgdl(Int)
     /// Sensor LOW flag (below the sensor's reportable range).
     case belowRange
     /// Sensor HIGH flag (above the sensor's reportable range).
     case aboveRange
+
+    /// The G7's numeric reporting range in mg/dL. Anything the sensor cannot measure is reported as
+    /// the LOW/HIGH flag instead. Source: LoopKit G7SensorKit `GlucoseLimits.swift`
+    /// (`minimum = 40`, `maximum = 400`), vendor-ref/Trio/G7SensorKit/G7SensorKit/GlucoseLimits.swift.
+    public static let sensorReportableRange: ClosedRange<Int> = 40...400
 
     /// The numeric value, or `nil` for the LOW/HIGH flags (S4).
     /// Statistics exclude `nil` values from mean/SD (HANDOFF §6).
@@ -53,7 +59,10 @@ public enum GlucoseBand: String, Sendable, Equatable, Hashable, Codable, CaseIte
     }
 }
 
-/// Range boundaries in mg/dL. One place, so stats, UI and widgets agree (HANDOFF §6).
+/// Consensus range-bin boundaries in mg/dL. One place, so stats, UI and widgets agree (HANDOFF §6).
+///
+/// These are statistics bins, not alert thresholds: 70 is "in range" here, while the Low alert
+/// (HANDOFF §5, "≤ 70") fires at 70. Alert thresholds are inclusive and live in AlertEngine.
 public enum GlucoseThresholds {
     /// Values below this are "very low" (< 54).
     public static let veryLowBelow = 54
