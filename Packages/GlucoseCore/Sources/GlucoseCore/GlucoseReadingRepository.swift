@@ -6,7 +6,8 @@ import Foundation
 ///
 /// Two roles, never mixed (S1, S6):
 /// - **production** — the app's database. Stores only `.sensor` and `.imported` readings. `insert`
-///   throws `GlucoseReadingRepositoryError.sourceNotAllowed` for `.replay`/`.mock`, and opening a
+///   throws `GlucoseReadingRepositoryError.sourceNotAllowed` for `.replay`/`.mock` — a batch that
+///   contains any disallowed reading is rejected whole and nothing is stored — and opening a
 ///   production store deletes any `.replay`/`.mock` rows (defence against a DEBUG build having
 ///   written them to the same App Group database).
 /// - **replay** (DEBUG only) — a separate in-memory store or separate file used while a ReplayKit

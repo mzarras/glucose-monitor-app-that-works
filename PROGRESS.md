@@ -75,6 +75,6 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Scaffold: `LICENSE` (GPL-3.0), `NOTICE.md`, `README.md`, `project.yml` (XcodeGen 2.46.0), `Config/` xcconfigs, nine packages under `Packages/`, app + widget + test targets, `.claude/agents/*` (9 roles, §2 verbatim), `scripts/check.sh`.
 - Contracts in `GlucoseCore` with 17 contract tests (S2, S3, S4, S6 covered).
 - `vendor-ref/xdripswift` @ `7.1.0` (`0370937`), `vendor-ref/Trio` @ `29350e31a` with submodules.
-- Phase 0 safety review: **FAIL** (2 blockers, 6 majors, 11 minors). All fixed in the follow-up commit (D18, D19, test-verifier role corrected); re-review: B1/B2 fixed, new blocker B3 (replay rows in production DB) → fixed (D20); second re-review requested.
+- Phase 0 safety review: **FAIL** (2 blockers, 6 majors, 11 minors). All fixed in the follow-up commit (D18, D19, test-verifier role corrected); re-review: B1/B2 fixed, new blocker B3 (replay rows in production DB) → fixed (D20); second re-review: **PASS** (no blockers; minors p1/p2 addressed — whole-batch rejection documented, lint limitation noted).
 - Process slip: two of my `PROGRESS.md` edits truncated the file after the decisions table; restored from `1ec40ee` (reviewer m10).
 - Gate results on the scaffold: build Debug/Release pass with zero warnings; package tests pass; safety S2/S3/S4/S6 pass, S1/S5/S7/S8 have no tests yet; coverage minimums fail (no code yet); replay gate fails (Phase 2). Expected at this point.

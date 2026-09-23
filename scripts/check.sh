@@ -289,7 +289,9 @@ gate_safety() {
 
     # S6: non-test code outside ReplayKit that constructs .replay/.mock readings must sit inside an
     # `#if DEBUG` block (tracked per line through nested #if/#else/#endif; an #else branch of
-    # `#if DEBUG` is not guarded).
+    # `#if DEBUG` is not guarded). Heuristic only: it misses `source:` split across lines or a
+    # source passed through a variable. The real defences are LiveReadingGate and the production
+    # store refusing replay/mock rows (D20).
     files="$(grep -rlE 'source: *\.(replay|mock)' Packages/*/Sources App/Sources Widgets/Sources 2>/dev/null \
         | grep -vE '^Packages/(ReplayKit|GlucoseCore)/Sources/')"
     unguarded=""
