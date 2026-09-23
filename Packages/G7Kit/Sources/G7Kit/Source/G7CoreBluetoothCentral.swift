@@ -77,6 +77,11 @@ final class G7CoreBluetoothCentral: NSObject, G7CentralDriving, CBCentralManager
         manager.cancelPeripheralConnection(peripheral)
     }
 
+    func schedule(after delay: TimeInterval, _ action: @escaping () -> Void) {
+        let job = QueueBoundAction(run: action)
+        queue.asyncAfter(deadline: .now() + delay) { job.run() }
+    }
+
     // MARK: - CBCentralManagerDelegate
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {

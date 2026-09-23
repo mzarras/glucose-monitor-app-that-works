@@ -38,8 +38,8 @@ import Foundation
 ///    backfill copy of the same reading `cf5802008f00060f10` (timestamp 153807 = 154105 - 298).
 ///    The startup vectors (:40-77) likewise land on a 300 s grid only after subtracting age.
 ///    This matters for S3: with it, the live and backfill copies of a reading share one id.
-/// 3. `glucoseRaw` keeps the sensor number unmasked of meaning; mapping to `GlucoseValue` (S4) is
-///    in `G7GlucoseRange`. `isDisplayOnly` is kept for the S1 decision in `G7ReadingPipeline`.
+/// 3. `glucoseField` keeps the 16-bit field; classifying it (no value, LOW/HIGH, number: S4, D31)
+///    is in `G7GlucoseRange`. `isDisplayOnly` is kept for the S1 decision in `G7ReadingPipeline`.
 struct G7GlucoseMessage: Equatable {
     static let length = 19
 
@@ -52,6 +52,8 @@ struct G7GlucoseMessage: Equatable {
     let sequence: UInt16
     /// Bytes 10-11: seconds between the reading and this transmission.
     let age: UInt16
+    /// Bytes 12-13 exactly as sent (classified by `G7GlucoseRange.classify`, D31).
+    let glucoseField: UInt16
     /// Bytes 12-13 masked with 0x0FFF, or nil for the 0xFFFF "no value" sentinel.
     let glucoseRaw: UInt16?
     let algorithmState: G7AlgorithmState
@@ -68,7 +70,7 @@ struct G7GlucoseMessage: Equatable {
         sensorClock = G7Bytes.uint32(bytes, at: 2)
         sequence = G7Bytes.uint16(bytes, at: 6)
         age = G7Bytes.uint16(bytes, at: 10)
-        let glucoseField = G7Bytes.uint16(bytes, at: 12)
+        glucoseField = G7Bytes.uint16(bytes, at: 12)
         glucoseRaw = glucoseField == 0xFFFF ? nil : glucoseField & 0x0FFF
         algorithmState = G7AlgorithmState(rawValue: bytes[14])
         trendRate = G7Trend.rate(fromByte: bytes[15])

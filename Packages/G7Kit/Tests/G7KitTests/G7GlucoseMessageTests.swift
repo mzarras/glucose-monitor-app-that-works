@@ -190,18 +190,25 @@ final class G7AlgorithmStateTests: XCTestCase {
 }
 
 final class G7GlucoseRangeTests: XCTestCase {
+    /// D31 boundaries: 0, 0x0FFF, 0xFFFE (and the 0xFFFF sentinel) are "no value"; otherwise < 40 is
+    /// LOW and > 400 is HIGH (G7SensorKit `condition`), never clamped to 40/400.
     func test_S4_lowAndHighAreFlagsNeverClampedNumbers() {
-        XCTAssertEqual(G7GlucoseRange.value(fromSensorMgdl: 39), .belowRange)
-        XCTAssertEqual(G7GlucoseRange.value(fromSensorMgdl: 0), .belowRange)
-        XCTAssertEqual(G7GlucoseRange.value(fromSensorMgdl: 40), .mgdl(40))
-        XCTAssertEqual(G7GlucoseRange.value(fromSensorMgdl: 400), .mgdl(400))
-        XCTAssertEqual(G7GlucoseRange.value(fromSensorMgdl: 401), .aboveRange)
-        XCTAssertEqual(G7GlucoseRange.value(fromSensorMgdl: 0x0FFF), .aboveRange)
-        for raw in UInt16(0)...0x0FFF {
-            let value = G7GlucoseRange.value(fromSensorMgdl: raw)
-            if case .mgdl(let mgdl) = value {
+        XCTAssertEqual(G7GlucoseRange.classify(field: 0), .noValue(field: 0))
+        XCTAssertEqual(G7GlucoseRange.classify(field: 1), .value(.belowRange))
+        XCTAssertEqual(G7GlucoseRange.classify(field: 39), .value(.belowRange))
+        XCTAssertEqual(G7GlucoseRange.classify(field: 40), .value(.mgdl(40)))
+        XCTAssertEqual(G7GlucoseRange.classify(field: 400), .value(.mgdl(400)))
+        XCTAssertEqual(G7GlucoseRange.classify(field: 401), .value(.aboveRange))
+        XCTAssertEqual(G7GlucoseRange.classify(field: 0x0FFE), .value(.aboveRange))
+        XCTAssertEqual(G7GlucoseRange.classify(field: 0x0FFF), .noValue(field: 0x0FFF))
+        XCTAssertEqual(G7GlucoseRange.classify(field: 0xFFFE), .noValue(field: 0xFFFE))
+        XCTAssertEqual(G7GlucoseRange.classify(field: 0xFFFF), .noValue(field: 0xFFFF))
+        XCTAssertEqual(G7GlucoseRange.classify(field: 0x1000), .noValue(field: 0x1000), "flag bits over a 0 value")
+        XCTAssertEqual(G7GlucoseRange.classify(field: 0x807B), .value(.mgdl(123)), "upper 4 bits are flags")
+        for field in UInt16(0)...0x0FFF {
+            if case .value(.mgdl(let mgdl)) = G7GlucoseRange.classify(field: field) {
                 XCTAssertTrue(GlucoseValue.sensorReportableRange.contains(mgdl))
-                XCTAssertEqual(mgdl, Int(raw), "a number is never altered")
+                XCTAssertEqual(mgdl, Int(field), "a number is never altered")
             }
         }
     }

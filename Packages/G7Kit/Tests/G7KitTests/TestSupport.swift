@@ -145,9 +145,21 @@ final class FakeCentral: G7CentralDriving {
     var cancelRequests: [UUID] = []
     /// Identifiers iOS "knows" (retrievePeripherals would find them).
     var known: Set<UUID> = []
+    /// Timers the controller asked for; the test fires them with `fireScheduled()`.
+    var scheduled: [(delay: TimeInterval, action: () -> Void)] = []
 
     func scanForSensors() { scanCount += 1 }
     func stopScanning() { stopScanCount += 1 }
+
+    func schedule(after delay: TimeInterval, _ action: @escaping () -> Void) {
+        scheduled.append((delay, action))
+    }
+
+    func fireScheduled() {
+        let jobs = scheduled
+        scheduled = []
+        jobs.forEach { $0.action() }
+    }
 
     func connect(peripheralIdentifier: UUID) -> Bool {
         connectRequests.append(peripheralIdentifier)

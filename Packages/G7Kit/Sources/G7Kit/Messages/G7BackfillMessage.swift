@@ -32,6 +32,8 @@ struct G7BackfillMessage: Equatable {
 
     /// Seconds since the session started, as the sensor reported it (S3: never adjusted).
     let sensorTimestamp: UInt32
+    /// Bytes 4-5 exactly as sent (classified by `G7GlucoseRange.classify`, D31).
+    let glucoseField: UInt16
     let glucoseRaw: UInt16?
     let algorithmState: G7AlgorithmState
     let trendRate: Double?
@@ -41,7 +43,7 @@ struct G7BackfillMessage: Equatable {
         let bytes = [UInt8](data)
         guard bytes.count == Self.length else { return nil }
         sensorTimestamp = G7Bytes.uint24(bytes, at: 0)
-        let glucoseField = G7Bytes.uint16(bytes, at: 4)
+        glucoseField = G7Bytes.uint16(bytes, at: 4)
         glucoseRaw = glucoseField == 0xFFFF ? nil : glucoseField & 0x0FFF
         algorithmState = G7AlgorithmState(rawValue: bytes[6])
         let flaggedByGlucoseNibble = glucoseField != 0xFFFF && (glucoseField & 0xF000) != 0

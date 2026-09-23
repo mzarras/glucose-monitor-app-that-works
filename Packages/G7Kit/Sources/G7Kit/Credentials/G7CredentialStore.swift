@@ -28,11 +28,17 @@ public struct G7PairingRecord: Sendable, Equatable, Codable {
     /// Session length and warm-up the sensor reported in `0x52`, once known.
     public var reportedSessionLength: TimeInterval?
     public var reportedWarmUp: TimeInterval?
+    /// Session start derived from the sensor clock (G7ReadingPipeline), kept so `currentSession`
+    /// survives disconnects and app relaunches (D28) and later anchors are checked against it.
+    public var sessionStart: Date?
+    /// The sensor reported the session over (expired, failed, stopped): `currentSession` stays nil.
+    public var sessionEnded: Bool
 
     public init(pairingCode: String, slot: G7AuthenticationSlot) {
         self.pairingCode = pairingCode
         self.slot = slot
         self.requiresNewPairing = false
+        self.sessionEnded = false
     }
 }
 

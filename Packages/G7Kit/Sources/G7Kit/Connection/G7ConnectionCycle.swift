@@ -15,6 +15,11 @@ protocol G7ConnectionCycleDelegate: AnyObject {
     func cycleSavedKeyRejected()
     func cycleNeedsFullBootstrap()
     func cycleAuthFailed(_ failure: G7AuthFailure)
+    /// A `05` rejection arrived after this connection authenticated (see G7AuthSessionDelegate).
+    func cycleSawRejectionAfterAuthentication()
+    /// True while the sensor has not yet reported its session length: `52` is then requested before
+    /// GetData, so no reading is ever handled without sensor-reported session timing.
+    func cycleNeedsSessionLength() -> Bool
     /// A notify/write failed in a way that means the iOS Bluetooth pairing is not in place.
     func cycleLinkFailed(_ error: G7LinkError)
     func cycleReceivedGlucose(_ message: G7GlucoseMessage)
@@ -33,7 +38,10 @@ protocol G7ConnectionCycleDelegate: AnyObject {
 ///
 /// Order within a connection:
 /// 1. notify Auth_Stream, then Receive_Authentication; authenticate (G7AuthSession);
-/// 2. notify Write_Control; write `4E` (GetData) once (CGMG7Transmitter.swift:1624-1642);
+/// 2. notify Write_Control; if the session length is still unknown write `52` and wait for its
+///    answer (Sensor change: xDrip4iOS asks after the first reading, CGMG7Transmitter.swift:1361-1389,
+///    which would let a 15-day sensor publish one reading); then write `4E` (GetData) once
+///    (CGMG7Transmitter.swift:1624-1642);
 /// 3. on the `0x4E` response: notify Backfill (CGMG7Transmitter.swift:1165-1174), then write the
 ///    caller's control requests one at a time, each after the previous response;
 /// 4. backfill records arrive on Backfill, `59` on Write_Control ends them.
@@ -43,6 +51,7 @@ final class G7ConnectionCycle: G7AuthSessionDelegate {
     let link: G7Link
     private let auth: G7AuthSession
     private var glucoseRequestSent = false
+    private var extendedVersionRequested = false
     private var awaitingControlResponse: Data?
     private(set) var isFinished = false
 
@@ -118,6 +127,8 @@ final class G7ConnectionCycle: G7AuthSessionDelegate {
         if case .other = error, characteristic == .writeControl, let request = awaitingControlResponse {
             awaitingControlResponse = nil
             delegate?.cycleControlWriteFailed(request)
+            // Without `52` the readings are withheld (G7ReadingPipeline), but GetData still reports state.
+            if request == G7ControlRequest.extendedVersion { sendGlucoseRequestIfReady() }
             return
         }
         handleLinkError(error)
@@ -138,6 +149,7 @@ final class G7ConnectionCycle: G7AuthSessionDelegate {
     func authSessionDidRejectSavedKey() { delegate?.cycleSavedKeyRejected() }
     func authSessionNeedsFullBootstrap() { delegate?.cycleNeedsFullBootstrap() }
     func authSessionDidFail(_ failure: G7AuthFailure) { delegate?.cycleAuthFailed(failure) }
+    func authSessionSawRejectionAfterAuthentication() { delegate?.cycleSawRejectionAfterAuthentication() }
     func authSessionLog(_ message: String) { delegate?.cycleLog(message) }
 
     // MARK: - Private
@@ -151,9 +163,16 @@ final class G7ConnectionCycle: G7AuthSessionDelegate {
         }
     }
 
-    /// One GetData per connection (CGMG7Transmitter.swift:1631-1641).
+    /// One GetData per connection (CGMG7Transmitter.swift:1631-1641), preceded by `52` while the
+    /// session length is unknown.
     private func sendGlucoseRequestIfReady() {
-        guard auth.isAuthenticated, !glucoseRequestSent, link.isNotifying(.writeControl) else { return }
+        guard auth.isAuthenticated, !glucoseRequestSent, link.isNotifying(.writeControl), awaitingControlResponse == nil else { return }
+        if !extendedVersionRequested, delegate?.cycleNeedsSessionLength() == true {
+            extendedVersionRequested = true
+            awaitingControlResponse = G7ControlRequest.extendedVersion
+            if link.write(G7ControlRequest.extendedVersion, to: .writeControl, withResponse: true) { return }
+            awaitingControlResponse = nil
+        }
         glucoseRequestSent = true
         if !link.write(G7ControlRequest.glucose, to: .writeControl, withResponse: true) {
             glucoseRequestSent = false
@@ -182,7 +201,7 @@ final class G7ConnectionCycle: G7AuthSessionDelegate {
             } else {
                 delegate?.cycleLog("connection: malformed 0x52 \(value.hexString)")
             }
-            sendNextControlRequest()
+            if glucoseRequestSent { sendNextControlRequest() } else { sendGlucoseRequestIfReady() }
         case .calibrate:
             awaitingControlResponse = nil
             if let response = G7CalibrationCommandResponse(value) {

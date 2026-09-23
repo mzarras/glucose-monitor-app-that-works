@@ -7,7 +7,7 @@ import GlucoseCore
 /// Drives a `G7Controller` through whole sensor connections against `G7SensorSimulator`, the way
 /// CoreBluetooth would, with a hand-moved clock.
 final class ControllerHarness {
-    let clock = TestClock()
+    let clock: TestClock
     let store: G7InMemoryCredentialStore
     let log = RecordingDiagnosticLog()
     let central = FakeCentral()
@@ -21,10 +21,18 @@ final class ControllerHarness {
     /// Phone time at which the sensor session started (the sensor clock is `now − sessionStart`).
     let sessionStart: Date
 
-    init(sensorCode: String = "1234", sessionAge: TimeInterval = 2 * 86_400, store: G7InMemoryCredentialStore = G7InMemoryCredentialStore()) {
+    /// Pass the previous harness's `clock`, `sensor` and `sessionStart` (and the same `store`) to
+    /// simulate an app relaunch talking to the same physical sensor.
+    init(
+        sensorCode: String = "1234",
+        sessionAge: TimeInterval = 2 * 86_400,
+        store: G7InMemoryCredentialStore = G7InMemoryCredentialStore(),
+        relaunchOf previous: ControllerHarness? = nil
+    ) {
         self.store = store
-        sensor = G7SensorSimulator(pairingCode: sensorCode)
-        sessionStart = clock.now.addingTimeInterval(-sessionAge)
+        clock = previous?.clock ?? TestClock()
+        sensor = previous?.sensor ?? G7SensorSimulator(pairingCode: sensorCode)
+        sessionStart = previous?.sessionStart ?? clock.now.addingTimeInterval(-sessionAge)
         controller = G7Controller(
             store: store,
             diagnostics: log,

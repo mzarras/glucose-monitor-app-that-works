@@ -14,6 +14,8 @@ protocol G7CentralDriving: AnyObject {
     /// know the identifier (then the caller scans).
     func connect(peripheralIdentifier: UUID) -> Bool
     func cancelConnection(peripheralIdentifier: UUID)
+    /// Runs `action` on the controller's queue after `delay` seconds (connect timeouts).
+    func schedule(after delay: TimeInterval, _ action: @escaping () -> Void)
 }
 
 /// The sensor serial used in reading ids and `SensorSession.serial`.

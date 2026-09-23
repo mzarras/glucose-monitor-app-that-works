@@ -17,6 +17,10 @@ protocol G7AuthSessionDelegate: AnyObject {
     /// Authenticated but not paired: drop the saved key and reconnect for a full bootstrap.
     func authSessionNeedsFullBootstrap()
     func authSessionDidFail(_ failure: G7AuthFailure)
+    /// After we authenticated, a `05` saying "not authenticated" arrived. It may be the sensor
+    /// revoking our key, or another app on the shared link failing; either way stop this connection
+    /// and let the next connection's own (solicited) status decide.
+    func authSessionSawRejectionAfterAuthentication()
     func authSessionLog(_ message: String)
 }
 
@@ -40,6 +44,12 @@ enum G7AuthFailure: Equatable, Sendable {
 /// Full path (new sensor or slot): `0A 00` → three J-PAKE phases → `02 …` → `03` → `04` → `05 01 xx`
 /// → certificate phases 0-2 → proof of possession → `0D` → `06 19` → `06 01` (or legacy `07`/`08 01`)
 /// → key confirmed → authenticated. Details: docs/g7-protocol.md "Authentication".
+///
+/// Only solicited packets count (Sensor change, safety review B1). iOS shares one Bluetooth link
+/// per peripheral between apps and delivers every notification to every subscribed app, so another
+/// G7 app's traffic reaches us too. xDrip4iOS accepted any `05` (DexcomG7AuthSession.swift:262,
+/// :396-458); here a `03` counts only after our own `02`, a `05` only after our own `04` and only
+/// once, and the ownership opcodes only in their own stage. Anything else is logged and ignored.
 final class G7AuthSession {
     enum StatusAction: Equatable {
         case continueAuthentication
@@ -76,6 +86,11 @@ final class G7AuthSession {
     private var receiveAuthenticationReady = false
     private var initialControlPacketSent = false
     private var challengeResponseSent = false
+    /// The one `05` answering our `04` has been handled.
+    private var statusAnswered = false
+    /// The J-PAKE phase whose `0A 00 <phase>` we are waiting for.
+    private var expectedPakePhase: UInt8 = 0
+    private var proofChallengeRequested = false
     private var usingFullBootstrap = false
     private var certificateExchangeStarted = false
     private var pendingPakePhase: UInt8?
@@ -162,15 +177,32 @@ final class G7AuthSession {
         case .authStatus:
             handleStatus(value)
         case .pakeExchange:
+            // Only while our own J-PAKE is running and before our `02` (DexcomG7AuthSession.swift:264-272).
+            guard stage == .authenticating, usingFullBootstrap, lastToken == nil, pendingPakePhase == nil else {
+                ignoreUnsolicited(value)
+                return
+            }
             guard let status = G7PakeStatus(value) else {
                 fail(.pakeRejectedBySensor, packet: value)
+                return
+            }
+            guard status.phase == expectedPakePhase else {
+                ignoreUnsolicited(value)
                 return
             }
             pendingPakePhase = status.phase
             processPendingPakeIfReady()
         case .certificateExchange:
+            guard stage == .certificateExchange else {
+                ignoreUnsolicited(value)
+                return
+            }
             handleCertificateStatus(value)
         case .proofOfPossession:
+            guard stage == .certificateExchange, proofChallengeRequested else {
+                ignoreUnsolicited(value)
+                return
+            }
             handleProofChallenge(value)
         case .authProofStatus:
             // The sensor accepted our signature; close ownership with the 25 s keep-alive
@@ -259,9 +291,13 @@ final class G7AuthSession {
         usingFullBootstrap ? candidateKey : savedKey
     }
 
-    /// DexcomG7AuthSession.swift:379-394 and DexcomG7AuthBridge.m:220-261.
+    /// DexcomG7AuthSession.swift:379-394 and DexcomG7AuthBridge.m:220-261. Only after our own `02`.
     private func handleChallenge(_ value: Data) {
-        guard !challengeResponseSent, let message = G7AuthChallengeMessage(value) else { return }
+        guard stage == .authenticating, lastToken != nil, !challengeResponseSent else {
+            ignoreUnsolicited(value)
+            return
+        }
+        guard let message = G7AuthChallengeMessage(value) else { return }
         guard let key = keyForChallenge else {
             fail(.protocolError("challenge received without a key"))
             return
@@ -279,9 +315,24 @@ final class G7AuthSession {
         writeControl(G7AuthChallengeResponse.make(hash: hash))
     }
 
-    /// DexcomG7AuthSession.swift:396-458.
+    /// DexcomG7AuthSession.swift:396-458, accepting only the `05` that answers our own `04`.
     private func handleStatus(_ value: Data) {
-        guard stage != .authenticated else { return }
+        if stage == .authenticated {
+            // Already authenticated in this connection: a later "not authenticated" is surfaced and
+            // ends the connection; anything else is not ours to act on.
+            if let status = G7AuthStatusMessage(value), !status.authenticated {
+                delegate?.authSessionLog("auth: 05 rejection after authentication; ending this connection")
+                delegate?.authSessionSawRejectionAfterAuthentication()
+            } else {
+                ignoreUnsolicited(value)
+            }
+            return
+        }
+        guard stage == .authenticating, challengeResponseSent, !statusAnswered else {
+            ignoreUnsolicited(value)
+            return
+        }
+        statusAnswered = true
         guard let status = G7AuthStatusMessage(value) else {
             fail(.protocolError("unparseable authentication status"), packet: value)
             return
@@ -324,6 +375,7 @@ final class G7AuthSession {
         }
         do {
             let result = try jpake.handle(phase: phase, remotePayload: payload)
+            expectedPakePhase = phase &+ 1
             let control: Data
             if let key = result.candidateSharedKey {
                 // After phase 2 the next control packet is the auth request, answered with the
@@ -392,6 +444,7 @@ final class G7AuthSession {
             let next = G7CertificateControl.request(phase: phase + 1, certificateLength: UInt32(nextLength))
             writeExchange(streamPackets: Self.fragments(ours), controlPacket: next)
         } else {
+            proofChallengeRequested = true
             writeControl(G7ProofControl.challengeRequest(challenge: randomBytes(G7ProofControl.challengeLength)))
         }
     }
@@ -448,6 +501,11 @@ final class G7AuthSession {
             guard let self, self.writeGeneration == generation else { return }
             self.writeControl(controlPacket)
         }
+    }
+
+    /// Another app's traffic on the shared link, a repeat, or a packet out of its stage.
+    private func ignoreUnsolicited(_ value: Data) {
+        delegate?.authSessionLog("auth: unsolicited \(value.hexString) ignored in stage \(stage.rawValue)")
     }
 
     private func writeControl(_ data: Data) {

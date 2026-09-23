@@ -14,19 +14,25 @@ import GlucoseCore
 public enum G7StartError: Error, Equatable, Sendable {
     /// The code must be exactly four ASCII digits (CGMG7Transmitter.swift:357, :504).
     case invalidPairingCode
-    /// The credential store failed; nothing was started.
+    /// The credential store failed; nothing was started. The state stream reports
+    /// `.failed(credentialsUnavailable)`; call `start` again later (e.g. after the first unlock).
     case credentialStoreFailed(String)
 }
 
 /// Everything G7 primary mode decides across connections: pairing, reconnection, the reading
-/// pipeline, calibration and state. Not thread-safe: `G7CGMSource` calls every method on its one
-/// serial queue (the CoreBluetooth delegate queue).
+/// pipeline, the persisted session, calibration and state. Not thread-safe: `G7CGMSource` calls
+/// every method on its one serial queue (the CoreBluetooth delegate queue).
 final class G7Controller: G7ConnectionCycleDelegate {
     struct Output {
         let reading: (GlucoseReading) -> Void
         let state: (SensorState) -> Void
         let calibration: (CalibrationUpdate) -> Void
     }
+
+    /// Sensor policy (safety review): a found sensor that has not connected within 60 s is given up
+    /// and scanning resumes. xDrip4iOS uses the same mechanism with 5 s (BluetoothTransmitter.swift:212,
+    /// :643-654); a longer wait suits a sensor that advertises only every few minutes.
+    static let candidateConnectTimeout: TimeInterval = 60
 
     private let store: G7CredentialStore
     private let diagnostics: DiagnosticLog
@@ -45,11 +51,12 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// Latest state the sensor itself reported (warm-up/active/…); Bluetooth and failure states excluded.
     private(set) var lastSensorState: SensorState?
     private var lastEmittedState: SensorState?
-    /// During a new pairing: the previous sensor and any sensor that rejected the code.
+    /// During a new pairing: the previous sensor and any sensor that rejected the code or timed out.
     private var excludedSensorNames: Set<String> = []
-    /// During a new pairing: the advertised sensor currently being tried.
+    /// The advertised sensor being connected to: a new-pairing candidate, or the paired sensor found
+    /// again under a new iOS identifier.
     private var candidate: (name: String, identifier: UUID)?
-    private var extendedVersionRequestedThisConnection = false
+    private var candidateAttempt = 0
 
     init(
         store: G7CredentialStore,
@@ -74,17 +81,30 @@ final class G7Controller: G7ConnectionCycleDelegate {
     }
 
     /// Emits the first element of the state stream: what is known before any Bluetooth event.
+    /// A store that cannot be read is a failure, never "not paired" (safety review M3).
     func emitInitialState() {
-        guard let stored = loadRecord() else {
+        switch loadRecord() {
+        case .failure:
+            emit(.failed(reason: G7FailureReason.credentialsUnavailable))
+        case .success(nil):
             emit(.notPaired)
-            return
+        case .success(let stored?):
+            record = stored
+            emit(stored.requiresNewPairing ? .failed(reason: G7FailureReason.savedKeyRejected) : .searching)
         }
-        emit(stored.requiresNewPairing ? .failed(reason: G7FailureReason.savedKeyRejected) : .searching)
     }
 
+    /// D28: the session this source authenticated to, persisted across disconnects and relaunches;
+    /// nil before the first `0x4E` of a pairing, after the grace-period end, after the sensor reported
+    /// the session over (expired, failed, stopped), for an unsupported sensor, and when a new pairing
+    /// is required.
     var currentSession: SensorSession? {
-        guard let pipeline, !pipeline.isUnsupportedSensor, record?.requiresNewPairing == false else { return nil }
-        return pipeline.session
+        guard let record, !record.requiresNewPairing, !record.sessionEnded,
+              let serial = record.serial, let start = record.sessionStart,
+              let parameters = reportedParameters(record) else { return nil }
+        if let pipeline, pipeline.isUnsupportedSensor || pipeline.sessionEnded { return nil }
+        let session = G7SensorLifetime.session(serial: serial, start: start, parameters: parameters)
+        return now() <= session.gracePeriodEndsAt ? session : nil
     }
 
     /// Only for a sensor this app has authenticated to (serial fixed) and still may use.
@@ -100,13 +120,15 @@ final class G7Controller: G7ConnectionCycleDelegate {
     func start(pairingCode: String?) throws(G7StartError) {
         if let pairingCode {
             guard G7PairingCode.isValid(pairingCode) else { throw .invalidPairingCode }
-            let previous = loadRecord()
+            let previous = try? loadRecord().get()
             if let identifier = previous?.peripheralIdentifier { central?.cancelConnection(peripheralIdentifier: identifier) }
             finishCycle()
             calibration.cancelAll(reason: "A new sensor is being paired")
-            var newRecord = G7PairingRecord(pairingCode: pairingCode, slot: slot)
-            newRecord.requiresNewPairing = false
-            do { try store.save(newRecord) } catch { throw .credentialStoreFailed("\(error)") }
+            let newRecord = G7PairingRecord(pairingCode: pairingCode, slot: slot)
+            do { try store.save(newRecord) } catch {
+                emit(.failed(reason: G7FailureReason.credentialsUnavailable))
+                throw .credentialStoreFailed("\(error)")
+            }
             record = newRecord
             pipeline = nil
             lastSensorState = nil
@@ -114,7 +136,13 @@ final class G7Controller: G7ConnectionCycleDelegate {
             candidate = nil
             log(.sensor, "pairing a new sensor in slot \(slot.rawValue)")
         } else {
-            do { record = try store.load() } catch { throw .credentialStoreFailed("\(error)") }
+            switch loadRecord() {
+            case .failure(let error):
+                emit(.failed(reason: G7FailureReason.credentialsUnavailable))
+                throw .credentialStoreFailed("\(error)")
+            case .success(let stored):
+                record = stored
+            }
         }
         isRunning = true
         guard let record else {
@@ -196,11 +224,16 @@ final class G7Controller: G7ConnectionCycleDelegate {
         } else {
             // New pairing: any G7 10-day sensor except the old one and ones that refused the code.
             guard name.hasPrefix(G7GATT.sensorNamePrefix), !excludedSensorNames.contains(name) else { return }
-            candidate = (name, identifier)
         }
+        candidate = (name, identifier)
+        candidateAttempt += 1
+        let attempt = candidateAttempt
         log(.ble, "found \(name); connecting")
         central?.stopScanning()
         _ = central?.connect(peripheralIdentifier: identifier)
+        central?.schedule(after: Self.candidateConnectTimeout) { [weak self] in
+            self?.candidateTimedOut(attempt: attempt)
+        }
     }
 
     /// The link is connected and its characteristics are discovered.
@@ -209,12 +242,18 @@ final class G7Controller: G7ConnectionCycleDelegate {
             link.disconnect()
             return
         }
+        let expected = [record.peripheralIdentifier, candidate?.identifier].compactMap { $0 }
+        guard expected.contains(link.peripheralIdentifier) else {
+            log(.ble, "connection from an unexpected peripheral ignored")
+            link.disconnect()
+            return
+        }
+        candidateAttempt += 1 // the connect timeout no longer applies
         finishCycle()
         log(.ble, "connected")
         emitTransient(.authenticating)
         pipeline?.beginConnection()
         calibration.beginConnection()
-        extendedVersionRequestedThisConnection = false
         let newCycle = G7ConnectionCycle(link: link, auth: makeAuthSession(link, record))
         newCycle.delegate = self
         cycle = newCycle
@@ -235,6 +274,10 @@ final class G7Controller: G7ConnectionCycleDelegate {
 
     /// The sensor disconnected (normal after each ~5-minute exchange) or the link dropped.
     func didDisconnect(peripheralIdentifier: UUID) {
+        guard isExpected(peripheralIdentifier) else {
+            log(.ble, "disconnect of an unrelated peripheral ignored")
+            return
+        }
         finishCycle()
         guard isRunning, let record, !record.requiresNewPairing else { return }
         if let known = record.peripheralIdentifier {
@@ -251,6 +294,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
 
     /// Connection attempt failed: ask again (BluetoothTransmitter.swift:837-848).
     func didFailToConnect(peripheralIdentifier: UUID) {
+        guard isExpected(peripheralIdentifier) else { return }
         log(.ble, "connection attempt failed; retrying")
         guard isRunning, record?.requiresNewPairing == false else { return }
         _ = central?.connect(peripheralIdentifier: peripheralIdentifier)
@@ -266,9 +310,9 @@ final class G7Controller: G7ConnectionCycleDelegate {
             current.sensorName = name
             current.serial = G7SensorSerial.make(sensorName: name, peripheralIdentifier: link.peripheralIdentifier)
             excludedSensorNames = []
-            candidate = nil
             log(.sensor, "paired with \(name), serial \(current.serial ?? "?")")
         }
+        candidate = nil
         // A paired sensor found again by name can come back under a new iOS identifier; reconnect to
         // that one from now on. The serial never changes (reading ids stay stable).
         current.peripheralIdentifier = link.peripheralIdentifier
@@ -278,7 +322,12 @@ final class G7Controller: G7ConnectionCycleDelegate {
         }
         saveRecord(current)
         if let serial = current.serial, pipeline?.serial != serial {
-            pipeline = G7ReadingPipeline(serial: serial, reportedParameters: reportedParameters(current)) { [weak self] message in
+            pipeline = G7ReadingPipeline(
+                serial: serial,
+                reportedParameters: reportedParameters(current),
+                sessionStart: current.sessionStart,
+                sessionEnded: current.sessionEnded
+            ) { [weak self] message in
                 self?.log(.sensor, message)
             }
             pipeline?.beginConnection()
@@ -291,6 +340,15 @@ final class G7Controller: G7ConnectionCycleDelegate {
         current.requiresNewPairing = true
         saveRecord(current)
         log(.sensor, "saved key rejected; automatic reconnection stopped")
+        emit(.failed(reason: G7FailureReason.savedKeyRejected))
+        cycle?.link.disconnect()
+    }
+
+    /// B1: a rejection seen after we authenticated may be the sensor revoking our key or another app
+    /// failing on the shared link. Surface it and end the connection; the next connection's own,
+    /// solicited status decides whether the key is really gone (then `requiresNewPairing`).
+    func cycleSawRejectionAfterAuthentication() {
+        log(.sensor, "authentication rejection seen after authenticating; connection ended, key re-checked next time")
         emit(.failed(reason: G7FailureReason.savedKeyRejected))
         cycle?.link.disconnect()
     }
@@ -334,13 +392,18 @@ final class G7Controller: G7ConnectionCycleDelegate {
         cycle?.link.disconnect()
     }
 
+    func cycleNeedsSessionLength() -> Bool {
+        record?.reportedSessionLength == nil
+    }
+
     func cycleReceivedGlucose(_ message: G7GlucoseMessage) {
         guard let pipeline else { return }
         let result = pipeline.handleGlucose(message, receivedAt: now())
         if let state = result.state {
-            lastSensorState = state
+            if case .failed = state {} else { lastSensorState = state }
             emit(state)
         }
+        syncSession()
         result.readings.forEach(publish)
     }
 
@@ -375,16 +438,11 @@ final class G7Controller: G7ConnectionCycleDelegate {
         calibration.handleBounds(record)
     }
 
-    /// Priority as xDrip4iOS: calibration work first, then the unknown lifetime
-    /// (CGMG7Transmitter.swift:1237-1248). Battery/firmware requests are not ported.
+    /// Calibration work after the reading (CGMG7Transmitter.swift:1237-1248); `52` is requested
+    /// before GetData instead (G7ConnectionCycle). Battery/firmware requests are not ported.
     func cycleNextControlRequest() -> Data? {
-        guard let pipeline, let clock = pipeline.clock, !pipeline.isUnsupportedSensor else { return nil }
-        if let command = calibration.nextCommand(clock: clock, now: now()) { return command }
-        if record?.reportedSessionLength == nil, !extendedVersionRequestedThisConnection {
-            extendedVersionRequestedThisConnection = true
-            return G7ControlRequest.extendedVersion
-        }
-        return nil
+        guard let pipeline, let clock = pipeline.clock, !pipeline.isUnsupportedSensor, !pipeline.sessionEnded else { return nil }
+        return calibration.nextCommand(clock: clock, now: now())
     }
 
     /// A failed calibration write is queued again and the connection dropped (CGMG7Transmitter.swift:793-807).
@@ -411,6 +469,32 @@ final class G7Controller: G7ConnectionCycleDelegate {
         }
         log(.ble, "scanning for the sensor")
         central?.scanForSensors()
+    }
+
+    /// The candidate never connected: give it up (new pairing: never try it again) and scan.
+    private func candidateTimedOut(attempt: Int) {
+        guard attempt == candidateAttempt, cycle == nil, let timedOut = candidate else { return }
+        candidate = nil
+        if record?.sensorName == nil { excludedSensorNames.insert(timedOut.name) }
+        central?.cancelConnection(peripheralIdentifier: timedOut.identifier)
+        log(.ble, "\(timedOut.name) did not connect within \(Int(Self.candidateConnectTimeout)) s; scanning again")
+        guard isRunning else { return }
+        connectIfPossible()
+    }
+
+    /// Events about peripherals other than the paired sensor or the current candidate are ignored.
+    private func isExpected(_ identifier: UUID) -> Bool {
+        if let cycle { return cycle.link.peripheralIdentifier == identifier }
+        return identifier == record?.peripheralIdentifier || identifier == candidate?.identifier
+    }
+
+    /// D28: keep the persisted session in step with the pipeline.
+    private func syncSession() {
+        guard let pipeline, var current = record, current.serial == pipeline.serial else { return }
+        guard current.sessionStart != pipeline.sessionStart || current.sessionEnded != pipeline.sessionEnded else { return }
+        current.sessionStart = pipeline.sessionStart
+        current.sessionEnded = pipeline.sessionEnded
+        saveRecord(current)
     }
 
     private func finishCycle() {
@@ -440,10 +524,10 @@ final class G7Controller: G7ConnectionCycleDelegate {
         output.state(state)
     }
 
-    private func loadRecord() -> G7PairingRecord? {
-        do { return try store.load() } catch {
+    private func loadRecord() -> Result<G7PairingRecord?, Error> {
+        do { return .success(try store.load()) } catch {
             log(.sensor, "could not load the pairing record: \(error)")
-            return nil
+            return .failure(error)
         }
     }
 

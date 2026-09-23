@@ -13,6 +13,8 @@ import GlucoseCore
 /// Receiving it at phone time `receivedAt` gives `sessionStart = receivedAt − sensorClock`
 /// (LoopKit G7SensorKit G7Sensor.swift:129: `activationDate = Date() − messageTimestamp`).
 /// Every sensor-reported time `t` (seconds since session start) then maps to `sessionStart + t`.
+/// G7ReadingPipeline keeps the first anchor's session start for the whole session and uses later
+/// anchors only to check it (30 s rule), so reading dates never jitter between connections.
 /// Nothing is assumed: no fixed cadence, no "now" as a reading time.
 ///
 /// The same anchor converts a fingerstick time to sensor time for calibration
@@ -29,30 +31,12 @@ struct G7SessionClock: Equatable, Sendable {
         receivedAt.addingTimeInterval(-TimeInterval(sensorClockAtReceipt))
     }
 
-    /// Phone time of a sensor-reported timestamp (seconds since session start).
-    func date(forSensorTimestamp timestamp: UInt32) -> Date {
-        sessionStart.addingTimeInterval(TimeInterval(timestamp))
-    }
-
     /// Sensor time for a phone time, rounded to whole seconds; nil before the session started
-    /// (DexcomG7CalibrationMessages.swift:281-288).
+    /// (DexcomG7CalibrationMessages.swift:281-288). Used for calibration with this connection's own
+    /// anchor, the freshest reading of the sensor clock.
     func sensorTime(for date: Date) -> UInt32? {
         let resolved = Double(sensorClockAtReceipt) + date.timeIntervalSince(receivedAt)
         guard resolved >= 0, resolved <= Double(UInt32.max) else { return nil }
         return UInt32(resolved.rounded())
-    }
-
-    /// The `SensorSession` for this anchor. Always well formed: parameters guarantee
-    /// 0 ≤ warm-up ≤ lifetime and grace ≥ 0.
-    func session(serial: String, parameters: G7SensorLifetime.Parameters) -> SensorSession {
-        let start = sessionStart
-        let expiresAt = start.addingTimeInterval(parameters.lifetime)
-        return SensorSession(
-            serial: serial,
-            start: start,
-            warmUpEndsAt: start.addingTimeInterval(parameters.warmUp),
-            expiresAt: expiresAt,
-            gracePeriodEndsAt: expiresAt.addingTimeInterval(parameters.gracePeriod)
-        )
     }
 }

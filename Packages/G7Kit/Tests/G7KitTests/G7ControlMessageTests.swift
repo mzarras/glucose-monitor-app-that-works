@@ -22,8 +22,10 @@ final class G7AuthMessageTests: XCTestCase {
         XCTAssertEqual(G7AuthChallengeResponse.make(hash: [9, 9, 9, 9, 9, 9, 9, 9]), Data([0x04, 9, 9, 9, 9, 9, 9, 9, 9]))
     }
 
-    /// `05 authenticated paired` (AuthChallengeRxMessage.swift:25-26: paired = byte2 != 2).
+    /// `05 authenticated paired`: paired only for byte 2 == 1 (G7SensorKit AuthChallengeRxMessage.swift:24-25).
     func test_authStatus() throws {
+        XCTAssertFalse(try XCTUnwrap(G7AuthStatusMessage(Data([0x05, 0x01, 0x03]))).paired, "unknown byte is not paired")
+        XCTAssertFalse(try XCTUnwrap(G7AuthStatusMessage(Data([0x05, 0x01, 0x00]))).paired)
         let both = try XCTUnwrap(G7AuthStatusMessage(Data([0x05, 0x01, 0x01])))
         XCTAssertTrue(both.authenticated)
         XCTAssertTrue(both.paired)

@@ -59,6 +59,7 @@ final class G7ControllerTests: XCTestCase {
         // Data injected before authentication is ignored.
         let fresh = ControllerHarness()
         try fresh.controller.start(pairingCode: "1234")
+        fresh.controller.didDiscover(name: fresh.sensorName, identifier: fresh.identifier)
         let link = FakeLink(identifier: fresh.identifier)
         fresh.controller.didConnect(link: link, availableCharacteristics: Set(G7Characteristic.allCases))
         fresh.controller.valueUpdated(for: .writeControl, value: fresh.currentGlucose(99))

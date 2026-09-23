@@ -25,4 +25,18 @@ public enum G7FailureReason {
     /// No pairing code is stored but the sensor needs a full pairing.
     public static let pairingCodeNeeded =
         "The sensor needs to be paired again. Enter the 4-digit code from the applicator."
+    /// The sensor clock disagrees with the session start by more than 30 s, or a reading would be
+    /// dated before the last one (phone clock changed): readings are withheld until clocks agree.
+    public static let sensorClockMismatch =
+        "The sensor's clock and the phone's clock disagree, so readings are being held back. Check that the phone's date and time are set automatically."
+    /// The sensor said OK but sent no usable glucose number (D31: 0, 0x0FFF, 0xFFFE or none).
+    public static let noGlucoseValue =
+        "The sensor sent a reading without a usable glucose value. It was not used."
+    /// The sensor has not reported its session length (`0x52`), so no reading can be checked yet.
+    public static let sessionLengthUnknown =
+        "The sensor has not reported its session length yet, so readings are held back. This normally clears at the next sensor connection."
+    /// The pairing record could not be read (for example, the Keychain is locked before the first
+    /// unlock after a restart). Not the same as "not paired".
+    public static let credentialsUnavailable =
+        "The sensor's pairing could not be read from the Keychain. Unlock the phone; if this persists, pair the sensor again."
 }

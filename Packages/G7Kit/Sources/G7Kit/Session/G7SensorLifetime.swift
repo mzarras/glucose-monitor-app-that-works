@@ -5,13 +5,17 @@
 // the reported warm-up is used (xDrip4iOS only traced it).
 
 import Foundation
+import GlucoseCore
 
 /// Session timing for a G7 10-day sensor.
 ///
-/// The sensor reports its session length (grace included) and warm-up in the `0x52` response. Until
-/// that response arrives (first connection after pairing), the defaults below are used; they equal
-/// what a 10-day sensor reports. Any other reported session length (a 15-day G7, ONE+, Stelo, or
-/// something new) is refused: the source then publishes no readings (non-goal, HANDOFF §1.1).
+/// The sensor reports its session length (grace included) and warm-up in the `0x52` response, which
+/// is requested before GetData until it has been answered once (G7ConnectionCycle). No reading is
+/// handled without it: there are no assumed defaults. Any other reported session length (a 15-day G7,
+/// ONE+, Stelo, or something new) is refused: the source then publishes no readings (HANDOFF §1.1).
+/// The warm-up is whatever the sensor reports — 1 620 s (27 min) for a 10-day sensor, as in the
+/// captured `0x52` and G7SensorKit G7Sensor.swift:68 — not Dexcom's user-facing "30 minutes", which
+/// would refuse the first valid readings at about 28 min (G7SensorKit G7GlucoseMessageTests.swift:40-77).
 enum G7SensorLifetime {
     /// 10 days + 12 h grace = 907 200 s, the value a 10-day sensor reports in `0x52`.
     /// xDrip4iOS ConstantsDexcomG7.swift:15-16 (10.5 days) and DexcomG7ExtendedVersionMessage.swift:61-62;
@@ -23,25 +27,12 @@ enum G7SensorLifetime {
     /// G7Sensor.swift:69 `gracePeriod = 12 h`, G7CGMManager.swift:115-117 `lifetime = sessionLength - gracePeriod`).
     static let gracePeriod: TimeInterval = 12 * 3600
 
-    /// Warm-up used until `0x52` reports one: 27 min (1 620 s). G7SensorKit G7Sensor.swift:68
-    /// (`defaultWarmupDuration = 27 min`); the captured 10-day `0x52` reports exactly 1 620 s.
-    /// (Dexcom's user-facing "30 minutes" is not what the sensor reports; using 30 would refuse the
-    /// sensor's first valid readings, which arrive at about 28 min, G7SensorKit
-    /// G7GlucoseMessageTests.swift:40-77.)
-    static let defaultWarmUp: TimeInterval = 27 * 60
-
     struct Parameters: Equatable, Sendable {
         /// Rated life, grace excluded (10 days).
         let lifetime: TimeInterval
         let gracePeriod: TimeInterval
         let warmUp: TimeInterval
     }
-
-    static let defaults = Parameters(
-        lifetime: tenDaySessionLength - gracePeriod,
-        gracePeriod: gracePeriod,
-        warmUp: defaultWarmUp
-    )
 
     /// Parameters from a `0x52` response, or nil if this is not a supported 10-day sensor or the
     /// reported warm-up would make the session malformed.
@@ -50,5 +41,18 @@ enum G7SensorLifetime {
         let lifetime = reportedSessionLength - gracePeriod
         guard reportedWarmUp >= 0, reportedWarmUp <= lifetime else { return nil }
         return Parameters(lifetime: lifetime, gracePeriod: gracePeriod, warmUp: reportedWarmUp)
+    }
+
+    /// The `SensorSession` for a session start derived from the sensor clock (G7SessionClock).
+    /// Always well formed: parameters guarantee 0 ≤ warm-up ≤ lifetime and grace ≥ 0.
+    static func session(serial: String, start: Date, parameters: Parameters) -> SensorSession {
+        let expiresAt = start.addingTimeInterval(parameters.lifetime)
+        return SensorSession(
+            serial: serial,
+            start: start,
+            warmUpEndsAt: start.addingTimeInterval(parameters.warmUp),
+            expiresAt: expiresAt,
+            gracePeriodEndsAt: expiresAt.addingTimeInterval(parameters.gracePeriod)
+        )
     }
 }

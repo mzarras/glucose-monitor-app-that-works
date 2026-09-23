@@ -2,25 +2,34 @@
 
 import GlucoseCore
 
-/// S4: how a G7 glucose number becomes a `GlucoseValue`.
+/// What one G7 glucose field (bytes 12-13 of `0x4E`, bytes 4-5 of a backfill record) means.
+enum G7GlucoseSample: Equatable {
+    case value(GlucoseValue)
+    /// No usable value: withheld, logged and surfaced, never LOW/HIGH (D31, S4/S5).
+    case noValue(field: UInt16)
+}
+
+/// S4 and D31: how a G7 glucose field becomes a `GlucoseValue`.
 ///
-/// How the G7 signals LOW/HIGH: it has no separate LOW/HIGH flag bit in either reference
-/// implementation. It reports the number itself (low 12 bits of bytes 12-13 of `0x4E`, bytes 4-5 of a
-/// backfill record), and its reportable range is 40...400 mg/dL. A number below 40 is the sensor's
-/// LOW and a number above 400 is its HIGH:
-/// - LoopKit G7SensorKit G7GlucoseMessage.swift:56-68 and G7BackfillMessage.swift:82-94
-///   (`condition`: `glucose < GlucoseLimits.minimum` → `.belowRange`, `> maximum` → `.aboveRange`);
-/// - G7SensorKit GlucoseLimits.swift:11-13 (`minimum = 40`, `maximum = 400`), which is also
-///   `GlucoseValue.sensorReportableRange` in GlucoseCore.
-/// xDrip4iOS 7.1.0 passes the raw number through unchanged (DexcomG7GlucoseDataRxMessage.swift:92-104).
-/// No capture of an actual G7 LOW or HIGH packet exists in either repository, so the exact numbers
-/// a real LOW/HIGH carries (e.g. 39 or 0; 401 or 4095) are unverified; every one of them maps to the
-/// flag, never to 40/400 (S4). Verify on device (docs/g7-protocol.md, open items).
+/// No value (PROGRESS.md D31): the field `0xFFFF` (the documented "none" sentinel,
+/// DexcomG7GlucoseDataRxMessage.swift:92-104), the field `0xFFFE`, and a masked value of 0 or
+/// `0x0FFF`. These are the values a misread or garbled packet produces; mapping them to LOW/HIGH
+/// would send a flag (HIGH = 401 downstream) that the sensor never reported.
+///
+/// Otherwise the value is the low 12 bits (the upper 4 are flags) and the G7 signals LOW/HIGH with
+/// the number itself: it has no separate LOW/HIGH bit in either reference. Below 40 is LOW, above
+/// 400 is HIGH — LoopKit G7SensorKit G7GlucoseMessage.swift:56-68 and G7BackfillMessage.swift:82-94
+/// (`condition`), GlucoseLimits.swift:11-13 (40, 400) = `GlucoseValue.sensorReportableRange`.
+/// No capture of a real G7 LOW or HIGH packet exists in any reference (docs/g7-protocol.md §5.3,
+/// a HANDOFF §11 item).
 enum G7GlucoseRange {
-    static func value(fromSensorMgdl raw: UInt16) -> GlucoseValue {
+    static func classify(field: UInt16) -> G7GlucoseSample {
+        if field == 0xFFFF || field == 0xFFFE { return .noValue(field: field) }
+        let raw = field & 0x0FFF
+        if raw == 0 || raw == 0x0FFF { return .noValue(field: field) }
         let mgdl = Int(raw)
-        if mgdl < GlucoseValue.sensorReportableRange.lowerBound { return .belowRange }
-        if mgdl > GlucoseValue.sensorReportableRange.upperBound { return .aboveRange }
-        return .mgdl(mgdl)
+        if mgdl < GlucoseValue.sensorReportableRange.lowerBound { return .value(.belowRange) }
+        if mgdl > GlucoseValue.sensorReportableRange.upperBound { return .value(.aboveRange) }
+        return .value(.mgdl(mgdl))
     }
 }

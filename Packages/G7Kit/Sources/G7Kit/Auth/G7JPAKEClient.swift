@@ -68,7 +68,7 @@ final class G7JPAKEClient {
     ///   - pairingCode: the 4-digit code printed on the applicator.
     ///   - keyPair: source of (x, G·x); defaults to micro-ecc's CSPRNG-backed generator.
     ///   - randomScalar: source of proof nonces; defaults to micro-ecc's CSPRNG.
-    init(
+    convenience init(
         pairingCode: String,
         keyPair: () -> (privateKey: G7Scalar, publicKey: G7Point)? = G7ECC.generateKeyPair,
         randomScalar: @escaping () -> G7Scalar? = G7ECC.randomScalar
@@ -76,7 +76,19 @@ final class G7JPAKEClient {
         guard G7PairingCode.isValid(pairingCode) else { throw .invalidPairingCode }
         // s = ASCII bytes of the code as a big-endian integer, left-padded to 32 bytes
         // (DexcomG7AuthBridge.m:915-934 via DexcomG7ECCScalarFromBytes).
-        password = G7ECC.scalar(fromBytes: Array(pairingCode.utf8))
+        try self.init(passwordBytes: Array(pairingCode.utf8), keyPair: keyPair, randomScalar: randomScalar)
+    }
+
+    /// Any password up to 32 bytes, as a big-endian integer. Only the 4-digit initializer above is
+    /// used for the sensor; this one exists so the mbedTLS self-test vectors (password
+    /// "threadjpaketest") can be run as a known-answer test.
+    init(
+        passwordBytes: [UInt8],
+        keyPair: () -> (privateKey: G7Scalar, publicKey: G7Point)?,
+        randomScalar: @escaping () -> G7Scalar?
+    ) throws(Failure) {
+        guard !passwordBytes.isEmpty, passwordBytes.count <= G7Scalar.byteCount else { throw .invalidPairingCode }
+        password = G7ECC.scalar(fromBytes: passwordBytes)
         guard let first = keyPair(), let second = keyPair() else { throw .randomnessUnavailable }
         x1 = first.privateKey
         g1 = first.publicKey

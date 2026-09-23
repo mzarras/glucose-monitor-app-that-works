@@ -12,11 +12,11 @@ import Foundation
 
 /// The sensor's `0x05` authentication status: `05 || authenticated || paired`.
 ///
-/// `authenticated` is byte 1 == 0x01 and `paired` is byte 2 != 0x02, exactly as xDrip4iOS primary
-/// mode decides (AuthChallengeRxMessage.swift:25-26). LoopKit G7SensorKit reads byte 2 == 0x01 as
-/// "bonded" instead (G7SensorKit Messages/AuthChallengeRxMessage.swift:24-25); the two agree on
-/// 0x01 and 0x02, the only values in any capture. This package follows xDrip4iOS because its
-/// primary-mode state machine (DexcomG7AuthSession.swift:463-475) was validated with it.
+/// `authenticated` is byte 1 == 0x01 (AuthChallengeRxMessage.swift:25). `paired` is byte 2 == 0x01,
+/// as LoopKit G7SensorKit reads it (Messages/AuthChallengeRxMessage.swift:24-25). Sensor change:
+/// xDrip4iOS reads paired as byte 2 != 0x02 (:26). The two agree on 0x01 and 0x02, the only values in
+/// any capture; for any other byte the strict reading treats the client as not paired, which leads
+/// to a clean full bootstrap instead of trusting an unknown status.
 struct G7AuthStatusMessage: Equatable {
     let authenticated: Bool
     let paired: Bool
@@ -25,6 +25,6 @@ struct G7AuthStatusMessage: Equatable {
         let bytes = [UInt8](data)
         guard bytes.count >= 3, bytes[0] == G7Opcode.authStatus.rawValue else { return nil }
         authenticated = bytes[1] == 0x01
-        paired = bytes[2] != 0x02
+        paired = bytes[2] == 0x01
     }
 }

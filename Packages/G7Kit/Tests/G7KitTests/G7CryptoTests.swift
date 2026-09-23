@@ -186,11 +186,13 @@ final class RecordingAuthDelegate: G7AuthSessionDelegate {
     var savedKeyRejected = 0
     var needsFullBootstrap = 0
     var failures: [G7AuthFailure] = []
+    var rejectionsAfterAuthentication = 0
     var logs: [String] = []
 
     func authSessionDidAuthenticate(newlyConfirmedKey: [UInt8]?) { authenticatedKeys.append(newlyConfirmedKey) }
     func authSessionDidRejectSavedKey() { savedKeyRejected += 1 }
     func authSessionNeedsFullBootstrap() { needsFullBootstrap += 1 }
     func authSessionDidFail(_ failure: G7AuthFailure) { failures.append(failure) }
+    func authSessionSawRejectionAfterAuthentication() { rejectionsAfterAuthentication += 1 }
     func authSessionLog(_ message: String) { logs.append(message) }
 }
