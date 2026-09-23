@@ -35,13 +35,14 @@ public enum TrioAppGroupContract {
     /// values >= 39 as valid state (`dexcom-share-client-swift/ShareClient/ShareGlucose+GlucoseKit.swift:30-32`),
     /// Trio's `BloodGlucose.isStateValid` is `sgv >= 39` (`Trio/Sources/Models/BloodGlucose.swift:168`),
     /// and xDrip4iOS floors calibrated readings at 39 (`xDrip/Constants/ConstantsCalibrationAlgorithms.swift:8`).
-    /// Written only when `OutOfRangePolicy.low == .writeSentinel` (not the default; see docs/trio-bridge.md).
+    /// Written only when `OutOfRangePolicy.low == .writeSentinel` (the app's policy per PROGRESS.md D21;
+    /// the package default withholds LOW).
     /// Never 38: oref treats 38 as a CGM error code (`trio-oref/lib/determine-basal/determine-basal.js:418-421, :443`).
     public static let lowSentinelMgdl = 39
 
     /// The HIGH code: Nightscout displays exactly 401 as "HIGH" (`lib/sandbox.js:251-252`) and treats any
     /// value > 400 as HIGH (`lib/client/index.js:546-547`). Written only when
-    /// `OutOfRangePolicy.high == .writeSentinel` (not the default).
+    /// `OutOfRangePolicy.high == .writeSentinel` (the app's policy per D21; the package default withholds HIGH).
     public static let highSentinelMgdl = 401
 
     /// Trio's App Group ID must be exactly `group.org.nightscout.<TEAM ID>.trio.trio-app-group`

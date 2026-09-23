@@ -6,8 +6,9 @@ import Foundation
 /// Storage the bridge writes Trio's contract into. Implementations must be safe to call from any thread.
 public protocol TrioSharedStore: Sendable {
     /// Throws `TrioBridgeError.appGroupUnavailable` when this app cannot use the App Group. Called
-    /// before every write so a lost entitlement surfaces as a bridge failure (S5) instead of writes that
-    /// land somewhere Trio never reads.
+    /// before every write or removal so a lost entitlement surfaces as a bridge failure (S5) instead of
+    /// writes that land somewhere Trio never reads. This is the real guard: the bridge's read-back after a
+    /// write only sees this process's view of the suite.
     func checkAccess() throws(TrioBridgeError)
     func data(forKey key: String) -> Data?
     func setData(_ data: Data, forKey key: String)

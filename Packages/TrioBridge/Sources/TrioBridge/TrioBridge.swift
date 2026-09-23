@@ -11,7 +11,8 @@ import GlucoseCore
 
 /// Writes valid live sensor readings into Trio's App Group and reports its own health.
 public actor TrioBridge {
-    /// LOW/HIGH handling for this bridge instance (S4). Default: neither is written.
+    /// LOW/HIGH handling for this bridge instance (S4). The package default withholds both; the app sets
+    /// the policy Michael chose (PROGRESS.md D21: LOW → 39, HIGH → 401) explicitly in its wiring.
     public nonisolated let outOfRangePolicy: OutOfRangePolicy
 
     private let store: any TrioSharedStore
@@ -20,10 +21,15 @@ public actor TrioBridge {
 
     /// Readings accepted into Trio's payload: newest first, unique by `id`, at most `maxReadings`.
     /// Memory only. After a relaunch the app re-seeds it by publishing its recent stored sensor readings;
-    /// each one passes the gate again.
+    /// each one passes the gate again. Readings that no longer pass the gate stay here (so a transient
+    /// `nil` session loses nothing) but are never written.
     private var window: [GlucoseReading] = []
-    /// True from the moment the payload changes until a write of it succeeds.
-    private var writePending = false
+    /// IDs of the readings in the App Group as this bridge last set it, newest first; empty = key removed.
+    private var payloadIDs: [String] = []
+    /// False until this process has set the key once, and after any failed attempt: the next `publish`
+    /// then writes or removes the key even if `payloadIDs` looks current.
+    private var payloadInSync = false
+
     /// Current health. Every change is delivered through `statusUpdates()`.
     public private(set) var status = TrioBridgeStatus() {
         didSet {
@@ -37,8 +43,9 @@ public actor TrioBridge {
 
     /// - Parameters:
     ///   - store: Trio's App Group suite (`AppGroupUserDefaultsStore(appGroupID:)` in the app).
-    ///   - outOfRangePolicy: keep the default until Michael decides (docs/trio-bridge.md, "LOW and HIGH").
-    ///   - diagnostics: receives one event per write, failure and refusal (category `.bridge`).
+    ///   - outOfRangePolicy: defaults to withholding LOW and HIGH; the app passes D21's policy explicitly.
+    ///   - diagnostics: receives one summary event per `publish` call, plus clear/heartbeat events
+    ///     (category `.bridge`).
     ///   - clock: the current time; injected so tests never sleep.
     public init(
         store: any TrioSharedStore,
@@ -54,13 +61,19 @@ public actor TrioBridge {
 
     // MARK: - Publishing
 
-    /// Adds `readings` to Trio's payload and writes it.
+    /// Adds `readings` to the window and makes Trio's App Group show exactly the window readings that pass
+    /// the gate for `session` now.
     ///
-    /// Every reading, new or already in the payload, passes `LiveReadingGate.validate(_:session:now:)`
+    /// Every reading, new or already in the window, passes `LiveReadingGate.validate(_:session:now:)`
     /// immediately before each write (S2, S6), and LOW/HIGH follow `outOfRangePolicy` (S4). A refused reading
-    /// is never written. Readings keep their own timestamps; a reading whose `id` is already in the payload
-    /// is ignored so the copy Trio already has is never replaced (S3). Nothing is written when no reading was
-    /// added and no earlier write is pending, so a refused-only call leaves Trio's payload untouched.
+    /// is never written. Readings keep their own timestamps; a reading whose `id` is already in the window is
+    /// ignored so the copy Trio already has is never replaced (S3).
+    ///
+    /// The App Group is changed only when that set differs from what this bridge last put there (or the last
+    /// attempt failed, or this process has not set it yet). So a new sensor session or a `nil` session
+    /// (sensor expired or failed) rewrites the payload with only the readings that still pass, or removes
+    /// the key when none do; no previous-session payload lingers. Call with an empty array to retry or
+    /// re-check without new readings.
     ///
     /// - Parameters:
     ///   - readings: new or backfilled readings, in any order.
@@ -69,6 +82,8 @@ public actor TrioBridge {
     public func publish(_ readings: [GlucoseReading], session: SensorSession?) -> TrioPublishResult {
         let now = clock()
         var result = TrioPublishResult()
+        var next = status
+        noteLiveReadingsOffered(readings, now: now, in: &next)
 
         // 1. Screen the given readings: dedupe by id (S3), then the gate and the value rules.
         var knownIDs = Set(window.map(\.id))
@@ -87,23 +102,18 @@ public actor TrioBridge {
             }
         }
 
-        // 2. Nothing new and nothing pending: Trio already has the current payload.
-        guard !accepted.isEmpty || writePending else {
-            record(result, now: now)
-            return result
-        }
-
-        // 3. The new window: newest first, capped at what Trio reads (`AppGroupSource.swift:61`).
+        // 2. The window: newest first, capped at what Trio reads (`AppGroupSource.swift:61`).
         let acceptedIDs = Set(accepted.map(\.id))
-        let merged = (window + accepted).sorted(by: Self.newestFirst)
-        window = Array(merged.prefix(TrioAppGroupContract.maxReadings))
-        for reading in merged.dropFirst(TrioAppGroupContract.maxReadings) where acceptedIDs.contains(reading.id) {
-            result.refusals.append(TrioBridgeRefusal(readingID: reading.id, readingDate: reading.date, reason: .olderThanPayloadWindow, refusedAt: now))
+        if !accepted.isEmpty {
+            let merged = (window + accepted).sorted(by: Self.newestFirst)
+            window = Array(merged.prefix(TrioAppGroupContract.maxReadings))
+            for reading in merged.dropFirst(TrioAppGroupContract.maxReadings) where acceptedIDs.contains(reading.id) {
+                result.refusals.append(TrioBridgeRefusal(readingID: reading.id, readingDate: reading.date, reason: .olderThanPayloadWindow, refusedAt: now))
+            }
         }
-        writePending = true
 
-        // 4. Immediately before writing, every reading in the window passes the gate again against the
-        //    current session and clock (S2, S6). Readings of an earlier session fail here and are left out.
+        // 3. What Trio should see now: every window reading that passes the gate again, against the current
+        //    session and clock, immediately before any write (S2, S6).
         var elements: [TrioSharedReading] = []
         var included: [GlucoseReading] = []
         for reading in window {
@@ -112,71 +122,118 @@ public actor TrioBridge {
                 included.append(reading)
             }
         }
-        if included.count < window.count {
-            log("left \(window.count - included.count) earlier reading(s) out of the payload: refused for the current session", at: now)
-        }
-        guard !elements.isEmpty else {
-            // Only reachable when retrying a pending write without a valid session: keep the last payload.
-            record(result, now: now)
-            return result
+        let includedIDs = included.map(\.id)
+
+        // 4. Bring the App Group in line: write, remove, or leave it.
+        if !payloadInSync || includedIDs != payloadIDs {
+            do throws(TrioBridgeError) {
+                if elements.isEmpty {
+                    try removePayload()
+                    result.didRemovePayload = true
+                    log("removed latestReadings: no reading passes the gate for the current session", at: now)
+                } else {
+                    try write(elements)
+                    result.didWrite = true
+                    result.addedReadingIDs = includedIDs.filter { acceptedIDs.contains($0) }
+                    if let newest = included.first?.date {
+                        next.newestReadingWrittenAt = max(next.newestReadingWrittenAt ?? newest, newest)
+                    }
+                    log("wrote \(elements.count) reading(s) to Trio, newest \(Self.iso(included[0].date)), \(result.addedReadingIDs.count) new", at: now)
+                }
+                if included.count < window.count {
+                    log("left \(window.count - included.count) earlier reading(s) out: refused for the current session", at: now)
+                }
+                payloadIDs = includedIDs
+                payloadInSync = true
+                next.lastSuccessfulWriteAt = now
+                next.readingsInLastWrite = elements.count
+                next.consecutiveFailures = 0
+            } catch {
+                payloadInSync = false
+                result.error = error
+                next.consecutiveFailures += 1
+                next.lastError = error
+                next.lastErrorAt = now
+                log("write FAILED (\(next.consecutiveFailures) in a row): \(error)", at: now)
+            }
         }
 
-        // 5. Write and verify.
-        do {
-            try write(elements)
-            writePending = false
-            result.didWrite = true
-            result.addedReadingIDs = included.map(\.id).filter { acceptedIDs.contains($0) }
-            var next = status
-            next.lastSuccessfulWriteAt = now
-            next.newestReadingWrittenAt = included.first?.date
-            next.readingsInLastWrite = elements.count
-            next.consecutiveFailures = 0
-            status = next
-            log("wrote \(elements.count) reading(s) to Trio, newest \(Self.iso(included[0].date)), \(result.addedReadingIDs.count) new", at: now)
+        record(refusals: result.refusals, duplicates: result.duplicateReadingIDs.count, now: now, in: &next)
+        status = next
+        return result
+    }
+
+    /// Removes this app's readings from Trio's App Group, forgets the window, and resets the starvation
+    /// signal (e.g. when the Trio bridge is turned off in Settings). Trio then has no App Group readings
+    /// (`AppGroupSource.swift:48-50`). A failure is reported in `status` and thrown.
+    public func clear() throws(TrioBridgeError) {
+        let now = clock()
+        var next = status
+        do throws(TrioBridgeError) {
+            try removePayload()
         } catch {
-            result.error = error
-            var next = status
+            payloadInSync = false
             next.consecutiveFailures += 1
             next.lastError = error
             next.lastErrorAt = now
             status = next
-            log("write FAILED (\(next.consecutiveFailures) in a row): \(error)", at: now)
+            log("clear FAILED: \(error)", at: now)
+            throw error
         }
-        record(result, now: now)
-        return result
-    }
-
-    /// Removes this app's readings from Trio's App Group and forgets the payload (e.g. when the Trio bridge
-    /// is turned off in Settings). Trio then has no App Group readings at all (`AppGroupSource.swift:48-50`).
-    public func clear() throws(TrioBridgeError) {
-        try store.checkAccess()
-        store.removeValue(forKey: TrioAppGroupContract.readingsKey)
         window = []
-        writePending = false
-        log("cleared latestReadings", at: clock())
+        payloadIDs = []
+        payloadInSync = true
+        next.lastSuccessfulWriteAt = now
+        next.readingsInLastWrite = 0
+        next.consecutiveFailures = 0
+        next.newestReadingWrittenAt = nil
+        next.newestLiveReadingOfferedAt = nil
+        next.firstLiveReadingOfferedAt = nil
+        status = next
+        log("cleared latestReadings", at: now)
     }
 
     // MARK: - Heartbeat (optional)
 
-    /// Writes (or with `nil` removes) the peripheral Trio should use as its background heartbeat.
+    /// Writes the peripheral Trio should use as its background heartbeat, or with `nil` removes the three
+    /// heartbeat keys — including stale ones a previous xDrip4iOS install left behind, which would otherwise
+    /// make Trio keep connecting to that old transmitter.
     ///
     /// Order matters. Trio remembers the address as soon as it sees a new one and builds its connection only
     /// if both UUID keys are already present, without retrying later (`HeartBeatManager.swift:33-42, :47-70`).
-    /// So the UUIDs are written before the address, and on removal the address goes first.
+    /// So the UUIDs are written before the address, and on removal the address goes first; Trio then drops
+    /// its heartbeat connection on its next poll (`HeartBeatManager.swift:33-42`, `BluetoothTransmitter.swift:71-76`).
+    /// Each key is read back afterwards (a same-process check; `checkAccess()` is the real guard).
     public func setHeartbeatPeripheral(_ peripheral: TrioHeartbeatPeripheral?) throws(TrioBridgeError) {
         try store.checkAccess()
+        let serviceKey = TrioAppGroupContract.heartbeatServiceUUIDKey
+        let receiveKey = TrioAppGroupContract.heartbeatReceiveUUIDKey
+        let addressKey = TrioAppGroupContract.heartbeatDeviceAddressKey
         if let peripheral {
-            store.setString(peripheral.serviceUUID, forKey: TrioAppGroupContract.heartbeatServiceUUIDKey)
-            store.setString(peripheral.receiveCharacteristicUUID, forKey: TrioAppGroupContract.heartbeatReceiveUUIDKey)
-            store.setString(peripheral.peripheralIdentifier.uuidString, forKey: TrioAppGroupContract.heartbeatDeviceAddressKey)
-            log("heartbeat peripheral set to \(peripheral.peripheralIdentifier.uuidString)", at: clock())
+            let address = peripheral.peripheralIdentifier.uuidString
+            store.setString(peripheral.serviceUUID, forKey: serviceKey)
+            store.setString(peripheral.receiveCharacteristicUUID, forKey: receiveKey)
+            store.setString(address, forKey: addressKey)
+            guard store.string(forKey: serviceKey) == peripheral.serviceUUID,
+                  store.string(forKey: receiveKey) == peripheral.receiveCharacteristicUUID,
+                  store.string(forKey: addressKey) == address
+            else { throw .readBackMismatch }
+            log("heartbeat peripheral set to \(address)", at: clock())
         } else {
-            store.removeValue(forKey: TrioAppGroupContract.heartbeatDeviceAddressKey)
-            store.removeValue(forKey: TrioAppGroupContract.heartbeatServiceUUIDKey)
-            store.removeValue(forKey: TrioAppGroupContract.heartbeatReceiveUUIDKey)
-            log("heartbeat peripheral removed", at: clock())
+            store.removeValue(forKey: addressKey)
+            store.removeValue(forKey: serviceKey)
+            store.removeValue(forKey: receiveKey)
+            guard [addressKey, serviceKey, receiveKey].allSatisfy({ store.string(forKey: $0) == nil }) else {
+                throw .readBackMismatch
+            }
+            log("heartbeat keys removed", at: clock())
         }
+    }
+
+    /// The heartbeat address currently in Trio's App Group, whoever wrote it (e.g. a stale xDrip4iOS entry),
+    /// or nil. For the Settings screen and the setup check in docs/trio-bridge.md.
+    public func heartbeatAddressInAppGroup() -> String? {
+        store.string(forKey: TrioAppGroupContract.heartbeatDeviceAddressKey)
     }
 
     // MARK: - Status
@@ -218,7 +275,7 @@ public actor TrioBridge {
         } catch {
             return .refuse(.gate(error))
         }
-        // S4: LOW/HIGH stay flags unless Michael chooses the sentinel codes; never 40/400.
+        // S4: LOW/HIGH stay flags unless the policy asks for the 39/401 codes; never 40/400.
         switch reading.value {
         case .mgdl(let mgdl):
             return .write(mgdl: mgdl)
@@ -235,6 +292,9 @@ public actor TrioBridge {
         }
     }
 
+    /// Checks access, writes, and reads the key back. The read-back only sees this process's view of the
+    /// suite, so it catches a store that drops the value but cannot prove Trio's process sees it; the real
+    /// guard is `checkAccess()` (group ID format and entitlement).
     private func write(_ elements: [TrioSharedReading]) throws(TrioBridgeError) {
         try store.checkAccess()
         let data: Data
@@ -245,24 +305,65 @@ public actor TrioBridge {
         }
         store.setData(data, forKey: TrioAppGroupContract.readingsKey)
         guard store.data(forKey: TrioAppGroupContract.readingsKey) == data else {
-            throw .writeNotPersisted
+            throw .readBackMismatch
         }
     }
 
-    /// Logs refusals and duplicates and updates the refusal fields of the status.
-    private func record(_ result: TrioPublishResult, now: Date) {
-        var next = status
-        for refusal in result.refusals {
-            log("refused \(refusal.readingID) (\(Self.iso(refusal.readingDate))): \(refusal.reason)", at: now)
+    /// Checks access, removes the key, and reads it back (same caveat as `write`).
+    private func removePayload() throws(TrioBridgeError) {
+        try store.checkAccess()
+        store.removeValue(forKey: TrioAppGroupContract.readingsKey)
+        guard store.data(forKey: TrioAppGroupContract.readingsKey) == nil else {
+            throw .readBackMismatch
+        }
+    }
+
+    /// Feeds the starvation signal (`TrioBridgeStatus.trioLag`): the newest live (`.sensor`) reading offered,
+    /// capped at `now` so a reading with a bad clock cannot push it into the future.
+    private func noteLiveReadingsOffered(_ readings: [GlucoseReading], now: Date, in next: inout TrioBridgeStatus) {
+        guard let newest = readings.filter({ $0.source.isLiveSensor }).map({ min($0.date, now) }).max() else { return }
+        next.newestLiveReadingOfferedAt = max(next.newestLiveReadingOfferedAt ?? newest, newest)
+        if next.newestReadingWrittenAt == nil, next.firstLiveReadingOfferedAt == nil {
+            next.firstLiveReadingOfferedAt = newest
+        }
+    }
+
+    /// Updates the refusal fields of the status and logs one summary line per call: count per reason with
+    /// the first and last reading time.
+    private func record(refusals: [TrioBridgeRefusal], duplicates: Int, now: Date, in next: inout TrioBridgeStatus) {
+        for refusal in refusals {
             next.lastRefusal = refusal
-            if case .outOfRangeWithheld = refusal.reason {
-                next.lastOutOfRangeWithheldAt = now
+            switch refusal.reason {
+            case .gate: next.lastGateRefusal = refusal
+            case .outOfRangeWithheld: next.lastOutOfRangeWithheldAt = now
+            case .olderThanPayloadWindow: break
             }
         }
-        if !result.duplicateReadingIDs.isEmpty {
-            log("ignored \(result.duplicateReadingIDs.count) reading(s) already in the payload", at: now)
+        if !refusals.isEmpty {
+            log("refused \(refusals.count) reading(s): " + Self.summary(of: refusals), at: now)
         }
-        status = next
+        if duplicates > 0 {
+            log("ignored \(duplicates) reading(s) already in the payload", at: now)
+        }
+    }
+
+    /// "gate(noSession) ×3 [first … last]; outOfRangeWithheld(belowRange) ×1 [t]", reasons in order of
+    /// first appearance.
+    private static func summary(of refusals: [TrioBridgeRefusal]) -> String {
+        var order: [String] = []
+        var groups: [String: [Date]] = [:]
+        for refusal in refusals {
+            let key = String(describing: refusal.reason)
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(refusal.readingDate)
+        }
+        return order.map { key in
+            let dates = groups[key] ?? []
+            let first = dates.min().map(iso) ?? "?"
+            let last = dates.max().map(iso) ?? "?"
+            let span = first == last ? first : "\(first) … \(last)"
+            return "\(key) ×\(dates.count) [\(span)]"
+        }.joined(separator: "; ")
     }
 
     private func log(_ message: String, at date: Date) {

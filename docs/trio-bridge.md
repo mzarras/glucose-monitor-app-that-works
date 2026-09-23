@@ -6,8 +6,9 @@ Code: `Packages/TrioBridge`. Handoff: §8, §8A.
 **Short version.** Trio's existing **"xDrip4iOS"** CGM source reads this app's readings unchanged.
 No Trio patch is needed. In Trio, select **Settings → Devices → CGM → Add CGM → xDrip4iOS**, and turn
 **Settings → Services → Nightscout → Upload → Upload Glucose** off so only this app uploads CGM
-readings to Nightscout. One decision is still open: whether LOW and HIGH readings reach Trio (see
-[LOW and HIGH](#low-and-high-s4)). Until Michael decides, they don't.
+readings to Nightscout. LOW and HIGH reach Trio as 39 and 401 (Michael's decision, PROGRESS.md D21; see
+[LOW and HIGH](#low-and-high-s4)); 40/400 are never written for a flag. Trio must be given the heartbeat keys
+to loop in the background on DASH/Dana/Medtrum ([When Trio reads](#when-trio-reads), Phase 2 must-do).
 
 ## Sources
 
@@ -101,17 +102,24 @@ with a differently named App Group source. Trio's UI still calls the source "xDr
   xDrip4iOS 7.1.0 writes these keys (`xDrip/Managers/BluetoothPeripheral/BluetoothPeripheralManager.swift:616-640`)
   and, for a G7 in primary mode, names the G7 service and its **authentication** characteristic
   (`xDrip/BluetoothTransmitter/CGM/Dexcom/G7/CGMG7Transmitter.swift:875-876`).
-- **Pump.** Trio answers the pump manager's "must provide BLE heartbeat?" with yes (`DeviceDataManager.swift:455-457`)
-  but ignores the heartbeat callback (`:450-453`); pump radio traffic can still wake Trio so an overdue timer fires. Nothing guarantees a
-  five-minute cadence from the pump alone.
+- **Pump.** No pump heartbeat drives Trio. Trio never calls `PumpManager.setMustProvideBLEHeartbeat(_:)` (the
+  only matches in the checkout are the pump kits' own definitions), so Omnipod DASH never enables its heartbeat
+  (`OmnipodKit/OmnipodKit/PumpManager/OmniPumpManager.swift:309-315, :345-356`), Dana never does
+  (`DanaKit/DanaKit/PumpManager/DanaKitPumpManager.swift:132-151`) and Medtrum's is empty
+  (`MedtrumKit/MedtrumKit/PumpManager/MedtrumPumpManager.swift:255`). Only the RileyLink Minimed path asks Trio
+  (`MinimedKit/MinimedKit/PumpManager/MinimedPumpManager.swift:891-895`), which answers yes
+  (`DeviceDataManager.swift:455-457`); the RileyLink timer ticks then wake Trio's process incidentally, although
+  Trio ignores the heartbeat callback itself (`DeviceDataManager.swift:450-453`: "never used").
 - No notifications or KVO are used.
 
-Consequence: today, with Trio's own G7 plugin, the sensor's BLE traffic wakes Trio every five minutes. After
-switching to the App Group source, Trio has no such wake-up unless the heartbeat keys are written.
-`TrioBridge.setHeartbeatPeripheral(_:)` writes them (service and characteristic first, address last,
-because Trio caches a new address before it checks the UUIDs and does not retry, `HeartBeatManager.swift:33-42`)
-but **the app does not call it yet**: letting Trio connect to the sensor this app authenticates to is a BLE
-decision for G7Kit/Phase 2 (open question). Either way, verify background cadence on device (§11 step 4).
+**Finding: without the heartbeat keys, Trio will not loop in the background on DASH, Dana or Medtrum setups.**
+Today Trio's own G7 plugin is woken by the sensor's BLE traffic every five minutes. On the App Group source the
+only wake-up is the heartbeat connection (RileyLink pumps wake Trio incidentally). `TrioBridge.setHeartbeatPeripheral(_:)`
+writes the keys (service and characteristic first, address last, because Trio caches a new address before it checks
+the UUIDs and does not retry, `HeartBeatManager.swift:33-42`). **Wiring it is a Phase 2 must-do** (PROGRESS.md), with
+the G7 peripheral and its service/authentication-characteristic UUIDs as xDrip4iOS does; WS1 is assessing the safety
+of Trio as a second central on the sensor this app authenticates to. §11 step 4 must verify closed loop,
+backgrounded and locked, for 30+ minutes.
 
 There is also a race xDrip4iOS shares: a heartbeat fires on the sensor's disconnect, possibly before this app
 has written the new reading. Trio then picks it up on its next wake-up (the payload keeps it, see below).
@@ -177,7 +185,7 @@ Both apps read the same phone clock, so by the time Trio reads, the lead is smal
 | `direction` | xDrip4iOS slope name | `TrendArrow(rate:).nightscoutDirection` from the sensor-reported rate | HANDOFF §7.5 mapping |
 | `from` | `"xDrip"` | omitted | [Source identity](#source-identity) |
 | window | readings since last share − 30 min | newest 60 readings this process accepted | lets Trio catch up after long suspensions |
-| empty | writes `[]` | never writes an empty array; `clear()` removes the key | a refused-only call leaves Trio's last payload untouched |
+| empty | writes `[]` | removes the key when no reading passes the gate (e.g. `nil` session); `clear()` removes it too | Trio treats a missing key as no readings (`AppGroupSource.swift:48-50`) |
 
 ## What this bridge writes
 
@@ -185,18 +193,26 @@ Both apps read the same phone clock, so by the time Trio reads, the lead is smal
 
 1. Given readings whose `id` is already in the window are ignored (S3: the copy Trio has is never replaced).
 2. Every other reading goes through `LiveReadingGate.validate(reading, session:, now:)` (S2, S6; never the
-   DEBUG replay variant), then the LOW/HIGH policy (S4). Refusals are returned, logged (category `.bridge`)
-   and published in `status.lastRefusal`.
-3. If nothing was accepted and no earlier write is pending, nothing is written.
-4. The window = previous window + accepted, newest first, capped at 60. An accepted reading older than the
+   DEBUG replay variant), then the LOW/HIGH policy (S4). Refusals are returned, summarised in one diagnostic
+   line per call (count per reason, first … last reading time), and published in `status`.
+3. The window = previous window + accepted, newest first, capped at 60. An accepted reading older than the
    newest 60 is reported as `olderThanPayloadWindow`.
-5. **Immediately before the write, every reading in the window passes the gate again** with the current
-   session and clock; readings of an earlier sensor session fail and are left out.
-6. JSON-encode (sorted keys, unescaped slashes), `checkAccess()`, `set`, read back and compare.
+4. **Immediately before any write, every reading in the window passes the gate again** with the current
+   session and clock. The result is exactly what Trio should see now.
+5. If that differs from what this bridge last put in the App Group (or the last attempt failed, or this
+   process has not set the key yet), the key is written — or **removed** when nothing passes. So a new sensor
+   session rewrites the payload with only its own readings, and a `nil` session (sensor expired or failed)
+   removes it: no previous-session payload lingers. Readings stay in memory, so a transient `nil` session
+   loses nothing; they are written again once they pass. Otherwise nothing is touched.
+6. A write is JSON-encoded (sorted keys, unescaped slashes) after `checkAccess()`, then read back. The
+   read-back only sees this process's view of the suite, so it catches a store that drops the value but cannot
+   prove Trio sees it; `checkAccess()` (group ID format and entitlement) is the real guard.
 
-The window lives in memory. After a relaunch the app should publish its recent stored `.sensor` readings (for
-example the last 5 hours) once a session is known; each passes the gate again. Readings older than the newest
-60 (about 5 hours at the G7's 5-minute cadence) never reach Trio after a long gap; xDrip4iOS has the same limit.
+`publish([], session:)` re-checks and retries without new readings (Phase 2 calls it on foreground and on a
+timer). The window lives in memory. After a relaunch the app publishes its recent stored `.sensor` readings (the
+last ~5 hours) once a session is known; each passes the gate again. The first call of a process always sets the
+key, so a leftover payload from an earlier process is replaced or removed. Readings older than the newest 60
+(about 5 hours at the G7's 5-minute cadence) never reach Trio after a long gap; xDrip4iOS has the same limit.
 
 Golden example (`Packages/TrioBridge/Tests/TrioBridgeTests/Fixtures/latestReadings.golden.json`, formatted here):
 
@@ -211,10 +227,17 @@ timestamp, which Trio routes through its backfill path.
 
 ## LOW and HIGH (S4)
 
-**Default (implemented): LOW and HIGH readings are not written to Trio.** `OutOfRangePolicy.doNotWrite`.
-Each withheld reading is a refusal with reason `.outOfRangeWithheld(.belowRange/.aboveRange)`, sets
-`status.lastOutOfRangeWithheldAt`, and is logged, so the app can show "LOW not sent to Trio". This is a
-safety trade-off for Michael to decide.
+**Decision (Michael, PROGRESS.md D21): LOW → 39, HIGH → 401.** The app wiring sets
+`OutOfRangePolicy(low: .writeSentinel, high: .writeSentinel)` explicitly, with a comment citing D21. The
+package default stays `.doNotWrite` (withhold both) so the sentinels cannot be enabled by accident.
+**40 and 400 are never written for a flag** under any policy (S4; `test_S4_flagsAreNeverWrittenAs40Or400`
+checks all four policy combinations). Stored readings, the UI, statistics and alerts keep the flags; 39/401 exist
+only in the Trio payload, as the ecosystem's LOW/HIGH encoding. A 39 or 401 arriving as a *number* is refused by
+the gate (`implausibleValue`), so the codes can only come from a flag.
+
+With a withholding policy, each withheld reading is a refusal with reason
+`.outOfRangeWithheld(.belowRange/.aboveRange)`, sets `status.lastOutOfRangeWithheldAt`, counts towards
+[Trio starving](#failure-reporting-s5), and is logged. The evidence and options behind the decision follow.
 
 ### Evidence
 
@@ -243,49 +266,62 @@ How oref (bundled in Trio) treats the numbers:
 
 | | Trio sees during a LOW | Trio sees during a HIGH | S1/S4 | Status |
 |---|---|---|---|---|
-| **A. Don't write** (default) | last numeric reading; after 12 min the loop stops ("stale"), the running temp — normally the 30–120 min zero temp oref set on the way down — finishes, then **scheduled basal resumes** while the sensor may still read LOW | the loop stops after 12 min; no corrections while > 400 | clean | implemented, default |
-| **B. 39 / 401 sentinels** | a real low: zero temps continue as long as LOW lasts | corrections continue as for 401 (true value ≥ 401, so no over-estimate) | not a clamp to 40/400, and they are the ecosystem's LOW/HIGH codes, but they **are numbers the sensor did not report** (S1 tension). Trio displays "39"/"401", not "LOW"/"HIGH", and counts them in its stats | implemented as `.writeSentinel`, off |
+| **A. Don't write** (package default) | last numeric reading; after 12 min the loop stops ("stale"), the running temp — normally the 30–120 min zero temp oref set on the way down — finishes, then **scheduled basal resumes** while the sensor may still read LOW | the loop stops after 12 min; no corrections while > 400 | clean | implemented, default |
+| **B. 39 / 401 sentinels** | a real low: zero temps continue as long as LOW lasts | corrections continue as for 401 (true value ≥ 401, so no over-estimate) | not a clamp to 40/400, and they are the ecosystem's LOW/HIGH codes, but they **are numbers the sensor did not report** (S1 tension). Trio displays "39"/"401", not "LOW"/"HIGH", and counts them in its stats | **chosen (D21)**, `.writeSentinel` for both |
 | **C. 40 / 400** | as B | as B | forbidden by S4 | not implemented |
 | **D. Trio patch carrying a LOW/HIGH flag** | Trio stores `Int16` glucose and oref has no flag, so a number is still needed; larger AGPL patch, no dosing benefit over B | | | not recommended |
 | **E. LOW → 39, HIGH not written** | as B | as A | S1 tension for LOW only | supported by the policy |
 
 `OutOfRangePolicy` sets LOW and HIGH independently, so A, B and E are one line in the app's wiring.
 
-### Recommendation
+### Why B
 
-**B for LOW** (write 39). The dangerous case for option A is a sustained severe low: once the loop goes stale,
-the pump can return to scheduled basal while glucose is below 40. Writing 39 keeps oref suspending for as long as
-the sensor says LOW, which is also what Trio does today with its own G7 plugin (40), minus the clamp to an
-in-range-looking value. **For HIGH, B or E** — B matches Trio's current native behaviour (400) and only ever
-under-states the true value; E is the conservative choice if Michael would rather automation never dose on a
-value of unknown magnitude. In every option this app's own alerts fire on the LOW/HIGH flags (S7 urgent low
-cannot be disabled). Changing the policy needs Michael's explicit sign-off because B/E put a number the sensor
-did not report into Trio (S1).
+The dangerous case for option A is a sustained severe low: once the loop goes stale, the pump can return to
+scheduled basal while glucose is below 40. Writing 39 keeps oref suspending for as long as the sensor says LOW,
+which is what Trio does today with its own G7 plugin (40), without the clamp to an in-range-looking value. For
+HIGH, 401 matches Trio's native behaviour (400) and only ever under-states the true value (Michael preferred it to
+withholding HIGH). This app's own alerts fire on the LOW/HIGH flags regardless (S7: urgent low cannot be disabled).
 
 ## Failure reporting (S5)
 
-`TrioBridge.status` / `statusUpdates()` (a stream per caller, current value first):
+`TrioBridge.status` / `statusUpdates()` (a stream per caller, current value first, then every change):
 
 | Field | Meaning |
 |---|---|
-| `lastSuccessfulWriteAt`, `newestReadingWrittenAt`, `readingsInLastWrite` | last verified write |
-| `consecutiveFailures` / `isFailing` | writes failed since the last success. The app should alert (§5 "Trio bridge") while non-zero |
-| `lastError`, `lastErrorAt` | `appGroupUnavailable(invalidGroupID / notEntitled / suiteUnavailable)`, `encodingFailed`, `writeNotPersisted` |
-| `lastRefusal` | latest refused reading and why (gate rejection, LOW/HIGH withheld, older than the window) |
-| `lastOutOfRangeWithheldAt` | latest LOW/HIGH not sent under the policy |
+| `lastSuccessfulWriteAt`, `readingsInLastWrite` | last time the App Group was brought up to date (0 readings = key removed) |
+| `consecutiveFailures` / `isFailing` | attempts failed since the last success |
+| `lastError`, `lastErrorAt` | `appGroupUnavailable(invalidGroupID / notEntitled / suiteUnavailable)`, `encodingFailed`, `readBackMismatch` (same-process read-back only) |
+| `lastRefusal` | latest refused reading of any reason |
+| `lastGateRefusal` | latest `LiveReadingGate` refusal (S2/S6), kept separately so a benign `olderThanPayloadWindow` refusal cannot hide it |
+| `lastOutOfRangeWithheldAt` | latest LOW/HIGH not sent (only with a withholding policy) |
+| `newestReadingWrittenAt` | newest reading Trio has from this bridge (never decreases; reset by `clear()`) |
+| `newestLiveReadingOfferedAt`, `firstLiveReadingOfferedAt` | newest `.sensor` reading offered (capped at the clock); the baseline before the first write |
+| `trioLag`, `isStarving(after: 15 min)` | **Trio starving**: how far the newest live reading offered is ahead of the newest reading written |
 
-A failed write keeps its readings pending; the next `publish` (with or without new readings) retries.
+**The §5 "Trio bridge" alert should fire on `status.isStarving()`** (default threshold
+`TrioBridgeStatus.starvationThreshold` = 15 min). It goes true whenever live readings keep arriving but Trio
+has had none of them for 15 min, whatever the cause: write failures, gate refusals, a `nil` session, withheld
+LOW/HIGH. It is measured in reading time, not wall-clock time, so a sensor gap (no readings at all) does not
+trigger it; that is the missed-readings alert (§5). Backfilled readings older than the newest written, imported
+or replay readings, and a reading dated ahead of the clock do not move it. `isFailing` gives the immediate
+"write failing" state for the Settings row.
 
-**"Trio not consuming for 15 min" is not detectable** with unpatched Trio. Trio writes nothing into the App
+A failed attempt is retried by the next `publish` (with or without new readings). `clear()` removes the key,
+reads it back, updates `status` (success: `readingsInLastWrite` 0, failures reset, starvation tracking reset;
+failure: `consecutiveFailures`, `lastError`) and throws on failure. Diagnostics: one line per write or removal,
+one refusal summary per `publish` call (count per reason with first … last reading time), one line per failure.
+
+**"Trio not consuming for 15 min" is not detectable** with unpatched Trio (PROGRESS.md D22; the starvation
+signal above covers "Trio not being fed", not "Trio not reading"). Trio writes nothing into the App
 Group: its only App Group access is the read in `AppGroupSource.swift:34-52`, `lastLoopDate` is persisted in
 Trio's own storage (`APSManager.swift:85-86`, `Trio/Trio/Sources/Helpers/PropertyWrappers/PersistedProperty.swift:24, :34-40`, default `UserDefaults.standard`)
 and Core Data uses the default store location in Trio's own container (`Trio/Model/CoreDataStack.swift:21-31`). Trio does alert on its own when
-its glucose goes stale. Alternatives (open question): a small Trio patch writing a "last read" timestamp into the
+its glucose goes stale. Not built (D22); possible later: a small Trio patch writing a "last read" timestamp into the
 group, or reading Trio's device-status uploads back from Nightscout.
 
 ## Trio patch
 
-**None.** Trio's existing App Group source consumes the bridge's writes unchanged; the tests prove the payload
+**None** (PROGRESS.md D22). Trio's existing App Group source consumes the bridge's writes unchanged; the tests prove the payload
 against a model of Trio's reader and against the golden file. A distinct source name ("Sensor" instead of
 "xDrip4iOS") would need a new `CGMType` case and touches `CGMType.swift`, `CGMOptions.swift`,
 `FetchGlucoseManager.swift:215-230`, two exhaustive switches (`HomeRootView.swift:1027-1037`,
@@ -344,20 +380,26 @@ settings and unaffected.
    with "share to Trio" on: it writes the same key.
 5. **Nightscout** (§8A): in Trio, Allow Uploading to Nightscout **on**, Upload Glucose **off**. In this app, turn
    on Nightscout upload.
-6. Keep Trio's own calibrations empty (switching the source clears them, `FetchGlucoseManager.swift:189-193`).
+6. **Stale heartbeat keys.** If xDrip4iOS ever shared to Trio on this phone, its heartbeat keys may still be in the
+   group and Trio keeps connecting to that old transmitter: Trio's CGM screen then shows "CGM address : …" instead of
+   "CGM is not used as heartbeat." (`CustomCGMOptionsView.swift:177-189`). When this app enables the bridge
+   without its own heartbeat, it calls `setHeartbeatPeripheral(nil)`, which removes the three keys (address first)
+   and verifies they are gone; `heartbeatAddressInAppGroup()` shows what is there. Once the Phase 2 heartbeat is
+   wired, `setHeartbeatPeripheral(_:)` replaces them instead.
+7. Keep Trio's own calibrations empty (switching the source clears them, `FetchGlucoseManager.swift:189-193`).
 
 ## On-device checks (add to §11 step 4)
 
 - First reading appears in Trio with the same value and time (to the minute) as this app; direction arrow matches.
-- Phone locked, both apps backgrounded for 30+ minutes: Trio keeps looping every ~5 minutes. If it doesn't, the
-  heartbeat keys are needed (open question).
+- Phone locked, both apps backgrounded, closed loop, 30+ minutes: Trio keeps looping every ~5 minutes (requires the
+  Phase 2 heartbeat on DASH/Dana/Medtrum).
 - Walk out of range 30+ min: backfilled readings appear in Trio at their original times.
 - Nightscout shows each reading once, from this app.
-- A LOW/HIGH (if one happens) shows the behaviour of the chosen policy.
+- A LOW/HIGH (if one happens) appears in Trio as 39/401 at the reading's time (D21); this app still shows LOW/HIGH.
 
 ## Limitations
 
 - Trio consumption cannot be observed (see Failure reporting).
 - Readings older than the newest 60 are never offered to Trio.
-- The heartbeat keys are supported by the bridge but not wired.
+- The heartbeat keys are supported by the bridge but not wired yet (Phase 2 must-do).
 - Behaviour documented against Trio `main` @ 29350e31a; re-check `AppGroupSource.swift` on every Trio update.

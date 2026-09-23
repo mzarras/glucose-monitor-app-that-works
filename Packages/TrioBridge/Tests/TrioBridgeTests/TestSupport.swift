@@ -79,6 +79,7 @@ final class InMemoryTrioStore: TrioSharedStore, @unchecked Sendable {
     private var _operations: [String] = []
     private var _accessError: TrioBridgeError?
     private var _dropsDataWrites = false
+    private var _dropsRemovals = false
 
     /// When set, `checkAccess()` throws it (e.g. missing entitlement).
     var accessError: TrioBridgeError? {
@@ -90,6 +91,12 @@ final class InMemoryTrioStore: TrioSharedStore, @unchecked Sendable {
     var dropsDataWrites: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _dropsDataWrites }
         set { lock.lock(); defer { lock.unlock() }; _dropsDataWrites = newValue }
+    }
+
+    /// When true, `removeValue` silently does nothing, so the read-back check fails.
+    var dropsRemovals: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _dropsRemovals }
+        set { lock.lock(); defer { lock.unlock() }; _dropsRemovals = newValue }
     }
 
     /// Every mutating call, in order, e.g. "setString cgmTransmitterDeviceAddress".
@@ -134,6 +141,7 @@ final class InMemoryTrioStore: TrioSharedStore, @unchecked Sendable {
     func removeValue(forKey key: String) {
         lock.lock(); defer { lock.unlock() }
         _operations.append("remove \(key)")
+        guard !_dropsRemovals else { return }
         dataValues[key] = nil
         stringValues[key] = nil
     }
