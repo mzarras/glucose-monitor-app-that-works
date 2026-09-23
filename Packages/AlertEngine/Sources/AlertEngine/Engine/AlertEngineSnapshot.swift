@@ -24,8 +24,14 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
     /// Missed readings fire at `missedReadingsReference + window`: the newest valid reading, or
     /// the moment the engine started or the sensor left warm-up, whichever is latest.
     var missedReadingsReference: Date
-    /// First fire time of the missed-readings notifications currently pending, if any.
-    var missedReadingsScheduledFrom: Date?
+    /// Pending repeats per alert (`AlertKind.rawValue`): urgent low and missed readings
+    /// (AlertEngine+Series.swift).
+    var repeatSeries: [String: RepeatSeries] = [:]
+    /// The latest `now` any input has carried. An input more than `protectedLeadTime` earlier means
+    /// the clock moved backwards (AlertEngine+Clock.swift), even by less than elapsed snooze time.
+    var latestNow: Date?
+    /// `AlertClock.uptime` at the input that set `latestNow`.
+    var latestUptime: TimeInterval?
     /// The last sensor state that describes the session (not searching/connecting/Bluetooth).
     var settledSensorState: SensorState?
     /// The last state the CGM source reported, whatever it was.
@@ -45,7 +51,7 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case episodes, latestLiveReading, lastValidReadingDate, missedReadingsReference
-        case missedReadingsScheduledFrom, settledSensorState, lastReportedSensorState, bridgeStatus
+        case repeatSeries, latestNow, latestUptime, settledSensorState, lastReportedSensorState, bridgeStatus
         case announcedSessionDates
     }
 
@@ -70,7 +76,9 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
         latestLiveReading = (try? c.decodeIfPresent(LiveReadingSummary.self, forKey: .latestLiveReading)) ?? nil
         lastValidReadingDate = (try? c.decodeIfPresent(Date.self, forKey: .lastValidReadingDate)) ?? nil
         missedReadingsReference = (try? c.decodeIfPresent(Date.self, forKey: .missedReadingsReference)) ?? Self.missingReference
-        missedReadingsScheduledFrom = (try? c.decodeIfPresent(Date.self, forKey: .missedReadingsScheduledFrom)) ?? nil
+        repeatSeries = (try? c.decodeIfPresent([String: RepeatSeries].self, forKey: .repeatSeries)) ?? [:]
+        latestNow = (try? c.decodeIfPresent(Date.self, forKey: .latestNow)) ?? nil
+        latestUptime = (try? c.decodeIfPresent(TimeInterval.self, forKey: .latestUptime)) ?? nil
         settledSensorState = (try? c.decodeIfPresent(SensorState.self, forKey: .settledSensorState)) ?? nil
         lastReportedSensorState = (try? c.decodeIfPresent(SensorState.self, forKey: .lastReportedSensorState)) ?? nil
         bridgeStatus = (try? c.decodeIfPresent(TrioBridgeStatus.self, forKey: .bridgeStatus)) ?? .off

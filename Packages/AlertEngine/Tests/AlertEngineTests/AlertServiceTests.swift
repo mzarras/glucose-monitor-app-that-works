@@ -6,19 +6,24 @@ import GlucoseCore
 /// is pending, what plays, in what order.
 @MainActor
 final class ServiceHarness {
-    let clock = TestClock()
-    let center = FakeNotificationCenter()
+    let clock: TestClock
+    let center: FakeNotificationCenter
     let audio = FakeAudioPlayer()
     let log = RecordingDiagnosticLog()
     let alarms: FakeSystemAlarms?
     private(set) var snapshots: [AlertEngineSnapshot] = []
     private(set) var service: AlertService!
 
-    init(settings: AlertSettings = .defaults, snapshot: AlertEngineSnapshot? = nil, alarms: FakeSystemAlarms? = nil) {
+    /// Pass `center`, `alarms` and `clock` from another harness to simulate a relaunch: the system
+    /// keeps its pending notifications and alarms across processes.
+    init(settings: AlertSettings = .defaults, snapshot: AlertEngineSnapshot? = nil, alarms: FakeSystemAlarms? = nil,
+         center: FakeNotificationCenter? = nil, clock: TestClock? = nil) {
+        self.clock = clock ?? TestClock()
+        self.center = center ?? FakeNotificationCenter()
         self.alarms = alarms
         service = AlertService(
-            settings: settings, restoring: snapshot, configuration: Fixtures.configuration, clock: clock,
-            notificationCenter: center, audio: audio, systemAlarms: alarms, diagnostics: log,
+            settings: settings, restoring: snapshot, configuration: Fixtures.configuration, clock: self.clock,
+            notificationCenter: self.center, audio: audio, systemAlarms: alarms, diagnostics: log,
             onSnapshot: { [weak self] in self?.snapshots.append($0) }
         )
     }
@@ -216,7 +221,7 @@ final class AlertServiceTests: XCTestCase {
         settings.missedReadings.isEnabled = false
         await h.service.send(.settings(settings))
         XCTAssertTrue(h.center.pending(for: .missedReadings).isEmpty)
-        XCTAssertTrue(h.log.messages.contains("cancel pending missedReadings"))
+        XCTAssertTrue(h.log.messages.contains("cancel 12 pending missedReadings"))
     }
 
     func test_ignoredUserActionsAreLogged() async {

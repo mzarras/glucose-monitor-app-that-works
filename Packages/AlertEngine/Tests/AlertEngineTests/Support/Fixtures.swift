@@ -57,7 +57,7 @@ final class EngineHarness {
 
     @discardableResult
     func send(_ input: AlertInput) -> [AlertAction] {
-        engine.handle(input, at: clock.now)
+        engine.handle(input, at: clock.now, uptime: clock.uptime)
     }
 
     /// A live sensor reading measured `secondsAgo` before now.
@@ -97,6 +97,11 @@ final class EngineHarness {
 
     func phase(_ kind: AlertKind) -> AlertPhase {
         engine.phase(of: kind)
+    }
+
+    /// Fire dates of the repeats the engine keeps pending for `kind` that are still in the future.
+    func pendingDates(_ kind: AlertKind) -> [Date] {
+        engine.series(kind).entries.map(\.date).filter { $0 > now }
     }
 }
 
@@ -146,7 +151,8 @@ extension Array where Element == AlertAction {
     var ignoringMissedReadings: [AlertAction] {
         filter {
             switch $0 {
-            case .schedule(.missedReadings, _), .cancel(.missedReadings), .cancelScheduled(.missedReadings): return false
+            case .schedule(.missedReadings, _), .cancel(.missedReadings), .cancelScheduled(.missedReadings), .cancelSlots(.missedReadings, _):
+                return false
             default: return true
             }
         }

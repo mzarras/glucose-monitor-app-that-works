@@ -72,10 +72,21 @@ public final class SystemAlarmAdapter: SystemAlarmScheduling {
         }
     }
 
-    public func cancelAll() {
+    public func cancelAll() throws {
         guard #available(iOS 26.0, *) else { return }
-        // Reading the list can throw (e.g. not authorized); then there is nothing of ours to cancel.
-        cancel(ids: ((try? AlarmManager.shared.alarms) ?? []).map(\.id))
+        // Every ID this app uses is known, so cancel those first: this works even when the list
+        // below cannot be read (it throws e.g. after the user revokes permission — safety review
+        // WS4, S5 major — and alarms scheduled before that must still not ring).
+        cancel(ids: SystemAlarmIDs.all)
+        // Then anything else the system lists (from an older build, say). Surface a read failure.
+        cancel(ids: try AlarmManager.shared.alarms.map(\.id))
+    }
+
+    public func activeAlarmIDs() -> Set<UUID>? {
+        guard #available(iOS 26.0, *) else { return nil }
+        // Scheduled or ringing; the list only holds alarms that have not been stopped or cancelled.
+        guard let alarms = try? AlarmManager.shared.alarms else { return nil }
+        return Set(alarms.map(\.id))
     }
 
     @available(iOS 26.0, *)

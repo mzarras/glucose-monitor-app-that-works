@@ -37,14 +37,14 @@ public enum AlertNotificationIDs {
         prefix + kind.rawValue
     }
 
-    /// The pending notification in `slot` (0 ..< maximumScheduledSlots) for `kind`.
+    /// The pending notification in `slot` (`ScheduledRepeat.slot`, 0 ..< scheduleIDCycle) for `kind`.
     public static func scheduled(_ kind: AlertKind, slot: Int) -> String {
         prefix + kind.rawValue + ".slot\(slot)"
     }
 
-    /// Every pending identifier `kind` could have used, whatever the repeat interval was.
+    /// Every pending identifier `kind` could have used.
     public static func allScheduled(_ kind: AlertKind) -> [String] {
-        (0..<AlertLimits.maximumScheduledSlots).map { scheduled(kind, slot: $0) }
+        (0..<AlertLimits.scheduleIDCycle).map { scheduled(kind, slot: $0) }
     }
 
     /// Every identifier this package ever uses for `kind`.
@@ -58,9 +58,10 @@ public enum AlertNotificationIDs {
 }
 
 public enum NotificationRequestBuilder {
-    /// The request for `notice`, delivered as `decision` says. `slot` is set for pending
-    /// notifications (`notice.fireDate != nil`) and names the identifier.
-    public static func request(for notice: AlertNotice, decision: DeliveryDecision, slot: Int?) -> NotificationRequestSpec {
+    /// The request for `notice`, delivered as `decision` says. A notice with a `slot` is a pending
+    /// repeat and gets that slot's identifier; otherwise it is the immediate notification.
+    public static func request(for notice: AlertNotice, decision: DeliveryDecision) -> NotificationRequestSpec {
+        let slot = notice.slot
         var userInfo = [AlertNotificationIDs.userInfoKind: notice.kind.rawValue]
         if let minutes = notice.snoozeMinutes {
             userInfo[AlertNotificationIDs.userInfoSnoozeMinutes] = String(minutes)

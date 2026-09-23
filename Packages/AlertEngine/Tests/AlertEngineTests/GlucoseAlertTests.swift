@@ -29,7 +29,8 @@ final class GlucoseAlertTests: XCTestCase {
         h.clock.advance(minutes: 1.5)
         let repeat1 = h.mgdl(49)
         XCTAssertEqual(repeat1.due, [.urgentLow], "the 5-minute repeat plays the in-app sound")
-        XCTAssertEqual(repeat1.scheduled(.urgentLow)?.first, start.addingTimeInterval(minutes(10)), "pending repeats roll forward")
+        XCTAssertEqual(repeat1.scheduled(.urgentLow), [start.addingTimeInterval(minutes(65))], "only the tail is added; nothing else is touched")
+        XCTAssertEqual(h.pendingDates(.urgentLow).first, start.addingTimeInterval(minutes(10)), "pending repeats roll forward")
         XCTAssertEqual(repeat1.dueNotice(.urgentLow)?.body, "Not acknowledged. Last reading 49 mg/dL at 12:05 PM.")
         h.clock.advance(minutes: 5)
         XCTAssertEqual(h.mgdl(49).due, [.urgentLow])
@@ -57,7 +58,8 @@ final class GlucoseAlertTests: XCTestCase {
         h.mgdl(52)
         let late = h.advance(minutes: 17)
         XCTAssertEqual(late.due.filter { $0 == .urgentLow }, [.urgentLow], "one sound, not three")
-        XCTAssertEqual(late.scheduled(.urgentLow)?.first, start.addingTimeInterval(minutes(20)))
+        XCTAssertEqual(h.pendingDates(.urgentLow).first, start.addingTimeInterval(minutes(20)))
+        XCTAssertEqual(h.pendingDates(.urgentLow).last, start.addingTimeInterval(minutes(75)), "60 minutes ahead again")
     }
 
     func test_acknowledgedUrgentLowFiresAgainAfterItsSnoozeIfStillLow() {

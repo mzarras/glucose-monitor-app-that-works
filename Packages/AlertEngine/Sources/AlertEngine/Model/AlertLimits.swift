@@ -87,9 +87,19 @@ public enum AlertLimits {
     /// How many missed-readings notifications are scheduled ahead (≥ 2 hours at the 10-minute
     /// minimum window). iOS keeps at most 64 pending requests per app.
     public static let scheduledNotificationCount = 12
-    /// The most pending slots any alert uses: urgent low at the 2-minute floor over 60 minutes.
-    /// Notification identifiers and alarm IDs exist for this many slots.
+    /// The most future pending entries any alert keeps: urgent low at the 2-minute floor over 60
+    /// minutes.
     public static let maximumScheduledSlots = urgentLowPendingHorizonMinutes / urgentLowRepeatMinutes.lowerBound
+    /// Pending notifications and alarms are identified by their sequence number modulo this cycle
+    /// (`ScheduledRepeat.slot`). The engine remembers entries for `seriesMemory` (at most 30 future
+    /// + 30 past at the 2-minute floor), so an ID is reused only long after its entry is gone.
+    public static let scheduleIDCycle = 128
+    /// Pending entries older than this are forgotten (their notification has been delivered and
+    /// their alarm has rung); `.cancel` still removes every identifier in the cycle.
+    public static let seriesMemory: TimeInterval = 60 * 60
+    /// Pending notifications and alarms due within this long (or already due) are never cancelled
+    /// or replaced by a reschedule: one may be about to ring, or ringing (safety review WS4 B2).
+    public static let protectedLeadTime: TimeInterval = 60
     /// A wake-up this early for a repeat slot still plays that slot's sound. The G7 wakes the app
     /// every ~5 minutes and the repeat grid is anchored at such a wake, so the next wake often
     /// lands a few seconds before the slot; without this the sound would slip a whole cycle.

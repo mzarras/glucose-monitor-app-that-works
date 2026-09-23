@@ -40,8 +40,7 @@ final class MissedReadingsTests: XCTestCase {
 
     func test_postsImmediatelyIfItsNotificationWasNeverScheduled() {
         // e.g. restored from a snapshot that predates scheduling.
-        var snapshot = AlertEngineSnapshot(start: Fixtures.t0)
-        snapshot.missedReadingsScheduledFrom = nil
+        let snapshot = AlertEngineSnapshot(start: Fixtures.t0)   // no pending series recorded
         var engine = AlertEngine(settings: .defaults, configuration: Fixtures.configuration, restoring: snapshot, now: Fixtures.t0)
         let actions = engine.handle(.tick, at: Fixtures.t0.addingTimeInterval(minutes(20)))
         XCTAssertEqual(actions.fired, [.missedReadings])
@@ -54,7 +53,8 @@ final class MissedReadingsTests: XCTestCase {
         XCTAssertEqual(h.advance(minutes: 10).due, [])
         let second = h.advance(minutes: 5)
         XCTAssertEqual(second.due, [.missedReadings])
-        XCTAssertEqual(second.scheduled(.missedReadings)?.first, Fixtures.t0.addingTimeInterval(minutes(45)))
+        XCTAssertEqual(h.pendingDates(.missedReadings).first, Fixtures.t0.addingTimeInterval(minutes(45)))
+        XCTAssertEqual(h.pendingDates(.missedReadings).count, 12)
         XCTAssertEqual(h.advance(minutes: 1).ignoringMissedReadings.due, [])
     }
 
@@ -138,7 +138,7 @@ final class MissedReadingsTests: XCTestCase {
         let h = EngineHarness()
         h.mgdl(120)
         let off = h.settings { $0.missedReadings.isEnabled = false }
-        XCTAssertEqual(off, [.cancelScheduled(.missedReadings)])
+        XCTAssertEqual(off, [.cancelSlots(.missedReadings, Array(0..<12))])
         XCTAssertEqual(h.advance(minutes: 30).due, [])
         XCTAssertEqual(h.phase(.missedReadings), .off)
         h.mgdl(120)
@@ -153,7 +153,7 @@ final class MissedReadingsTests: XCTestCase {
         let h = EngineHarness()
         h.mgdl(120)
         let change = h.settings { $0.missedReadings.windowMinutes = 30 }
-        XCTAssertEqual(change.first, .cancelScheduled(.missedReadings))
+        XCTAssertEqual(change.first, .cancelSlots(.missedReadings, Array(0..<12)))
         XCTAssertEqual(change.scheduled(.missedReadings), slots(from: Fixtures.t0.addingTimeInterval(minutes(30)), every: 30))
     }
 

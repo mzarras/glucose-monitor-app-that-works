@@ -47,7 +47,8 @@ final class SystemAlarmTests: XCTestCase {
         await h.reading(.mgdl(50))
         await h.advance(minutes: 5)
         XCTAssertTrue(h.audio.plays.isEmpty, "the repeat alarm for that slot rang")
-        XCTAssertEqual(alarms.repeatAlarms.first?.fireDate, Fixtures.t0.addingTimeInterval(minutes(10)), "and the grid rolled forward")
+        XCTAssertNotNil(alarms.alarm(firingAt: Fixtures.t0.addingTimeInterval(minutes(5))), "the due alarm is left alone")
+        XCTAssertEqual(alarms.repeatAlarms.last?.fireDate, Fixtures.t0.addingTimeInterval(minutes(65)), "and the tail rolled forward")
         XCTAssertNotNil(alarms.scheduled[SystemAlarmIDs.immediate], "rescheduling repeats leaves the immediate alarm alone")
     }
 

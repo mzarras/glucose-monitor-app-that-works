@@ -29,7 +29,8 @@ final class LaunchAndSchedulingTests: XCTestCase {
         let h = EngineHarness()
         h.mgdl(120)
         let actions = h.send(.launched)
-        XCTAssertTrue(actions.contains(.cancelScheduled(.missedReadings)))
+        XCTAssertEqual(actions.first(where: { if case .cancelSlots(.missedReadings, _) = $0 { return true } else { return false } }),
+                       .cancelSlots(.missedReadings, Array(0..<AlertLimits.scheduleIDCycle)), "every slot, whatever the old process left")
         XCTAssertEqual(actions.scheduled(.missedReadings)?.first, Fixtures.t0.addingTimeInterval(minutes(15)))
     }
 

@@ -8,6 +8,7 @@
 //   AlertEngine+Sensor.swift           sensor state, sensor announcements
 //   AlertEngine+User.swift             acknowledge / snooze / settings changes / launch
 //   AlertEngine+Clock.swift            repair after the phone clock moves backwards
+//   AlertEngine+Series.swift           pending repeats: a due or ringing one is never disturbed
 
 import Foundation
 import GlucoseCore
@@ -18,28 +19,31 @@ public struct AlertEngine: Sendable {
     /// Persist this after every `handle` call and pass it back on the next launch.
     public internal(set) var snapshot: AlertEngineSnapshot
 
+    /// - Parameter uptime: `AlertClock.uptime`, so a clock change while the app was not running is
+    ///   noticed on restore.
     public init(
         settings: AlertSettings,
         configuration: AlertEngineConfiguration = AlertEngineConfiguration(),
         restoring snapshot: AlertEngineSnapshot? = nil,
-        now: Date
+        now: Date,
+        uptime: TimeInterval? = nil
     ) {
         self.settings = settings
         self.configuration = configuration
-        self.snapshot = snapshot.map { Self.sanitized($0, now: now) } ?? AlertEngineSnapshot(start: now)
+        self.snapshot = snapshot.map { Self.sanitized($0, now: now, uptime: uptime) } ?? AlertEngineSnapshot(start: now)
     }
 
     /// Makes a restored snapshot safe to use: drops unknown alert kinds, restarts a missing
     /// missed-readings window, and applies the clock-fault repair, which also clamps an urgent-low
     /// snooze to 30 minutes from when it was made and from now (S7).
-    static func sanitized(_ stored: AlertEngineSnapshot, now: Date) -> AlertEngineSnapshot {
+    static func sanitized(_ stored: AlertEngineSnapshot, now: Date, uptime: TimeInterval? = nil) -> AlertEngineSnapshot {
         var s = stored
         s.episodes = s.episodes.filter { AlertKind(rawValue: $0.key) != nil }
         s.announcedSessionDates = s.announcedSessionDates.filter { AlertKind(rawValue: $0.key)?.isEventAlert == true }
         if s.missedReadingsReference == AlertEngineSnapshot.missingReference {
             s.missedReadingsReference = now
         }
-        return repairingClockFaults(s, now: now)
+        return repairingClockFaults(s, now: now, uptime: uptime).snapshot
     }
 
     // MARK: Reading the state (for the UI)
@@ -70,15 +74,20 @@ public struct AlertEngine: Sendable {
 
     // MARK: The one entry point
 
-    public mutating func handle(_ input: AlertInput, at now: Date) -> [AlertAction] {
-        // Before anything else: nothing remembered may lie in the future (review B1).
-        snapshot = Self.repairingClockFaults(snapshot, now: now)
-        var actions: [AlertAction] = []
+    /// - Parameters:
+    ///   - now: wall-clock time of the input.
+    ///   - uptime: `AlertClock.uptime` (monotonic, counts through sleep); `nil` if unknown.
+    public mutating func handle(_ input: AlertInput, at now: Date, uptime: TimeInterval? = nil) -> [AlertAction] {
+        // Before anything else: repair what a clock moved backwards left behind (review B1).
+        let repair = Self.repairingClockFaults(snapshot, now: now, uptime: uptime)
+        snapshot = repair.snapshot
+        var actions: [AlertAction] = repair.rolledBack ? replanAfterRollback(now: now) : []
         switch input {
         case .reading(let reading, let session):
             if let rejection = Self.rejection(of: reading, session: session, now: now, configuration: configuration) {
-                // Refused (S2/S6): change nothing at all, not even the missed-readings clock.
-                return [.readingRejected(readingID: reading.id, reason: rejection)]
+                // Refused (S2/S6): the reading changes nothing at all, not even the missed-readings
+                // clock. (A clock-fault repair above is about time, not this reading, and stands.)
+                return actions + [.readingRejected(readingID: reading.id, reason: rejection)]
             }
             accept(reading)
         case .sensorState(let state):
@@ -169,8 +178,7 @@ public struct AlertEngine: Sendable {
         guard settings.isEnabled(kind) else {
             // Turned off: clear whatever was in progress. Never happens to urgent low (S7).
             guard episode(kind) != .armed else { return [] }
-            setEpisode(kind, .armed)
-            return [.cancel(kind)]
+            return clear(kind)
         }
         switch (episode(kind), condition) {
         case (.armed, .met):
@@ -191,8 +199,7 @@ public struct AlertEngine: Sendable {
             return []
 
         case (.firing, .clear), (.snoozed, .clear):
-            setEpisode(kind, .armed)
-            return [.cancel(kind)]
+            return clear(kind)
         case (.firing(let firing), _):
             return repeatIfDue(kind, firing, condition: condition, now: now)
 
@@ -203,11 +210,18 @@ public struct AlertEngine: Sendable {
         }
     }
 
+    /// Re-arms and removes the alert's notifications, pending repeats and sound.
+    mutating func clear(_ kind: AlertKind) -> [AlertAction] {
+        setEpisode(kind, .armed)
+        forgetSeries(kind)
+        return [.cancel(kind)]
+    }
+
     private mutating func fire(_ kind: AlertKind, now: Date) -> [AlertAction] {
         setEpisode(kind, .firing(AlertFiring(since: now, lastSoundedAt: now)))
         var actions: [AlertAction] = [.fire(makeNotice(kind, fireDate: nil, now: now))]
         if kind == .urgentLow {
-            actions.append(scheduleUrgentLowRepeats(after: now, now: now))
+            actions += planUrgentLowRepeats(anchor: now, now: now)
         }
         return actions
     }
@@ -223,10 +237,9 @@ public struct AlertEngine: Sendable {
             let slot = Self.latestSlot(anchor: firing.since, interval: interval, now: now.addingTimeInterval(AlertLimits.repeatSlotEarlyTolerance))
             guard slot > firing.lastSoundedAt else { return [] }
             setEpisode(kind, .firing(AlertFiring(since: firing.since, lastSoundedAt: slot)))
-            return [
-                .playDueAlert(makeNotice(kind, fireDate: nil, now: now, isRepeat: true)),
-                scheduleUrgentLowRepeats(after: slot, now: now),
-            ]
+            // The due repeat's own notification/alarm is left alone (it is protected); only the
+            // tail of the series is extended.
+            return [.playDueAlert(dueNotice(kind, at: slot, now: now))] + planUrgentLowRepeats(anchor: firing.since, now: now)
         }
         // Every other alert re-alerts at its snooze interval, but only on a current reading or
         // state that still meets the condition.
@@ -236,11 +249,17 @@ public struct AlertEngine: Sendable {
         return [.fire(makeNotice(kind, fireDate: nil, now: now))]
     }
 
-    /// Pending notifications (and, on iOS 26+, system alarms) for the repeats after `anchor`, far
-    /// enough ahead to cover `urgentLowPendingHorizonMinutes` whatever the repeat interval.
-    func scheduleUrgentLowRepeats(after anchor: Date, now: Date) -> AlertAction {
-        let dates = Self.futureSlots(anchor: anchor, interval: urgentLowRepeatInterval, firstIndex: 1, after: now, count: urgentLowPendingCount)
-        return .schedule(.urgentLow, dates.map { makeNotice(.urgentLow, fireDate: $0, now: now, isRepeat: true) })
+    /// Pending notifications (and, on iOS 26+, system alarms) for the repeats on the grid
+    /// `anchor + k × interval`, far enough ahead to cover `urgentLowPendingHorizonMinutes`.
+    mutating func planUrgentLowRepeats(anchor: Date, now: Date) -> [AlertAction] {
+        planSeries(.urgentLow, anchor: anchor, interval: urgentLowRepeatInterval, firstIndex: 1,
+                   count: urgentLowPendingCount, now: now, isRepeat: true)
+    }
+
+    /// The notice for a repeat due at `slot`, naming its pending entry if there is one, so the
+    /// delivery layer can check that the entry's alarm is still there (belt and braces).
+    func dueNotice(_ kind: AlertKind, at slot: Date, now: Date) -> AlertNotice {
+        makeNotice(kind, fireDate: slot, now: now, isRepeat: kind == .urgentLow, slot: scheduledEntry(kind, at: slot)?.slot)
     }
 
     /// 60 minutes of repeats: 12 at 5 minutes, 30 at the 2-minute floor.
@@ -259,24 +278,6 @@ public struct AlertEngine: Sendable {
         return anchor.addingTimeInterval(k * interval)
     }
 
-    /// `anchor + k × interval` for k = firstIndex, firstIndex + 1, …, keeping only times after
-    /// `now`, until `count` are collected. Never schedules the past.
-    static func futureSlots(anchor: Date, interval: TimeInterval, firstIndex: Int, after now: Date, count: Int) -> [Date] {
-        guard interval > 0 else { return [] }
-        var dates: [Date] = []
-        var k = firstIndex
-        if anchor < now {
-            // Skip straight to the first slot after `now`.
-            k = max(k, Int((now.timeIntervalSince(anchor) / interval).rounded(.down)))
-        }
-        while dates.count < min(count, AlertLimits.maximumScheduledSlots) {
-            let date = anchor.addingTimeInterval(Double(k) * interval)
-            if date > now { dates.append(date) }
-            k += 1
-        }
-        return dates
-    }
-
     // MARK: Helpers shared by the extensions
 
     func episode(_ kind: AlertKind) -> AlertEpisode {
@@ -291,7 +292,7 @@ public struct AlertEngine: Sendable {
         kind == .high ? TimeInterval(settings.high.delayMinutes * 60) : 0
     }
 
-    func makeNotice(_ kind: AlertKind, fireDate: Date?, now: Date, isRepeat: Bool = false) -> AlertNotice {
+    func makeNotice(_ kind: AlertKind, fireDate: Date?, now: Date, isRepeat: Bool = false, slot: Int? = nil) -> AlertNotice {
         let deliveredAt = fireDate ?? now
         // S7: quiet hours never silence urgent low.
         let silenced = kind != .urgentLow && settings.quietHours.contains(deliveredAt, calendar: configuration.calendar)
@@ -313,7 +314,8 @@ public struct AlertEngine: Sendable {
             soundsOnSilent: settings.soundsOnSilent(kind),
             isSilenced: silenced,
             snoozeMinutes: settings.snoozeMinutes(kind),
-            fireDate: fireDate
+            fireDate: fireDate,
+            slot: slot
         )
     }
 }

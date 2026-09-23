@@ -139,6 +139,7 @@ final class DeliveryPolicyTests: XCTestCase {
         XCTAssertEqual(SystemAlarmIDs.repeatSlot(29).uuidString, "5E7A1A7D-0000-4000-8000-00000000001E")
         let all = [SystemAlarmIDs.immediate] + SystemAlarmIDs.allRepeats
         XCTAssertEqual(Set(all).count, all.count)
-        XCTAssertEqual(SystemAlarmIDs.allRepeats.count, AlertLimits.maximumScheduledSlots)
+        XCTAssertEqual(SystemAlarmIDs.allRepeats.count, AlertLimits.scheduleIDCycle)
+        XCTAssertEqual(SystemAlarmIDs.all.count, 1 + AlertLimits.scheduleIDCycle)
     }
 }

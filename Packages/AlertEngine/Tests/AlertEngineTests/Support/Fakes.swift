@@ -1,4 +1,5 @@
 import Foundation
+import XCTest
 import GlucoseCore
 @testable import AlertEngine
 
@@ -38,8 +39,20 @@ final class FakeNotificationCenter: AlertNotificationCenter {
 
     struct AddFailed: Error {}
 
+    /// When set, removing or replacing a pending notification due within 60 s of this clock (or
+    /// already due) fails the test: that is a due repeat being cancelled (safety review WS4 B2).
+    var strictClock: TestClock?
+
+    private func checkNotDue(_ id: String, _ what: String) {
+        guard let clock = strictClock, let existing = pending[id], let date = existing.fireDate else { return }
+        if date <= clock.now.addingTimeInterval(60) {
+            XCTFail("\(what) pending notification \(id) due at \(date), \(Int(date.timeIntervalSince(clock.now))) s from now")
+        }
+    }
+
     func add(_ request: NotificationRequestSpec) async throws {
         if failAdds { throw AddFailed() }
+        checkNotDue(request.identifier, "replaced")
         if request.fireDate == nil {
             posted.append(request)
             delivered[request.identifier] = request
@@ -50,7 +63,10 @@ final class FakeNotificationCenter: AlertNotificationCenter {
 
     func removePending(identifiers: [String]) {
         removedPending += identifiers
-        for id in identifiers { pending[id] = nil }
+        for id in identifiers {
+            checkNotDue(id, "removed")
+            pending[id] = nil
+        }
     }
 
     func removeDelivered(identifiers: [String]) {
@@ -103,7 +119,7 @@ final class RecordingDiagnosticLog: DiagnosticLog, @unchecked Sendable {
     }
 }
 
-/// Stands in for AlarmKit: records scheduled alarms by ID, can refuse.
+/// Stands in for AlarmKit: records scheduled alarms by ID, can refuse, can fail to list.
 @MainActor
 final class FakeSystemAlarms: SystemAlarmScheduling {
     var authorization: SystemAlarmAuthorization = .authorized
@@ -111,12 +127,21 @@ final class FakeSystemAlarms: SystemAlarmScheduling {
     /// Fail every schedule call with this error, or only from the n-th call (0-based) if set.
     var failWith: Error?
     var failFromCall: Int = 0
+    /// Reading the system's alarm list throws (as after the user revokes permission).
+    var listingFails = false
+    /// When set, stopping or cancelling an alarm that is due within 60 s of this clock, or ringing,
+    /// fails the test (safety review WS4 B2).
+    var strictClock: TestClock?
     private(set) var scheduleCalls = 0
     private(set) var scheduled: [UUID: SystemAlarmRequest] = [:]
     private(set) var cancelAllCalls = 0
 
     struct Refused: Error, CustomStringConvertible {
         var description: String { "maximumLimitReached" }
+    }
+
+    struct ListingFailed: Error, CustomStringConvertible {
+        var description: String { "notAuthorized" }
     }
 
     func requestAuthorization() async -> SystemAlarmAuthorization {
@@ -131,15 +156,40 @@ final class FakeSystemAlarms: SystemAlarmScheduling {
     }
 
     func cancel(ids: [UUID]) {
-        for id in ids { scheduled[id] = nil }
+        for id in ids {
+            guard let alarm = scheduled.removeValue(forKey: id) else { continue }
+            if let clock = strictClock, alarm.fireDate <= clock.now.addingTimeInterval(60) {
+                XCTFail("stopped/cancelled alarm \(id) due at \(alarm.fireDate), \(Int(alarm.fireDate.timeIntervalSince(clock.now))) s from now")
+            }
+        }
     }
 
-    func cancelAll() {
+    func cancelAll() throws {
         cancelAllCalls += 1
-        scheduled = [:]
+        cancel(ids: SystemAlarmIDs.all)
+        if listingFails { throw ListingFailed() }
+        cancel(ids: Array(scheduled.keys))
+    }
+
+    func activeAlarmIDs() -> Set<UUID>? {
+        listingFails ? nil : Set(scheduled.keys)
+    }
+
+    /// An alarm this app did not schedule through the port (e.g. left by an older build).
+    func plant(_ request: SystemAlarmRequest) {
+        scheduled[request.id] = request
+    }
+
+    /// The system lost an alarm (or the user stopped it without the intent reaching the app).
+    func lose(_ id: UUID) {
+        scheduled[id] = nil
     }
 
     var repeatAlarms: [SystemAlarmRequest] {
         scheduled.values.filter { $0.id != SystemAlarmIDs.immediate }.sorted { $0.fireDate < $1.fireDate }
+    }
+
+    func alarm(firingAt date: Date) -> SystemAlarmRequest? {
+        scheduled.values.first { $0.fireDate == date }
     }
 }

@@ -67,48 +67,56 @@ public final class AlertDeliveryExecutor {
             if let sound = decision.inAppSound {
                 playInApp(sound, for: notice.kind)
             }
-            await add(NotificationRequestBuilder.request(for: notice, decision: decision, slot: nil))
+            await add(NotificationRequestBuilder.request(for: notice, decision: decision))
 
         case .playDueAlert(let notice):
-            let decision = decide(notice, .now)
+            var decision = decide(notice, .now)
+            if decision.systemAlarmSoundFileName != nil, !dueAlarmIsPresent(notice) {
+                // Belt and braces (safety review WS4 B2): the alarm for this repeat is not there to
+                // ring (removed, never scheduled, or the system cannot say), so play the sound here.
+                decision = decide(notice, .now, alarmsAvailable: false)
+                log("due \(notice.kind.rawValue): its alarm is missing; in-app sound instead")
+            }
             log("due \(notice.kind.rawValue): \(decision.inAppSound == nil ? "notification or alarm only" : "in-app sound")")
             if let sound = decision.inAppSound {
                 playInApp(sound, for: notice.kind)
             }
 
         case .schedule(let kind, let notices):
-            center.removePending(identifiers: AlertNotificationIDs.allScheduled(kind))
-            if kind == .urgentLow {
-                // Only the repeats: the immediate alarm (slot 0) may be about to ring.
-                alarms?.cancel(ids: SystemAlarmIDs.allRepeats)
-            }
+            // Adds (or replaces) exactly these slots. Nothing else is removed: the engine never
+            // names a slot that is due within a minute, so no due or ringing repeat is touched.
             let first = notices.first?.fireDate.map { "\($0)" } ?? "-"
             log("schedule \(kind.rawValue): \(notices.count) pending from \(first)")
             var alarmsOK = true
             var triedAlarms = false
-            for (slot, notice) in notices.enumerated() {
+            for notice in notices {
                 let decision = decide(notice, .scheduled)
-                if let alarmSound = decision.systemAlarmSoundFileName, let fireDate = notice.fireDate {
+                if let alarmSound = decision.systemAlarmSoundFileName, let fireDate = notice.fireDate, let slot = notice.slot {
                     triedAlarms = true
                     let ok = await scheduleAlarm(id: SystemAlarmIDs.repeatSlot(slot), at: fireDate, notice: notice, soundFileName: alarmSound)
                     alarmsOK = alarmsOK && ok
                 }
                 // The notification is posted either way: it is the visual, and the fallback sound.
-                await add(NotificationRequestBuilder.request(for: notice, decision: decision, slot: slot))
+                await add(NotificationRequestBuilder.request(for: notice, decision: decision))
             }
             if triedAlarms { recordAlarmOutcome(allSucceeded: alarmsOK) }
 
+        case .cancelSlots(let kind, let slots):
+            log("cancel \(slots.count) pending \(kind.rawValue)")
+            center.removePending(identifiers: slots.map { AlertNotificationIDs.scheduled(kind, slot: $0) })
+            if kind == .urgentLow { alarms?.cancel(ids: slots.map(SystemAlarmIDs.repeatSlot)) }
+
         case .cancelScheduled(let kind):
-            log("cancel pending \(kind.rawValue)")
+            log("cancel all pending \(kind.rawValue)")
             center.removePending(identifiers: AlertNotificationIDs.allScheduled(kind))
-            if kind == .urgentLow { alarms?.cancelAll() }
+            if kind == .urgentLow { cancelAllAlarms() }
 
         case .cancel(let kind):
             log("cancel \(kind.rawValue)")
             let identifiers = AlertNotificationIDs.all(kind)
             center.removePending(identifiers: identifiers)
             center.removeDelivered(identifiers: identifiers)
-            if kind == .urgentLow { alarms?.cancelAll() }
+            if kind == .urgentLow { cancelAllAlarms() }
             stopInApp(for: kind)
 
         case .stopSound(let kind):
@@ -120,6 +128,22 @@ public final class AlertDeliveryExecutor {
 
         case .userActionIgnored(let userAction):
             log("ignored \(userAction): alert not active")
+        }
+    }
+
+    /// Whether the alarm for a due repeat is still scheduled or ringing.
+    private func dueAlarmIsPresent(_ notice: AlertNotice) -> Bool {
+        guard let slot = notice.slot, let active = alarms?.activeAlarmIDs() else { return false }
+        return active.contains(SystemAlarmIDs.repeatSlot(slot))
+    }
+
+    private func cancelAllAlarms() {
+        do {
+            try alarms?.cancelAll()
+        } catch {
+            // Every fixed alarm ID was cancelled; only the system's own list could not be read.
+            urgentLowAlarmFailure = "could not list alarms to cancel them: \(error)"
+            log("urgent-low alarms: \(urgentLowAlarmFailure ?? "")")
         }
     }
 
@@ -138,6 +162,9 @@ public final class AlertDeliveryExecutor {
     private func scheduleAlarm(id: UUID, at date: Date, notice: AlertNotice, soundFileName: String) async -> Bool {
         guard let alarms else { return false }
         let fireDate = max(date, clock.now.addingTimeInterval(SystemAlarmIDs.minimumLeadTime))
+        // Replace, never duplicate: whatever still holds this ID is an old alarm (the engine never
+        // reuses the ID of a pending repeat that is due or ringing).
+        alarms.cancel(ids: [id])
         do {
             try await alarms.schedule(SystemAlarmRequest(id: id, fireDate: fireDate, title: notice.title, soundFileName: soundFileName))
             return true

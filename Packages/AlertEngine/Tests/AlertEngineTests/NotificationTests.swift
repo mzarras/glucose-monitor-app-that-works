@@ -7,8 +7,10 @@ final class NotificationRequestTests: XCTestCase {
     func test_identifiersAreFixedAndDistinctPerAlert() {
         XCTAssertEqual(AlertNotificationIDs.immediate(.urgentLow), "sensor.alert.urgentLow")
         XCTAssertEqual(AlertNotificationIDs.scheduled(.urgentLow, slot: 3), "sensor.alert.urgentLow.slot3")
-        XCTAssertEqual(AlertNotificationIDs.all(.missedReadings).count, 1 + AlertLimits.maximumScheduledSlots)
+        XCTAssertEqual(AlertNotificationIDs.all(.missedReadings).count, 1 + AlertLimits.scheduleIDCycle)
         XCTAssertEqual(AlertLimits.maximumScheduledSlots, 30, "60 min at the 2-minute floor")
+        XCTAssertGreaterThan(AlertLimits.scheduleIDCycle, 2 * AlertLimits.maximumScheduledSlots + 1,
+                             "IDs outlive an hour of past entries plus an hour of future ones")
         let everything = AlertKind.allCases.flatMap(AlertNotificationIDs.all)
         XCTAssertEqual(Set(everything).count, everything.count)
     }
@@ -16,7 +18,7 @@ final class NotificationRequestTests: XCTestCase {
     func test_immediateRequestCarriesKindSnoozeAndCategory() {
         let notice = AlertNotice(kind: .low, title: "Low", body: "65 mg/dL at 12:00 PM.", sound: .dusk, soundsOnSilent: true,
                                  isSilenced: false, snoozeMinutes: 30, fireDate: nil)
-        let spec = NotificationRequestBuilder.request(for: notice, decision: timeSensitive, slot: nil)
+        let spec = NotificationRequestBuilder.request(for: notice, decision: timeSensitive)
         XCTAssertEqual(spec, NotificationRequestSpec(
             identifier: "sensor.alert.low", title: "Low", body: "65 mg/dL at 12:00 PM.", threadIdentifier: "sensor.alert.low",
             categoryIdentifier: AlertNotificationIDs.snoozableCategory, interruption: .timeSensitive,
@@ -27,8 +29,8 @@ final class NotificationRequestTests: XCTestCase {
     func test_pendingRequestUsesItsSlotAndFireDate() {
         let when = Fixtures.t0.addingTimeInterval(300)
         let notice = AlertNotice(kind: .urgentLow, title: "Urgent low", body: "b", sound: .cascade, soundsOnSilent: true,
-                                 isSilenced: false, snoozeMinutes: 30, fireDate: when)
-        let spec = NotificationRequestBuilder.request(for: notice, decision: timeSensitive, slot: 0)
+                                 isSilenced: false, snoozeMinutes: 30, fireDate: when, slot: 0)
+        let spec = NotificationRequestBuilder.request(for: notice, decision: timeSensitive)
         XCTAssertEqual(spec.identifier, "sensor.alert.urgentLow.slot0")
         XCTAssertEqual(spec.fireDate, when)
     }
@@ -36,7 +38,7 @@ final class NotificationRequestTests: XCTestCase {
     func test_announcementsHaveNoSnoozeAction() {
         let notice = AlertNotice(kind: .sensorGracePeriod, title: "t", body: "b", sound: .doorbell, soundsOnSilent: false,
                                  isSilenced: false, snoozeMinutes: nil, fireDate: nil)
-        let spec = NotificationRequestBuilder.request(for: notice, decision: timeSensitive, slot: nil)
+        let spec = NotificationRequestBuilder.request(for: notice, decision: timeSensitive)
         XCTAssertEqual(spec.categoryIdentifier, AlertNotificationIDs.informationalCategory)
         XCTAssertNil(spec.userInfo["snoozeMinutes"])
     }

@@ -51,12 +51,18 @@ public protocol SystemAlarmScheduling: AnyObject {
     func schedule(_ request: SystemAlarmRequest) async throws
     /// Stops (if ringing) and cancels these alarms; unknown IDs are ignored.
     func cancel(ids: [UUID])
-    /// Stops and cancels every alarm this app has. Only urgent low uses alarms.
-    func cancelAll()
+    /// Stops and cancels every alarm this app has: first every fixed ID in `SystemAlarmIDs.all`
+    /// (works even when the system list cannot be read, e.g. after the user revoked permission),
+    /// then anything else the system lists. Throws if the list could not be read, so the caller
+    /// can surface it (S5). Only urgent low uses alarms.
+    func cancelAll() throws
+    /// IDs of alarms that are scheduled or ringing right now; `nil` if the system cannot say.
+    func activeAlarmIDs() -> Set<UUID>?
 }
 
-/// Fixed alarm IDs, one per slot, like the fixed notification identifiers: nothing needs to be
-/// stored to find an alarm again, and cancelling by ID is always possible after a relaunch.
+/// Fixed alarm IDs, one per slot, like the notification identifiers: an alarm can always be found
+/// again by ID after a relaunch, and the full set is known, so "cancel everything" does not depend
+/// on the system listing alarms.
 public enum SystemAlarmIDs {
     /// Slot 0 is the alarm for the urgent low firing now; slots 1… are its repeats.
     /// Format: fixed prefix + slot number in the last 12 hex digits (a valid version-4-shaped UUID).
@@ -67,11 +73,17 @@ public enum SystemAlarmIDs {
 
     public static var immediate: UUID { id(slot: 0) }
 
-    /// The alarm for pending repeat number `index` (0-based, same as the notification slot).
-    public static func repeatSlot(_ index: Int) -> UUID { id(slot: index + 1) }
+    /// The alarm for the pending repeat in `slot` (`ScheduledRepeat.slot`, 0 ..< scheduleIDCycle) —
+    /// the same slot names its notification.
+    public static func repeatSlot(_ slot: Int) -> UUID { id(slot: slot + 1) }
 
     public static var allRepeats: [UUID] {
-        (0..<AlertLimits.maximumScheduledSlots).map(repeatSlot)
+        (0..<AlertLimits.scheduleIDCycle).map(repeatSlot)
+    }
+
+    /// Every ID this app can have used: the immediate alarm and every repeat slot.
+    public static var all: [UUID] {
+        [immediate] + allRepeats
     }
 
     /// Loop schedules its "immediate" alarm 2 s ahead: a fixed alarm at or before now never rings

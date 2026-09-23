@@ -38,7 +38,7 @@ public final class AlertService {
         diagnostics: DiagnosticLog = NullDiagnosticLog(),
         onSnapshot: @escaping @MainActor (AlertEngineSnapshot) -> Void = { _ in }
     ) {
-        self.engine = AlertEngine(settings: settings, configuration: configuration, restoring: snapshot, now: clock.now)
+        self.engine = AlertEngine(settings: settings, configuration: configuration, restoring: snapshot, now: clock.now, uptime: clock.uptime)
         self.executor = AlertDeliveryExecutor(center: notificationCenter, audio: audio, alarms: systemAlarms, diagnostics: diagnostics, clock: clock)
         self.clock = clock
         self.center = notificationCenter
@@ -131,7 +131,7 @@ public final class AlertService {
     }
 
     private func apply(_ input: AlertInput) async {
-        let actions = engine.handle(input, at: clock.now)
+        let actions = engine.handle(input, at: clock.now, uptime: clock.uptime)
         onSnapshot(engine.snapshot)
         await perform(actions)
     }
