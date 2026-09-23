@@ -16,7 +16,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 
 | WS | Agent | Branch / worktree | State | Review | Merged to `integration` |
 |---|---|---|---|---|---|
-| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (6da2eae): 106 tests, 99% cov Messages/; fixing review | **FAIL** (B1 unsolicited auth status accepted; B2 `currentSession` vs D28) → fixing | — |
+| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (65787e4): 127 tests, 99.04% cov Messages/; B1/B2/M1–M3 + minors fixed, Mbed TLS J-PAKE KATs | FAIL → fixed; delta re-review running | — |
 | WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (7aa1ef6): 83 + 38 tests; fixing M1 (D33) + minors | **PASS** (0 blockers) | — |
 | WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (de6da6b): 150 tests, 99.88% cov, 90 d in 5.8 ms release | **PASS** (after 2 fix rounds) | **yes** — 3002c9d; gates build+tests+safety PASS on merged result |
 | WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (5ed31bb): 200 tests, 99.4% cov; B1/M1 fixed, AlarmKit (D26) built | FAIL → fixed; delta re-review running | — |
