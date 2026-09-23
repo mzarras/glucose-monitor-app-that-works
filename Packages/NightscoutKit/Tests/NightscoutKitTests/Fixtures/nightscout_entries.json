@@ -1,0 +1,155 @@
+[
+ {
+  "_id": "65f000000000000000000001",
+  "type": "sgv",
+  "date": 1789812000000,
+  "dateString": "2026-09-19T10:00:00.000Z",
+  "device": "Trio",
+  "sgv": 100,
+  "direction": "Flat"
+ },
+ {
+  "_id": "65f000000000000000000002",
+  "type": "sgv",
+  "date": 1789812300000,
+  "dateString": "2026-09-19T10:05:00.000Z",
+  "device": "Trio",
+  "sgv": 104,
+  "direction": "Flat"
+ },
+ {
+  "_id": "65f000000000000000000003",
+  "type": "sgv",
+  "date": 1789812300000,
+  "dateString": "2026-09-19T10:05:00.000Z",
+  "device": "xDrip4iOS",
+  "sgv": 104,
+  "direction": "Flat"
+ },
+ {
+  "_id": "65f000000000000000000004",
+  "type": "sgv",
+  "date": 1789812600000,
+  "dateString": "2026-09-19T10:10:00.000Z",
+  "device": "Trio",
+  "sgv": 109,
+  "direction": "FortyFiveUp"
+ },
+ {
+  "_id": "65f000000000000000000005",
+  "type": "sgv",
+  "date": 1789812602000,
+  "dateString": "2026-09-19T10:10:02.000Z",
+  "device": "share2",
+  "sgv": 110,
+  "direction": "FortyFiveUp"
+ },
+ {
+  "_id": "65f000000000000000000006",
+  "type": "mbg",
+  "date": 1789812720000,
+  "dateString": "2026-09-19T10:12:00.000Z",
+  "device": "Contour",
+  "mbg": 112
+ },
+ {
+  "_id": "65f000000000000000000007",
+  "type": "cal",
+  "date": 1789812780000,
+  "dateString": "2026-09-19T10:13:00.000Z",
+  "device": "xDrip4iOS",
+  "slope": 1000,
+  "intercept": 0,
+  "scale": 1
+ },
+ {
+  "_id": "65f000000000000000000008",
+  "type": "sgv",
+  "date": 1789812900000,
+  "dateString": "2026-09-19T10:15:00.000Z",
+  "device": "Trio",
+  "sgv": 115,
+  "direction": "FortyFiveUp"
+ },
+ {
+  "_id": "65f000000000000000000009",
+  "type": "sgv",
+  "date": 1789813200000,
+  "dateString": "2026-09-19T10:20:00.000Z",
+  "device": "Trio",
+  "sgv": 121,
+  "direction": "FortyFiveUp"
+ },
+ {
+  "_id": "65f000000000000000000010",
+  "type": "sgv",
+  "date": 1789700400000,
+  "dateString": "2026-09-18T03:00:00.000Z",
+  "device": "Trio",
+  "sgv": 39,
+  "direction": "NOT COMPUTABLE"
+ },
+ {
+  "_id": "65f000000000000000000011",
+  "type": "sgv",
+  "date": 1789700700000,
+  "dateString": "2026-09-18T03:05:00.000Z",
+  "device": "Trio",
+  "sgv": 5,
+  "direction": "NONE"
+ },
+ {
+  "_id": "65f000000000000000000012",
+  "type": "sgv",
+  "date": 1789743600000,
+  "dateString": "2026-09-18T15:00:00.000Z",
+  "device": "Trio",
+  "sgv": 401,
+  "direction": "NOT COMPUTABLE"
+ },
+ {
+  "_id": "65f000000000000000000013",
+  "type": "sgv",
+  "date": 1788249600000,
+  "dateString": "2026-09-01T08:00:00.000Z",
+  "device": "Trio",
+  "sgv": 250,
+  "direction": "FortyFiveUp"
+ },
+ {
+  "_id": "65f000000000000000000014",
+  "type": "sgv",
+  "date": 1788249900000,
+  "dateString": "2026-09-01T08:05:00.000Z",
+  "device": "Trio",
+  "sgv": 245,
+  "direction": "Flat"
+ },
+ {
+  "_id": "65f000000000000000000015",
+  "type": "sgv",
+  "date": 1782864000000,
+  "dateString": "2026-07-01T00:00:00.000Z",
+  "device": "Trio",
+  "sgv": 180,
+  "direction": "Flat"
+ },
+ {
+  "_id": "65f000000000000000000016",
+  "type": "sgv",
+  "date": 1780272000000,
+  "dateString": "2026-06-01T00:00:00.000Z",
+  "device": "Trio",
+  "sgv": 90,
+  "direction": "Flat"
+ },
+ {
+  "_id": "65f000000000000000000017",
+  "type": "sgv",
+  "date": 1780272300000,
+  "dateString": "2026-06-01T00:05:00.000Z",
+  "device": "Trio",
+  "sgv": 95,
+  "direction": "Flat"
+ }
+]
