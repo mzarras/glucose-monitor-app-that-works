@@ -16,13 +16,13 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 
 | WS | Agent | Branch / worktree | State | Review | Merged to `integration` |
 |---|---|---|---|---|---|
-| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | dispatched | — | — |
-| WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (4195211, 71b6c1a): 77 + 35 tests, 98.2% / 96.7% cov; applying D25 | pending | — |
-| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (9e7cc08): 134 tests, 99.7% cov, 90 d in 4.9 ms release; fixing review items | **PASS** (0 blockers; M1 biased count/streak deltas, M2 flaky perf gate → fixing) | — |
-| WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | dispatched | — | — |
-| WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | dispatched | — | — |
-| WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (346d4e2): 46 tests, 97.8% cov; fixing review minors | **PASS** (0 blockers; M1 heartbeat → Phase 2 must-do; M2 decided D21) | — |
-| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (8e4889c): 96 tests, 90.3% cov | in review | — |
+| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (6da2eae): 106 tests, 99% cov Messages/; fixing review | **FAIL** (B1 unsolicited auth status accepted; B2 `currentSession` vs D28) → fixing | — |
+| WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (7aa1ef6): 83 + 38 tests, 98.3% / 97.6% cov; D25, D28 applied | in review | — |
+| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (a332581): 146 tests, 99.75% cov; review fixes + D24 applied | **PASS**; delta re-review running | — |
+| WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (d1f946c): 161 tests, 99.6% cov; fixing review + AlarmKit (D26) | **FAIL** (B1 clock rollback hides urgent low / extends snooze) → fixing | — |
+| WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | done (3287a14): 61 + 52 tests, 132 previews, 26 screenshots | in review | — |
+| WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (cbf5619): 62 tests, 97.8% cov | **PASS**, delta FAIL (nil session removed payload) → fixed; re-review running | — |
+| WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (8e4889c): 96 tests, 90.3% cov; fixing review | **FAIL** (B1 Nightscout alarms silent at LOW → D29 disclosure; M1 Clarity order) → fixing | — |
 
 ### Merge flow
 
