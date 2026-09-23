@@ -16,7 +16,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 
 | WS | Agent | Branch / worktree | State | Review | Merged to `integration` |
 |---|---|---|---|---|---|
-| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (65787e4): 127 tests; fixing N1/N2 | FAIL → fixed; delta **FAIL** (N1 one terminal-state packet ends the session forever while status shows Active) → fixing | — |
+| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (43d55b7): 142 tests; N1 two-connection session end, N2, P4/P7/P9 fixed | 2 FAILs → fixed; second delta re-review running | — |
 | WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (a1f0c6c): 92 + 39 tests, 98.2% / 97.3% cov | **PASS** (after 2 fix rounds) | **yes** — 3b51811 (+ a4a782e store compile-out gate); gates PASS on merged result |
 | WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (de6da6b): 150 tests, 99.88% cov, 90 d in 5.8 ms release | **PASS** (after 2 fix rounds) | **yes** — 3002c9d; gates build+tests+safety PASS on merged result |
 | WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (564eca3): 214 tests; fixing ID-reuse major | **PASS** (second delta); ID reuse fix before merge | — |
@@ -110,6 +110,8 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Alert threshold ranges: one source of truth — the UI clamps (WS5 `AppModel.updateAlert`: Low 60–100, High 120–400, rate 2–5) must use AlertEngine's `AlertLimits`, not its own numbers (reconcile in wiring).
 
 - Persist `NowViewState.clockMismatchLatchedFor` across app relaunch; carry it over on every view-state rebuild and mirror into `CalibrationViewState` (WS5).
+
+- Map G7Kit's new failure reasons in AlertEngine and UI (`sensorFailed`, `sessionStopped` → sensor-ended alert; `rejectedAfterAuthentication`, `otherAppRejected`, `sessionLengthUnknown`, `sensorClockMismatch`, `noGlucoseValue`, `credentialsUnavailable`).
 
 ## §11 on-device checklist additions (collected from reviews; goes into docs/setup.md in Phase 3)
 
