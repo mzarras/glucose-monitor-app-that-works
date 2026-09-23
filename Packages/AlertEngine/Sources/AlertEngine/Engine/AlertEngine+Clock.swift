@@ -10,14 +10,16 @@
 //     wall-clock times that are now far away.
 // A backwards move is detected by comparing `now` with where the wall clock should be: the last
 // input's `now` plus the real time elapsed since, measured on the monotonic `uptime` clock (which
-// keeps counting in sleep and across relaunches until a reboot). More than 60 s behind = rollback.
+// keeps counting in sleep and across relaunches within one boot). More than 60 s behind = rollback.
 // That catches a rollback smaller than the time already elapsed (24 minutes back, 25 minutes into
 // a snooze) even with no input in between. Without `uptime` (tests, or after a reboot) the check
 // falls back to "earlier than the latest `now` seen". Any remembered date later than `now + 60 s`
 // is repaired as well. On a detected rollback: the urgent-low
 // snooze ends (real elapsed time is unknowable, S7), other snoozes keep what was left of them,
 // firing/delay timers and the missed-readings window restart from now, and the urgent-low repeats
-// are planned again from now. A clock moving forward needs no repair: readings go stale (not
+// are planned again from now — except those due by real time (+60 s), i.e. ringing or about to:
+// they are kept and re-dated into the new wall-clock frame, so an NTP correction does not stop an
+// alarm that is ringing with nobody there to see why. A clock moving forward needs no repair: readings go stale (not
 // evaluated, S1), missed readings fires, snoozes end early — all loud.
 
 import Foundation
@@ -27,7 +29,7 @@ extension AlertEngine {
     /// Repairs `stored` for `now`. `rolledBack` is true when the clock moved backwards since the
     /// last input (by more than `protectedLeadTime`).
     static func repairingClockFaults(
-        _ stored: AlertEngineSnapshot, now: Date, uptime: TimeInterval?
+        _ stored: AlertEngineSnapshot, now: Date, uptime: Uptime?
     ) -> (snapshot: AlertEngineSnapshot, rolledBack: Bool) {
         var s = stored
         let tolerance = LiveReadingGate.futureTolerance
@@ -35,6 +37,20 @@ extension AlertEngine {
         let lastSeen = s.latestNow
         let expectedNow = expectedWallClock(lastNow: lastSeen, lastUptime: s.latestUptime, uptime: uptime)
         let rolledBack = expectedNow.map { now < $0.addingTimeInterval(-tolerance) } ?? false
+
+        if rolledBack, let expectedNow {
+            // Pending repeats due by real time (+60 s) are ringing or about to: keep them, re-dated
+            // into the new wall-clock frame so every later plan sees them as protected. The others
+            // are left with their old dates; the next plan cancels and replaces them.
+            let shift = expectedNow.timeIntervalSince(now)
+            let realDueBy = expectedNow.addingTimeInterval(AlertLimits.protectedLeadTime)
+            for (key, var series) in s.repeatSeries {
+                series.entries = series.entries
+                    .map { $0.date <= realDueBy ? ScheduledRepeat(sequence: $0.sequence, date: $0.date.addingTimeInterval(-shift)) : $0 }
+                    .sorted { $0.date < $1.date }
+                s.repeatSeries[key] = series
+            }
+        }
 
         // S1: a reading "from the future" is not current and must not hide the real ones.
         if let reading = s.latestLiveReading, reading.date > latestPlausible {
@@ -66,10 +82,10 @@ extension AlertEngine {
 
     /// Where the wall clock should be now: the last input's `now` plus the real time since, if the
     /// monotonic clock is comparable (same boot); else the last `now` itself.
-    static func expectedWallClock(lastNow: Date?, lastUptime: TimeInterval?, uptime: TimeInterval?) -> Date? {
+    static func expectedWallClock(lastNow: Date?, lastUptime: Uptime?, uptime: Uptime?) -> Date? {
         guard let lastNow else { return nil }
-        guard let lastUptime, let uptime, uptime >= lastUptime else { return lastNow }
-        return lastNow.addingTimeInterval(uptime - lastUptime)
+        guard let lastUptime, let uptime, let elapsed = uptime.seconds(since: lastUptime) else { return lastNow }
+        return lastNow.addingTimeInterval(elapsed)
     }
 
     private static func repaired(

@@ -31,7 +31,7 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
     /// the clock moved backwards (AlertEngine+Clock.swift), even by less than elapsed snooze time.
     var latestNow: Date?
     /// `AlertClock.uptime` at the input that set `latestNow`.
-    var latestUptime: TimeInterval?
+    var latestUptime: Uptime?
     /// The last sensor state that describes the session (not searching/connecting/Bluetooth).
     var settledSensorState: SensorState?
     /// The last state the CGM source reported, whatever it was.
@@ -78,7 +78,7 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
         missedReadingsReference = (try? c.decodeIfPresent(Date.self, forKey: .missedReadingsReference)) ?? Self.missingReference
         repeatSeries = (try? c.decodeIfPresent([String: RepeatSeries].self, forKey: .repeatSeries)) ?? [:]
         latestNow = (try? c.decodeIfPresent(Date.self, forKey: .latestNow)) ?? nil
-        latestUptime = (try? c.decodeIfPresent(TimeInterval.self, forKey: .latestUptime)) ?? nil
+        latestUptime = (try? c.decodeIfPresent(Uptime.self, forKey: .latestUptime)) ?? nil
         settledSensorState = (try? c.decodeIfPresent(SensorState.self, forKey: .settledSensorState)) ?? nil
         lastReportedSensorState = (try? c.decodeIfPresent(SensorState.self, forKey: .lastReportedSensorState)) ?? nil
         bridgeStatus = (try? c.decodeIfPresent(TrioBridgeStatus.self, forKey: .bridgeStatus)) ?? .off

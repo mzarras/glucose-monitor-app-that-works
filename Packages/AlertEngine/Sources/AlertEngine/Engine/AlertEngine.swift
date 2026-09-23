@@ -26,7 +26,7 @@ public struct AlertEngine: Sendable {
         configuration: AlertEngineConfiguration = AlertEngineConfiguration(),
         restoring snapshot: AlertEngineSnapshot? = nil,
         now: Date,
-        uptime: TimeInterval? = nil
+        uptime: Uptime? = nil
     ) {
         self.settings = settings
         self.configuration = configuration
@@ -36,7 +36,7 @@ public struct AlertEngine: Sendable {
     /// Makes a restored snapshot safe to use: drops unknown alert kinds, restarts a missing
     /// missed-readings window, and applies the clock-fault repair, which also clamps an urgent-low
     /// snooze to 30 minutes from when it was made and from now (S7).
-    static func sanitized(_ stored: AlertEngineSnapshot, now: Date, uptime: TimeInterval? = nil) -> AlertEngineSnapshot {
+    static func sanitized(_ stored: AlertEngineSnapshot, now: Date, uptime: Uptime? = nil) -> AlertEngineSnapshot {
         var s = stored
         s.episodes = s.episodes.filter { AlertKind(rawValue: $0.key) != nil }
         s.announcedSessionDates = s.announcedSessionDates.filter { AlertKind(rawValue: $0.key)?.isEventAlert == true }
@@ -77,7 +77,7 @@ public struct AlertEngine: Sendable {
     /// - Parameters:
     ///   - now: wall-clock time of the input.
     ///   - uptime: `AlertClock.uptime` (monotonic, counts through sleep); `nil` if unknown.
-    public mutating func handle(_ input: AlertInput, at now: Date, uptime: TimeInterval? = nil) -> [AlertAction] {
+    public mutating func handle(_ input: AlertInput, at now: Date, uptime: Uptime? = nil) -> [AlertAction] {
         // Before anything else: repair what a clock moved backwards left behind (review B1).
         let repair = Self.repairingClockFaults(snapshot, now: now, uptime: uptime)
         snapshot = repair.snapshot

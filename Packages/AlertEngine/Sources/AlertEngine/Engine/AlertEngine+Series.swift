@@ -6,8 +6,10 @@
 // repeat due 30 s later (so it never rang) or stopped the one ringing 3 s in. So:
 //
 //   • Every pending repeat the engine asks for is recorded as (sequence number, fire date). Its
-//     notification identifier and alarm ID come from the sequence number (`slot`), never from its
-//     position in a list, so a later reschedule cannot reuse the ID of one still pending.
+//     notification identifier and alarm ID come from the sequence number (`slot` = sequence mod
+//     128), never from its position in a list. A new entry never takes a slot held by any entry the
+//     engine still remembers (second delta review: rapid settings changes could otherwise wrap the
+//     cycle onto a protected repeat).
 //   • Planning is a diff against the grid the alert repeats on. Entries due within
 //     `protectedLeadTime` (60 s) or already past are NEVER cancelled or replaced. Later entries that
 //     are not on the grid are cancelled by slot; missing grid points are added with new sequence
@@ -62,12 +64,28 @@ extension AlertEngine {
         let kept = future.filter { desiredSet.contains($0.date) }
         let keptDates = Set(kept.map(\.date))
 
+        // Slots still held after this plan: the protected and kept entries. The obsolete ones are
+        // cancelled in this batch before anything is added, so their slots are free.
+        var remembered = protected + kept
+        let needed = desired.count - kept.count
+        // Make room if an extreme burst of changes filled the cycle: forget the oldest entries that
+        // are already past (never a future one). Normally ≤ ~60 remembered vs 128 slots.
+        while remembered.count + needed >= AlertLimits.scheduleIDCycle,
+              let oldestPast = remembered.indices.filter({ remembered[$0].date < now }).min(by: { remembered[$0].date < remembered[$1].date }) {
+            remembered.remove(at: oldestPast)
+        }
+        var held = Set(remembered.map(\.slot))
         var added: [ScheduledRepeat] = []
         for date in desired where !keptDates.contains(date) {
-            added.append(ScheduledRepeat(sequence: series.nextSequence, date: date))
-            series.nextSequence += 1
+            guard let sequence = Self.nextFreeSequence(&series, held: held) else {
+                break   // No free slot (cannot happen, see above): keep fewer repeats rather than disturb one.
+            }
+            let entry = ScheduledRepeat(sequence: sequence, date: date)
+            added.append(entry)
+            held.insert(entry.slot)
         }
-        series.entries = (protected + kept + added).sorted { $0.date < $1.date }
+        series.entries = (remembered + added).sorted { $0.date < $1.date }
+        assert(Set(series.entries.map(\.slot)).count == series.entries.count, "two remembered repeats share a slot")
         setSeries(kind, series)
 
         var actions: [AlertAction] = []
@@ -101,6 +119,16 @@ extension AlertEngine {
         let protectedSlots = Set(series.entries.map(\.slot))
         let slots = (0..<AlertLimits.scheduleIDCycle).filter { !protectedSlots.contains($0) }
         return [.cancelSlots(kind, slots)]
+    }
+
+    /// The next sequence number whose slot no remembered entry holds; `nil` if all 128 are held.
+    static func nextFreeSequence(_ series: inout RepeatSeries, held: Set<Int>) -> Int? {
+        for _ in 0..<AlertLimits.scheduleIDCycle {
+            let sequence = series.nextSequence
+            series.nextSequence += 1
+            if !held.contains(sequence % AlertLimits.scheduleIDCycle) { return sequence }
+        }
+        return nil
     }
 
     /// The alert's notifications and alarms were all removed (`.cancel` / `.cancelScheduled`).

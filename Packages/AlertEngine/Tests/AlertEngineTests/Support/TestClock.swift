@@ -9,11 +9,11 @@ import Foundation
 @MainActor
 final class TestClock: AlertClock {
     private(set) var now: Date
-    private(set) var uptime: TimeInterval?
+    private(set) var uptime: Uptime?
 
     init(_ start: Date = Fixtures.t0, uptime: TimeInterval? = 1_000) {
         now = start
-        self.uptime = uptime
+        self.uptime = uptime.map { Uptime(seconds: $0, boot: "boot-1") }
     }
 
     func advance(minutes: Double) {
@@ -23,7 +23,7 @@ final class TestClock: AlertClock {
     func advance(seconds: TimeInterval) {
         now = now.addingTimeInterval(seconds)
         if seconds > 0, let current = uptime {
-            uptime = current + seconds
+            uptime = Uptime(seconds: current.seconds + seconds, boot: current.boot)
         }
     }
 
@@ -31,8 +31,9 @@ final class TestClock: AlertClock {
         now = date
     }
 
-    /// The phone rebooted: the monotonic clock starts again from `value`.
+    /// The phone rebooted: a new boot session, the monotonic clock starting again from `value`.
     func reboot(uptime value: TimeInterval?) {
-        uptime = value
+        let next = "boot-\(Int.random(in: 2...Int.max))"
+        uptime = value.map { Uptime(seconds: $0, boot: next) }
     }
 }

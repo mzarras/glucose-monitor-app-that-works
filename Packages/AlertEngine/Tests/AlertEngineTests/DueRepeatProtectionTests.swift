@@ -201,12 +201,47 @@ final class PartialRollbackTests: XCTestCase {
         XCTAssertEqual(noUptime.phase(.urgentLow), .snoozed(until: noUptime.now))
     }
 
-    func test_systemUptimeIsMonotonic() {
+    func test_systemUptimeIsMonotonicAndNamesItsBoot() throws {
         let clock = SystemAlertClock()
-        let a = clock.uptime ?? 0
-        let b = clock.uptime ?? 0
-        XCTAssertGreaterThan(a, 0)
-        XCTAssertGreaterThanOrEqual(b, a)
+        let a = try XCTUnwrap(clock.uptime)
+        let b = try XCTUnwrap(clock.uptime)
+        XCTAssertGreaterThan(a.seconds, 0)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(b.seconds(since: a)), 0)
+        XCTAssertNotNil(a.boot, "kern.bootsessionuuid")
+        XCTAssertEqual(a.boot, b.boot)
+    }
+
+    func test_uptimesFromDifferentBootsAreNotCompared() {
+        let before = Uptime(seconds: 50_000, boot: "A")
+        XCTAssertEqual(Uptime(seconds: 50_100, boot: "A").seconds(since: before), 100)
+        XCTAssertNil(Uptime(seconds: 60_000, boot: "B").seconds(since: before), "another boot, even with a larger value")
+        XCTAssertNil(Uptime(seconds: 40_000, boot: "A").seconds(since: before), "went backwards")
+        XCTAssertNil(Uptime(seconds: 60_000, boot: nil).seconds(since: before))
+    }
+
+    /// Second delta review, minor: an NTP correction (or a user) setting the clock back while a
+    /// repeat rings must not stop that alarm; only later repeats are re-planned.
+    func test_rollbackDoesNotStopTheRingingAlarm() async throws {
+        let clock = TestClock()
+        let alarms = FakeSystemAlarms()
+        let center = FakeNotificationCenter()
+        let h = ServiceHarness(alarms: alarms, center: center, clock: clock)
+        await h.service.start()
+        await h.reading(.mgdl(50))
+        let ringing = Fixtures.t0.addingTimeInterval(minutes(5))
+        clock.set(ringing.addingTimeInterval(3))
+        await h.reading(.mgdl(49))                           // repeat 1 is ringing
+        clock.advance(seconds: 2)
+        clock.advance(minutes: -10)                          // the clock is set back 10 minutes
+        await h.service.send(.tick)
+        XCTAssertNotNil(alarms.alarm(firingAt: ringing), "the ringing alarm is left alone")
+        XCTAssertTrue(center.pending(for: .urgentLow).contains { $0.fireDate == ringing }, "and its notification")
+        XCTAssertNil(alarms.alarm(firingAt: Fixtures.t0.addingTimeInterval(minutes(10))), "later repeats (old wall-clock times) are replaced")
+        XCTAssertNotNil(alarms.alarm(firingAt: clock.now.addingTimeInterval(minutes(5))), "by a grid from now")
+        // Later plans keep treating the kept repeat as due, so it is never cancelled afterwards.
+        clock.advance(minutes: 4)
+        await h.reading(.mgdl(48))
+        XCTAssertNotNil(alarms.alarm(firingAt: ringing))
     }
 
     func test_partialRollbackKeepsWhatWasLeftOfANonUrgentSnooze() {
@@ -242,5 +277,69 @@ final class PartialRollbackTests: XCTestCase {
         h.clock.advance(seconds: -30)   // NTP nudging the clock by half a minute
         h.tick()
         XCTAssertEqual(h.phase(.urgentLow), .snoozed(until: Fixtures.t0.addingTimeInterval(minutes(30))))
+    }
+}
+
+/// Second delta review, major: the 128-slot ID cycle must never hand a new repeat the slot of one
+/// the engine still remembers, however many repeats are replaced in a short time.
+@MainActor
+final class SlotAllocationTests: XCTestCase {
+    func test_S7_idReuseNeverTouchesALivePendingRepeat() async throws {
+        let clock = TestClock()
+        let alarms = FakeSystemAlarms()
+        alarms.strictClock = clock
+        let center = FakeNotificationCenter()
+        center.strictClock = clock
+        var settings = AlertSettings.defaults
+        settings.urgentLow.repeatMinutes = 2
+        var h = ServiceHarness(settings: settings, alarms: alarms, center: center, clock: clock)
+        await h.service.start()
+        await h.reading(.mgdl(50))
+
+        let due = Fixtures.t0.addingTimeInterval(minutes(2))
+        clock.set(due.addingTimeInterval(-30))               // a repeat is 30 s away
+        await h.reading(.mgdl(49))
+        // The reviewer's probe: the repeat stepper moved 3, 2, 4, 2, 5, 2 within 30 s — each change
+        // replaces up to 30 pending repeats (168 sequence numbers in all, past the 128-slot cycle) —
+        // then the same again after two relaunches.
+        for round in 0..<3 {
+            for minutes in [3, 2, 4, 2, 5, 2] {
+                clock.advance(seconds: 1)
+                settings = h.service.settings
+                settings.urgentLow.repeatMinutes = minutes
+                await h.service.send(.settings(settings))
+                let entries = h.service.engine.series(.urgentLow).entries
+                XCTAssertEqual(Set(entries.map(\.slot)).count, entries.count, "no two remembered repeats share a slot")
+            }
+            XCTAssertNotNil(alarms.alarm(firingAt: due), "round \(round): the protected repeat's alarm is still there")
+            XCTAssertTrue(center.pending(for: .urgentLow).contains { $0.fireDate == due }, "…and its notification")
+            let snapshot = try XCTUnwrap(h.snapshots.last)
+            h = ServiceHarness(settings: h.service.settings, snapshot: snapshot, alarms: alarms, center: center, clock: clock)
+            await h.service.start()
+        }
+        XCTAssertGreaterThan(h.service.engine.series(.urgentLow).nextSequence, AlertLimits.scheduleIDCycle, "the cycle did wrap")
+    }
+
+    func test_theCycleHasRoomForEverythingRemembered() {
+        // Remembered at most: an hour of past repeats + the protected minute + an hour ahead, at the
+        // 2-minute floor, plus one protected entry per input in a burst of changes.
+        let pastAndFuture = 2 * AlertLimits.maximumScheduledSlots + 1
+        XCTAssertLessThan(pastAndFuture + 30, AlertLimits.scheduleIDCycle)
+    }
+
+    func test_anExtremeBurstForgetsOldPastEntriesRatherThanReuseALiveSlot() {
+        var engine = AlertEngine(settings: .defaults, configuration: Fixtures.configuration, now: Fixtures.t0)
+        var series = RepeatSeries()
+        // 120 past entries (as if left by a long burst) and one protected.
+        series.entries = (0..<120).map { ScheduledRepeat(sequence: $0, date: Fixtures.t0.addingTimeInterval(Double(-3000 + $0))) }
+            + [ScheduledRepeat(sequence: 120, date: Fixtures.t0.addingTimeInterval(30))]
+        series.nextSequence = 121
+        engine.snapshot.repeatSeries[AlertKind.urgentLow.rawValue] = series
+        let actions = engine.planSeries(.urgentLow, anchor: Fixtures.t0, interval: minutes(5), firstIndex: 1, count: 12, now: Fixtures.t0, isRepeat: true)
+        let entries = engine.series(.urgentLow).entries
+        XCTAssertEqual(Set(entries.map(\.slot)).count, entries.count)
+        XCTAssertTrue(entries.contains { $0.sequence == 120 }, "the protected entry stays")
+        XCTAssertEqual(actions.scheduled(.urgentLow)?.count, 12)
+        XCTAssertFalse(actions.scheduledNotices(.urgentLow)?.contains { $0.slot == 120 % AlertLimits.scheduleIDCycle } ?? true)
     }
 }

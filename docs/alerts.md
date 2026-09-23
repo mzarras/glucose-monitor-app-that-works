@@ -225,7 +225,10 @@ entitlement. Only urgent low uses alarms; every other alert is unchanged.
   the sequence number counts every repeat the engine has scheduled (persisted in the snapshot with
   its fire date, `RepeatSeries`). The same slot names its notification. IDs therefore never depend
   on a repeat's position in a list, the whole set (`SystemAlarmIDs.all`) is known, and every ID is
-  re-derivable after a relaunch.
+  re-derivable after a relaunch. A new repeat never takes a slot held by any repeat the engine still
+  remembers (at most ~60 of 128: an hour past + an hour ahead at the 2-minute floor): rapid settings
+  changes can burn through the 128 sequence numbers in seconds, and a wrap onto a protected repeat
+  would cancel it (second delta review; `test_S7_idReuseNeverTouchesALivePendingRepeat`).
 - **A due or ringing repeat is never touched (delta review B2).** A wake-up up to 60 s before a repeat
   counts as that repeat, so rescheduling "from the next slot" used to cancel the repeat due 30 s later
   or stop the one ringing. Now planning is a diff against the repeat grid: entries due within 60 s
@@ -237,9 +240,11 @@ entitlement. Only urgent low uses alarms; every other alert is unchanged.
   `test_S7_wakeNearARepeatNeverCancelsTheDueAlarm` and `test_S7_ringingRepeatIsNeverStoppedByReschedule`
   use fakes that fail the test the moment a due or ringing alarm or notification is removed; with the
   old executor they fail 42 assertions.
-- **Known edge.** After the phone clock is set back, the pending alarms are for wall-clock times
-  that no longer make sense and are all re-planned from now, which stops an alarm that happens to be
-  ringing at that moment; the next repeat comes one repeat interval later.
+- **Clock set back while a repeat rings.** The pending alarms are for wall-clock times that no longer
+  make sense and are re-planned from now — except the ones due by real time (+60 s, from the
+  monotonic clock): those are ringing or about to, stay untouched, and are re-dated in the engine's
+  record so later plans keep protecting them (`test_rollbackDoesNotStopTheRingingAlarm`). One that
+  was about to ring may ring late by the size of the change; the new grid rings on time regardless.
 - **Cancel.** Acknowledge, snooze, recovery, supersession, and turning the alert off all emit
   `.cancel(.urgentLow)`: the executor stops and cancels **every** alarm the app has. `cancelAll`
   cancels every known ID first — this works even when AlarmKit cannot list alarms (it throws once
@@ -344,9 +349,10 @@ One per condition alert (`AlertEpisode`):
   previous process left pending.
 - **Clock faults (review B1, delta major).** Before every input, and on restore, the engine checks the
   wall clock against where it should be: the last input's `now` plus the real time elapsed on a
-  monotonic clock that keeps counting in sleep and across relaunches (`AlertClock.uptime`, Darwin
-  `CLOCK_MONOTONIC`; after a reboot, or without it, the check is "earlier than the latest `now`
-  seen"). More than 60 s behind is a rollback — including one smaller than the time already elapsed
+  monotonic clock that keeps counting in sleep and is unaffected by time adjustments
+  (`AlertClock.uptime`: Darwin `CLOCK_MONOTONIC_RAW`, tagged with `kern.bootsessionuuid` so two
+  readings are compared only within one boot; after a reboot, or without it, the check is "earlier
+  than the latest `now` seen"). More than 60 s behind is a rollback — including one smaller than the time already elapsed
   (24 minutes back, 25 minutes into a snooze), even with no input in between. On a rollback: the
   **urgent-low snooze ends at once** (S7: real elapsed time since the snooze began cannot be trusted),
   other snoozes keep what was left of them, firing/delay timers and the missed-readings window
@@ -367,7 +373,7 @@ One per condition alert (`AlertEpisode`):
 | Snooze request clamped to 30 whatever the caller asks — in-app, lock-screen Snooze, alarm Stop/Snooze | `AlertEngine+User.swift` `snooze` | `test_S7_snoozeLongerThan30MinutesIsClampedTo30`, `test_S7_resnoozingCannotExtendPast30MinutesFromNow`, `test_S7_lockScreenSnoozeOf600MinutesIsClampedTo30`, `test_S7_alarmStopCannotSnoozePast30Minutes` |
 | Restored state clamped to 30 from when it was made and from now | `AlertEngine.sanitized` | `test_S7_restoredUrgentLowSnoozeIsClampedTo30Minutes`, `test_S7_restoredSnoozeFromATamperedFileIsClamped` |
 | Clock moved backwards cannot stretch it (the snooze ends; live and on restore; also a partial rollback, with or without an input in between) | `AlertEngine+Clock.swift`, applied in `handle` and `sanitized` | `test_S7_clockMovedBackCannotExtendUrgentLowSnooze`, `test_S7_restoredSnapshotCarriesNoStretchedSnoozeAcrossRelaunch`, `test_S7_partialRollbackDuringSnoozeEndsIt`, `test_S7_partialRollbackWithNoInputInBetweenEndsTheSnooze` |
-| A due or ringing repeat is never cancelled, stopped or replaced by the app itself | `AlertEngine+Series.swift`, `AlertDeliveryExecutor` | `test_S7_wakeNearARepeatNeverCancelsTheDueAlarm`, `test_S7_ringingRepeatIsNeverStoppedByReschedule`, `test_S7_dueRepeatWhoseAlarmVanishedPlaysTheInAppSound` |
+| A due or ringing repeat is never cancelled, stopped or replaced by the app itself — including after the ID cycle wraps and after a clock rollback | `AlertEngine+Series.swift`, `AlertEngine+Clock.swift`, `AlertDeliveryExecutor` | `test_S7_wakeNearARepeatNeverCancelsTheDueAlarm`, `test_S7_ringingRepeatIsNeverStoppedByReschedule`, `test_S7_dueRepeatWhoseAlarmVanishedPlaysTheInAppSound`, `test_S7_idReuseNeverTouchesALivePendingRepeat`, `test_rollbackDoesNotStopTheRingingAlarm` |
 | Cannot be snoozed before it fires | `AlertEngine+User.swift` | `test_S7_urgentLowCannotBeSnoozedBeforeItFires` |
 | Never silenced by quiet hours | `AlertEngine.makeNotice`, `DeliveryPolicy.decide` | `test_S7_urgentLowSoundsDuringQuietHours` |
 | Always the loudest available path | `AlertSettings.soundsOnSilent`, `DeliveryPolicy.decide` | `test_S7_urgentLowAlwaysGetsTheLoudestAvailablePath` |
@@ -458,5 +464,8 @@ The host tests prove the decisions; these need the phone:
    tests prove the app does not touch it; the phone proves AlarmKit agrees).
 3b. Revoke alarms in Settings while a repeat is pending: after re-allowing, nothing stale rings.
 4. A phone call during the urgent-low loop: the sound resumes when the call ends.
-5. Set the clock back and forward by hand with an urgent low in progress (review B1 scenarios).
+5. Set the clock back and forward by hand with an urgent low in progress (review B1 scenarios), and
+   change the time by hand **during an urgent-low snooze** (e.g. back 24 minutes, 25 minutes in): urgent
+   low must sound again within 30 real minutes. Also confirm `CLOCK_MONOTONIC_RAW` keeps counting
+   through a locked, sleeping phone (the whole check relies on it).
 6. Media volume at zero: Settings shows the warning; the notification sound still plays with the ringer on.
