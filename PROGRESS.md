@@ -18,7 +18,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 |---|---|---|---|---|---|
 | WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | dispatched | — | — |
 | WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | dispatched | — | — |
-| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (9e7cc08): 134 tests, 99.7% cov, 90 d in 4.9 ms release | in review | — |
+| WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (9e7cc08): 134 tests, 99.7% cov, 90 d in 4.9 ms release; fixing review items | **PASS** (0 blockers; M1 biased count/streak deltas, M2 flaky perf gate → fixing) | — |
 | WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | dispatched | — | — |
 | WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | dispatched | — | — |
 | WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (346d4e2): 46 tests, 97.8% cov; fixing review minors | **PASS** (0 blockers; M1 heartbeat → Phase 2 must-do; M2 decided D21) | — |
@@ -57,10 +57,10 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D21 | **LOW/HIGH to Trio: LOW → 39, HIGH → 401** (`TrioBridge` `OutOfRangePolicy` sentinel for both), set explicitly in the app wiring with a comment citing this decision; the package default stays "withhold both" so it cannot be enabled by accident. Stored readings, the UI, stats and alerts keep the flags (S4); 39/401 exist only in the Trio payload as the ecosystem's LOW/HIGH encoding (Nightscout renders 39/401 as LOW/HIGH, `sandbox.js:249-252`). Not 40/400 (S4). | Michael, 2026-09-23, after WS6 evidence: Trio's native G7 path sends 40/400 and drops the flag; oref treats 39 as a real low (SMB off, zero temp); withholding lets scheduled basal resume during a long LOW. Michael chose 401 for HIGH (matches Trio's native behaviour) over withholding HIGH. |
 | D22 | No Trio patch. Michael selects Trio's existing **xDrip4iOS** CGM source. "Trio not consuming for 15 min" is not detectable (Trio writes nothing to the group) and is not built; bridge write failures still alert. Single upload: Trio → Nightscout → "Allow Uploading" ON, "Upload Glucose" OFF (this also stops Trio uploading manual fingersticks). | Michael, 2026-09-23 (WS6 findings, `docs/trio-bridge.md`). |
 | D23 | Chart scrubbing with haptic ticks (Now chart, Trends 1 D/3 D): drag selects the nearest **real** reading (never interpolated, S1), callout shows value/time (LOW/HIGH as text, S4), selection haptic on each change, no tick and "No data" inside gaps > 15 min; accessible via Swift Charts audio graph. Settings → Appearance: System (default) / Light / Dark; widgets follow the system. Dark mode itself was already in scope (§7.1). | Michael, 2026-09-23. |
+| D24 | Hypo events follow the 2023 consensus Table 4 (Battelino et al., Lancet Diabetes Endocrinol 2023;11:42–57, p. 50): level 1 ends after ≥ 15 consecutive min ≥ 70, **level 2 ends after ≥ 15 consecutive min ≥ 54** (changes HANDOFF §6, which ended both at ≥ 70). | Michael, 2026-09-23, after the WS3 reviewer verified the primary source. |
 
 ## Discrepancies with HANDOFF (resolved)
 
-- Level-2 hypo event end (WS3): HANDOFF §6 ends both levels after ≥ 15 min ≥ 70; some consensus-derived sources end level 2 at ≥ 54. Implemented per HANDOFF; one-constant change if Michael prefers the other (pending reviewer's citation check).
 - CV target: HANDOFF "≤ 36%" kept (consensus tables print "<36%"; differs only at exactly 36.0).
 - Trends "prior period" = the same number of calendar days before the current period (1 D = today so far vs all of yesterday), matching §7.3's "vs yesterday" wording; GMI shown when the period touches ≥ 14 local calendar dates.
 
