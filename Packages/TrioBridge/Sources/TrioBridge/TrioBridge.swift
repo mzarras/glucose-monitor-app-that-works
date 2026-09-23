@@ -10,6 +10,10 @@ import Foundation
 import GlucoseCore
 
 /// Writes valid live sensor readings into Trio's App Group and reports its own health.
+///
+/// Use exactly one instance per process, and let nothing else in this app write `latestReadings`: the
+/// bridge remembers what it last put in the App Group (`payloadIDs`, `payloadSession`, `payloadInSync`)
+/// and assumes it is the only writer.
 public actor TrioBridge {
     /// LOW/HIGH handling for this bridge instance (S4). The package default withholds both; the app sets
     /// the policy Michael chose (PROGRESS.md D21: LOW → 39, HIGH → 401) explicitly in its wiring.
@@ -21,14 +25,18 @@ public actor TrioBridge {
 
     /// Readings accepted into Trio's payload: newest first, unique by `id`, at most `maxReadings`.
     /// Memory only. After a relaunch the app re-seeds it by publishing its recent stored sensor readings;
-    /// each one passes the gate again. Readings that no longer pass the gate stay here (so a transient
-    /// `nil` session loses nothing) but are never written.
+    /// each one passes the gate again. Readings that do not pass for the current session stay here but are
+    /// never written.
     private var window: [GlucoseReading] = []
-    /// IDs of the readings in the App Group as this bridge last set it, newest first; empty = key removed.
+    /// IDs of the readings this bridge last put in the App Group, newest first; empty = none of ours there.
     private var payloadIDs: [String] = []
-    /// False until this process has set the key once, and after any failed attempt: the next `publish`
-    /// then writes or removes the key even if `payloadIDs` looks current.
-    private var payloadInSync = false
+    /// The session those readings belong to (its latest derivation), or nil when none of ours is there.
+    private var payloadSession: SensorSession?
+    /// False after a failed write or removal, so the next `publish` repeats it even if `payloadIDs` looks
+    /// current.
+    private var payloadInSync = true
+    /// A removal was decided on positive evidence (see `publish`) and has not succeeded yet.
+    private var removalPending = false
 
     /// Current health. Every change is delivered through `statusUpdates()`.
     public private(set) var status = TrioBridgeStatus() {
@@ -61,19 +69,26 @@ public actor TrioBridge {
 
     // MARK: - Publishing
 
-    /// Adds `readings` to the window and makes Trio's App Group show exactly the window readings that pass
-    /// the gate for `session` now.
+    /// Adds `readings` to the window and, when there is something to change, makes Trio's App Group show
+    /// exactly the window readings that pass the gate for `session` now.
     ///
     /// Every reading, new or already in the window, passes `LiveReadingGate.validate(_:session:now:)`
     /// immediately before each write (S2, S6), and LOW/HIGH follow `outOfRangePolicy` (S4). A refused reading
-    /// is never written. Readings keep their own timestamps; a reading whose `id` is already in the window is
-    /// ignored so the copy Trio already has is never replaced (S3).
+    /// is never written, and nothing is written for a session whose grace period has ended. Readings keep
+    /// their own timestamps; a reading whose `id` is already in the window is ignored so the copy Trio already
+    /// has is never replaced (S3).
     ///
-    /// The App Group is changed only when that set differs from what this bridge last put there (or the last
-    /// attempt failed, or this process has not set it yet). So a new sensor session or a `nil` session
-    /// (sensor expired or failed) rewrites the payload with only the readings that still pass, or removes
-    /// the key when none do; no previous-session payload lingers. Call with an empty array to retry or
-    /// re-check without new readings.
+    /// What happens to the App Group:
+    /// - readings pass: the key is written if they differ from what this bridge last wrote (or the last
+    ///   attempt failed);
+    /// - nothing passes: the key is **left alone** unless there is positive evidence that the payload there
+    ///   is stale (PROGRESS.md D28): the session it belongs to has ended (`now > gracePeriodEndsAt`), or a
+    ///   different live session has taken over. Then it is removed. A `nil` session is never evidence:
+    ///   `CGMSource.currentSession` is nil only when no session is valid, and removing the payload at the
+    ///   moment Trio polls would starve it. A payload left by an earlier process is replaced by this
+    ///   process's first write and otherwise left alone. `clear()` removes it unconditionally.
+    ///
+    /// Call with an empty array to retry or re-check without new readings.
     ///
     /// - Parameters:
     ///   - readings: new or backfilled readings, in any order.
@@ -113,7 +128,7 @@ public actor TrioBridge {
         }
 
         // 3. What Trio should see now: every window reading that passes the gate again, against the current
-        //    session and clock, immediately before any write (S2, S6).
+        //    session and clock, immediately before any write (S2, S6). Empty for a nil or ended session.
         var elements: [TrioSharedReading] = []
         var included: [GlucoseReading] = []
         for reading in window {
@@ -124,38 +139,64 @@ public actor TrioBridge {
         }
         let includedIDs = included.map(\.id)
 
-        // 4. Bring the App Group in line: write, remove, or leave it.
-        if !payloadInSync || includedIDs != payloadIDs {
-            do throws(TrioBridgeError) {
-                if elements.isEmpty {
-                    try removePayload()
-                    result.didRemovePayload = true
-                    log("removed latestReadings: no reading passes the gate for the current session", at: now)
-                } else {
-                    try write(elements)
-                    result.didWrite = true
-                    result.addedReadingIDs = includedIDs.filter { acceptedIDs.contains($0) }
-                    if let newest = included.first?.date {
-                        next.newestReadingWrittenAt = max(next.newestReadingWrittenAt ?? newest, newest)
-                    }
-                    log("wrote \(elements.count) reading(s) to Trio, newest \(Self.iso(included[0].date)), \(result.addedReadingIDs.count) new", at: now)
+        // 4. Decide what to do with the App Group.
+        let removalReason: String?
+        if !elements.isEmpty {
+            removalReason = nil
+        } else if removalPending {
+            removalReason = "retrying an earlier removal"
+        } else if let payloadSession, now > payloadSession.gracePeriodEndsAt {
+            removalReason = "session \(payloadSession.serial) ended \(Self.iso(payloadSession.gracePeriodEndsAt))"
+        } else if let payloadSession, let session, session.serial != payloadSession.serial {
+            removalReason = "session \(session.serial) replaced \(payloadSession.serial) and has no reading that passes yet"
+        } else {
+            // Nil session, or no payload of ours in the group: leave it untouched (D28).
+            removalReason = nil
+        }
+
+        // 5. Write, remove, or leave.
+        do throws(TrioBridgeError) {
+            if !elements.isEmpty, !payloadInSync || includedIDs != payloadIDs {
+                try write(elements)
+                result.didWrite = true
+                result.addedReadingIDs = includedIDs.filter { acceptedIDs.contains($0) }
+                if let newest = included.first?.date {
+                    next.newestReadingWrittenAt = max(next.newestReadingWrittenAt ?? newest, newest)
                 }
+                log("wrote \(elements.count) reading(s) to Trio, newest \(Self.iso(included[0].date)), \(result.addedReadingIDs.count) new", at: now)
                 if included.count < window.count {
                     log("left \(window.count - included.count) earlier reading(s) out: refused for the current session", at: now)
                 }
                 payloadIDs = includedIDs
                 payloadInSync = true
+                removalPending = false
                 next.lastSuccessfulWriteAt = now
                 next.readingsInLastWrite = elements.count
                 next.consecutiveFailures = 0
-            } catch {
-                payloadInSync = false
-                result.error = error
-                next.consecutiveFailures += 1
-                next.lastError = error
-                next.lastErrorAt = now
-                log("write FAILED (\(next.consecutiveFailures) in a row): \(error)", at: now)
+            } else if let removalReason {
+                removalPending = true
+                try removePayload()
+                result.didRemovePayload = true
+                log("removed latestReadings: \(removalReason)", at: now)
+                payloadIDs = []
+                payloadSession = nil
+                payloadInSync = true
+                removalPending = false
+                next.lastSuccessfulWriteAt = now
+                next.readingsInLastWrite = 0
+                next.consecutiveFailures = 0
             }
+            if !elements.isEmpty, payloadInSync {
+                payloadSession = session // the latest derivation of the payload's session
+            }
+        } catch {
+            payloadInSync = false
+            result.error = error
+            next.consecutiveFailures += 1
+            next.lastError = error
+            next.lastErrorAt = now
+            let attempted = elements.isEmpty ? "removal" : "write"
+            log("\(attempted) FAILED (\(next.consecutiveFailures) in a row): \(error)", at: now)
         }
 
         record(refusals: result.refusals, duplicates: result.duplicateReadingIDs.count, now: now, in: &next)
@@ -182,7 +223,9 @@ public actor TrioBridge {
         }
         window = []
         payloadIDs = []
+        payloadSession = nil
         payloadInSync = true
+        removalPending = false
         next.lastSuccessfulWriteAt = now
         next.readingsInLastWrite = 0
         next.consecutiveFailures = 0
@@ -275,6 +318,11 @@ public actor TrioBridge {
         } catch {
             return .refuse(.gate(error))
         }
+        // S2: a session whose grace period has ended is over; nothing of it is written any more. (The gate
+        // has already refused a nil session, so `session` is non-nil here.)
+        guard let session, now <= session.gracePeriodEndsAt else {
+            return .refuse(.sessionEnded)
+        }
         // S4: LOW/HIGH stay flags unless the policy asks for the 39/401 codes; never 40/400.
         switch reading.value {
         case .mgdl(let mgdl):
@@ -334,7 +382,7 @@ public actor TrioBridge {
         for refusal in refusals {
             next.lastRefusal = refusal
             switch refusal.reason {
-            case .gate: next.lastGateRefusal = refusal
+            case .gate, .sessionEnded: next.lastGateRefusal = refusal
             case .outOfRangeWithheld: next.lastOutOfRangeWithheldAt = now
             case .olderThanPayloadWindow: break
             }

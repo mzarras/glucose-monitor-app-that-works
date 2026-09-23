@@ -116,13 +116,26 @@ with a differently named App Group source. Trio's UI still calls the source "xDr
 Today Trio's own G7 plugin is woken by the sensor's BLE traffic every five minutes. On the App Group source the
 only wake-up is the heartbeat connection (RileyLink pumps wake Trio incidentally). `TrioBridge.setHeartbeatPeripheral(_:)`
 writes the keys (service and characteristic first, address last, because Trio caches a new address before it checks
-the UUIDs and does not retry, `HeartBeatManager.swift:33-42`). **Wiring it is a Phase 2 must-do** (PROGRESS.md), with
-the G7 peripheral and its service/authentication-characteristic UUIDs as xDrip4iOS does; WS1 is assessing the safety
-of Trio as a second central on the sensor this app authenticates to. §11 step 4 must verify closed loop,
-backgrounded and locked, for 30+ minutes.
+the UUIDs and does not retry, `HeartBeatManager.swift:33-42`). **Wiring it is a Phase 2 must-do** (PROGRESS.md);
+WS1 is assessing the safety of Trio as a second central on the sensor this app authenticates to.
 
-There is also a race xDrip4iOS shares: a heartbeat fires on the sensor's disconnect, possibly before this app
-has written the new reading. Trio then picks it up on its next wake-up (the payload keeps it, see below).
+**Heartbeat wiring (Phase 2).** G7Kit exposes `G7CGMSource.heartbeatTarget`: the paired sensor's
+`CBPeripheral.identifier`, the G7 service `F8083532-849E-531C-C594-30F1F86A4EA5` and its Receive_Authentication
+characteristic `F8083535-849E-531C-C594-30F1F86A4EA5` — the same values xDrip4iOS 7.1.0 publishes
+(`CGMG7Transmitter.swift:135, :154, :875-876`). The app maps it to `TrioHeartbeatPeripheral(peripheralIdentifier:
+serviceUUID: receiveCharacteristicUUID:)` and:
+
+- publishes it with `setHeartbeatPeripheral(_:)` **only while there is an authenticated pairing and the Trio bridge
+  is on** (`heartbeatTarget` is nil otherwise; re-read it after pairing, forgetting and every state change);
+- removes it with `setHeartbeatPeripheral(nil)` when the sensor is forgotten, the pairing is lost, or the bridge is
+  turned off (with `clear()`);
+- **writes each reading to the App Group before the sensor disconnects.** Trio's heartbeat fires on the
+  disconnect (`BluetoothTransmitter.swift:256-260`) and triggers its read; a reading written after that waits for
+  Trio's next wake-up (about five minutes later). The payload still carries it then, but Trio's loop would have run
+  on the previous reading. So the pipeline must publish as soon as a reading is stored, not after the BLE cycle
+  ends. xDrip4iOS has the same ordering constraint.
+
+§11 step 4 must verify closed loop, backgrounded and locked, for 30+ minutes.
 
 ## How Trio decides what is new, backfill, and stale data
 
@@ -185,7 +198,7 @@ Both apps read the same phone clock, so by the time Trio reads, the lead is smal
 | `direction` | xDrip4iOS slope name | `TrendArrow(rate:).nightscoutDirection` from the sensor-reported rate | HANDOFF §7.5 mapping |
 | `from` | `"xDrip"` | omitted | [Source identity](#source-identity) |
 | window | readings since last share − 30 min | newest 60 readings this process accepted | lets Trio catch up after long suspensions |
-| empty | writes `[]` | removes the key when no reading passes the gate (e.g. `nil` session); `clear()` removes it too | Trio treats a missing key as no readings (`AppGroupSource.swift:48-50`) |
+| empty | writes `[]` | removes the key only on evidence the payload is stale (its session ended, or a new session took over) and on `clear()`; a `nil` session leaves it alone | Trio treats a missing key as no readings (`AppGroupSource.swift:48-50`); removing it at the wrong moment starves Trio |
 
 ## What this bridge writes
 
@@ -198,21 +211,36 @@ Both apps read the same phone clock, so by the time Trio reads, the lead is smal
 3. The window = previous window + accepted, newest first, capped at 60. An accepted reading older than the
    newest 60 is reported as `olderThanPayloadWindow`.
 4. **Immediately before any write, every reading in the window passes the gate again** with the current
-   session and clock. The result is exactly what Trio should see now.
-5. If that differs from what this bridge last put in the App Group (or the last attempt failed, or this
-   process has not set the key yet), the key is written — or **removed** when nothing passes. So a new sensor
-   session rewrites the payload with only its own readings, and a `nil` session (sensor expired or failed)
-   removes it: no previous-session payload lingers. Readings stay in memory, so a transient `nil` session
-   loses nothing; they are written again once they pass. Otherwise nothing is touched.
-6. A write is JSON-encoded (sorted keys, unescaped slashes) after `checkAccess()`, then read back. The
+   session and clock; nothing is written for a session whose grace period has ended (refusal `sessionEnded`).
+   The result is exactly what Trio should see now.
+5. If readings pass and they differ from what this bridge last wrote (or the last attempt failed), the key is
+   written. A new sensor session therefore rewrites the payload with only its own readings.
+6. If nothing passes, the key is **left alone** unless there is positive evidence the payload in it is stale
+   (PROGRESS.md D28):
+   - the session it belongs to has ended (`now > gracePeriodEndsAt` of that session), checked on every call,
+     including calls with a `nil` session; or
+   - a different, live session has taken over (sensor replaced) and none of its readings pass yet.
+
+   Then it is removed; a failed removal is retried on the next call. **A `nil` session never touches the App
+   Group or the window**: `CGMSource.currentSession` stays non-nil across routine disconnects and relaunches and
+   is nil only when no session is valid (D28), and removing the payload at the moment Trio polls would starve it.
+   A payload of a sensor that failed or was stopped early therefore stays until the next sensor's first write
+   or removal, its grace-period end, or `clear()`; it holds only readings that passed the gate when written,
+   and nothing is added to it.
+7. A write is JSON-encoded (sorted keys, unescaped slashes) after `checkAccess()`, then read back. The
    read-back only sees this process's view of the suite, so it catches a store that drops the value but cannot
    prove Trio sees it; `checkAccess()` (group ID format and entitlement) is the real guard.
 
 `publish([], session:)` re-checks and retries without new readings (Phase 2 calls it on foreground and on a
 timer). The window lives in memory. After a relaunch the app publishes its recent stored `.sensor` readings (the
-last ~5 hours) once a session is known; each passes the gate again. The first call of a process always sets the
-key, so a leftover payload from an earlier process is replaced or removed. Readings older than the newest 60
-(about 5 hours at the G7's 5-minute cadence) never reach Trio after a long gap; xDrip4iOS has the same limit.
+last ~5 hours) once a session is known; each passes the gate again. A payload left by an earlier process is
+replaced by this process's first write and is otherwise left in place (this process has no evidence about it).
+Readings older than the newest 60 (about 5 hours at the G7's 5-minute cadence) never reach Trio after a long gap;
+xDrip4iOS has the same limit.
+
+**One instance per process.** The bridge remembers what it last put in the App Group (payload IDs, the session it
+belongs to, whether the last attempt succeeded) and assumes it is the only writer of `latestReadings`. The app
+creates exactly one `TrioBridge` and nothing else in the app writes the key.
 
 Golden example (`Packages/TrioBridge/Tests/TrioBridgeTests/Fixtures/latestReadings.golden.json`, formatted here):
 
@@ -292,7 +320,7 @@ withholding HIGH). This app's own alerts fire on the LOW/HIGH flags regardless (
 | `consecutiveFailures` / `isFailing` | attempts failed since the last success |
 | `lastError`, `lastErrorAt` | `appGroupUnavailable(invalidGroupID / notEntitled / suiteUnavailable)`, `encodingFailed`, `readBackMismatch` (same-process read-back only) |
 | `lastRefusal` | latest refused reading of any reason |
-| `lastGateRefusal` | latest `LiveReadingGate` refusal (S2/S6), kept separately so a benign `olderThanPayloadWindow` refusal cannot hide it |
+| `lastGateRefusal` | latest safety refusal — `LiveReadingGate` (S2/S6) or `sessionEnded` — kept separately so a benign `olderThanPayloadWindow` refusal cannot hide it |
 | `lastOutOfRangeWithheldAt` | latest LOW/HIGH not sent (only with a withholding policy) |
 | `newestReadingWrittenAt` | newest reading Trio has from this bridge (never decreases; reset by `clear()`) |
 | `newestLiveReadingOfferedAt`, `firstLiveReadingOfferedAt` | newest `.sensor` reading offered (capped at the clock); the baseline before the first write |
@@ -302,11 +330,13 @@ withholding HIGH). This app's own alerts fire on the LOW/HIGH flags regardless (
 `TrioBridgeStatus.starvationThreshold` = 15 min). It goes true whenever live readings keep arriving but Trio
 has had none of them for 15 min, whatever the cause: write failures, gate refusals, a `nil` session, withheld
 LOW/HIGH. It is measured in reading time, not wall-clock time, so a sensor gap (no readings at all) does not
-trigger it; that is the missed-readings alert (§5). Backfilled readings older than the newest written, imported
-or replay readings, and a reading dated ahead of the clock do not move it. `isFailing` gives the immediate
-"write failing" state for the Settings row.
+trigger it; that is the missed-readings alert (§5). Backfilled readings older than the newest written, and
+imported or replay readings, do not move it. A live reading dated ahead of the clock (clock fault) is refused and
+counts only up to the bridge's clock, so it does make Trio starving if nothing newer is written: fail loud.
+`isFailing` gives the immediate "write failing" state for the Settings row.
 
-A failed attempt is retried by the next `publish` (with or without new readings). `clear()` removes the key,
+A failed write is retried by the next `publish` with a live session (with or without new readings); a failed
+removal by the next `publish` of any kind, since its evidence was already established. `clear()` removes the key,
 reads it back, updates `status` (success: `readingsInLastWrite` 0, failures reset, starvation tracking reset;
 failure: `consecutiveFailures`, `lastError`) and throws on failure. Diagnostics: one line per write or removal,
 one refusal summary per `publish` call (count per reason with first … last reading time), one line per failure.
@@ -382,10 +412,11 @@ settings and unaffected.
    on Nightscout upload.
 6. **Stale heartbeat keys.** If xDrip4iOS ever shared to Trio on this phone, its heartbeat keys may still be in the
    group and Trio keeps connecting to that old transmitter: Trio's CGM screen then shows "CGM address : …" instead of
-   "CGM is not used as heartbeat." (`CustomCGMOptionsView.swift:177-189`). When this app enables the bridge
-   without its own heartbeat, it calls `setHeartbeatPeripheral(nil)`, which removes the three keys (address first)
-   and verifies they are gone; `heartbeatAddressInAppGroup()` shows what is there. Once the Phase 2 heartbeat is
-   wired, `setHeartbeatPeripheral(_:)` replaces them instead.
+   "CGM is not used as heartbeat." (`CustomCGMOptionsView.swift:177-189`). Whenever this app has the bridge on but
+   no heartbeat target (no authenticated pairing), it calls `setHeartbeatPeripheral(nil)`, which removes the three
+   keys (address first) and verifies they are gone; `heartbeatAddressInAppGroup()` shows what is there. With a
+   pairing, `setHeartbeatPeripheral(_:)` replaces them with this app's sensor (see
+   [When Trio reads](#when-trio-reads)).
 7. Keep Trio's own calibrations empty (switching the source clears them, `FetchGlucoseManager.swift:189-193`).
 
 ## On-device checks (add to §11 step 4)
@@ -401,5 +432,6 @@ settings and unaffected.
 
 - Trio consumption cannot be observed (see Failure reporting).
 - Readings older than the newest 60 are never offered to Trio.
-- The heartbeat keys are supported by the bridge but not wired yet (Phase 2 must-do).
+- The heartbeat keys are supported by the bridge but not wired yet (Phase 2 must-do, rules above).
+- One `TrioBridge` per process; it assumes it is the only writer of `latestReadings`.
 - Behaviour documented against Trio `main` @ 29350e31a; re-check `AppGroupSource.swift` on every Trio update.

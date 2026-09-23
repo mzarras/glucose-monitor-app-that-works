@@ -36,6 +36,9 @@ public struct TrioBridgeRefusal: Sendable, Equatable {
         /// Refused by `LiveReadingGate.validate`: S6 source check; S2 session, time, value-range and
         /// trend-rate checks.
         case gate(LiveReadingGate.Rejection)
+        /// The session's grace period has ended (`now > gracePeriodEndsAt`): the session is over and nothing
+        /// more of it is written, even a reading dated inside it (S2).
+        case sessionEnded
         /// LOW or HIGH withheld by `OutOfRangePolicy` (S4). The associated value is the flag.
         case outOfRangeWithheld(GlucoseValue)
         /// Valid, but older than the newest `TrioAppGroupContract.maxReadings` readings, so Trio would not
@@ -74,8 +77,8 @@ public struct TrioBridgeStatus: Sendable, Equatable {
     public var lastErrorAt: Date?
     /// The most recent refused reading, of any reason.
     public var lastRefusal: TrioBridgeRefusal?
-    /// The most recent reading refused by `LiveReadingGate` (S2/S6). Kept separately so a benign
-    /// `olderThanPayloadWindow` refusal in the same call cannot hide it.
+    /// The most recent safety refusal: `LiveReadingGate` (S2/S6) or an ended session (`.sessionEnded`).
+    /// Kept separately so a benign `olderThanPayloadWindow` refusal in the same call cannot hide it.
     public var lastGateRefusal: TrioBridgeRefusal?
     /// When a LOW or HIGH reading was last withheld under `OutOfRangePolicy`.
     public var lastOutOfRangeWithheldAt: Date?

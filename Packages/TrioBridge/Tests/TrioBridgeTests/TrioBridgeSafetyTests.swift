@@ -45,7 +45,7 @@ final class TrioBridgeSafetyTests: XCTestCase {
         XCTAssertFalse(result.didWrite, file: file, line: line)
         XCTAssertTrue(result.addedReadingIDs.isEmpty, file: file, line: line)
         XCTAssertNil(store.payload, "a refused reading is never written", file: file, line: line)
-        XCTAssertEqual(store.readingWrites, 0, file: file, line: line)
+        XCTAssertTrue(store.operations.isEmpty, "the App Group is not touched: \(store.operations)", file: file, line: line)
         let status = await bridge.status
         XCTAssertEqual(status.lastRefusal?.reason, reason, file: file, line: line)
     }
@@ -180,73 +180,134 @@ final class TrioBridgeSafetyTests: XCTestCase {
         XCTAssertTrue(diagnostics.events.contains { $0.message.contains("left 3 earlier reading(s) out") })
     }
 
-    // MARK: - S2: no previous-session payload lingers (review m1)
+    // MARK: - S2: payload removal only on positive evidence (review m1, delta B1, PROGRESS.md D28)
 
-    func test_S2_nilSessionRemovesPayloadAndValidSessionRestoresIt() async throws {
-        // Sensor expired or failed: the source reports no session. Nothing passes the gate, so the key is
-        // removed; readings stay in memory and come back if the session does.
+    private func secondSession(startingAfterDays days: Double) -> SensorSession {
+        let start = Fixture.sessionStart.addingTimeInterval(days * 86_400)
+        return SensorSession(
+            serial: "3MTEST0002", start: start, warmUpEndsAt: start.addingTimeInterval(1_800),
+            expiresAt: start.addingTimeInterval(10 * 86_400), gracePeriodEndsAt: start.addingTimeInterval(10 * 86_400 + 43_200)
+        )
+    }
+
+    func test_S2_nilSessionBetweenReadingsLeavesPayloadAndWindowUntouched() async throws {
         let bridge = makeBridge()
         clock.set(Fixture.time(3_900))
         await bridge.publish(Fixture.series(from: 3_600, count: 2), session: Fixture.session)
-        XCTAssertEqual(try trioReads().count, 2)
+        let written = try XCTUnwrap(store.payload)
+        let operationsBefore = store.operations
 
-        let removed = await bridge.publish([], session: nil)
-        XCTAssertTrue(removed.didRemovePayload)
-        XCTAssertFalse(removed.didWrite)
-        XCTAssertNil(store.payload)
-        let afterRemoval = await bridge.status
-        XCTAssertFalse(afterRemoval.isFailing)
-        XCTAssertEqual(afterRemoval.readingsInLastWrite, 0)
-        XCTAssertEqual(afterRemoval.newestReadingWrittenAt, Fixture.time(3_900), "what Trio already has")
+        // Nil session (with and without a reading offered): nothing in the App Group changes.
+        clock.set(Fixture.time(4_000))
+        let empty = await bridge.publish([], session: nil)
+        let refused = await bridge.publish([Fixture.reading(at: 4_200)], session: nil)
+        XCTAssertFalse(empty.didWrite || empty.didRemovePayload)
+        XCTAssertFalse(refused.didWrite || refused.didRemovePayload)
+        XCTAssertEqual(refused.refusals.map(\.reason), [.gate(.noSession)])
+        XCTAssertEqual(store.payload, written)
+        XCTAssertEqual(store.operations, operationsBefore, "no write, no removal")
 
-        // Repeated calls without a session change nothing more.
-        let again = await bridge.publish([], session: nil)
-        XCTAssertFalse(again.didRemovePayload || again.didWrite)
+        // Session back: the window is intact, nothing needs rewriting, and the next reading joins it.
+        let back = await bridge.publish([], session: Fixture.session)
+        XCTAssertFalse(back.didWrite || back.didRemovePayload)
+        clock.set(Fixture.time(4_200))
+        await bridge.publish([Fixture.reading(at: 4_200)], session: Fixture.session)
+        XCTAssertEqual(try trioReads().count, 3)
+    }
 
-        let restored = await bridge.publish([], session: Fixture.session)
-        XCTAssertTrue(restored.didWrite)
-        XCTAssertEqual(try trioReads().count, 2)
+    func test_S2_firstCallWithNilSessionLeavesLeftoverPayloadInPlace() async throws {
+        // A payload left by an earlier process. This process has no evidence about it.
+        let leftover = Data(#"[{"DT":"/Date(1)/","ST":"/Date(1)/","Trend":4,"Value":100,"direction":"Flat"}]"#.utf8)
+        store.setData(leftover, forKey: "latestReadings")
+        let bridge = makeBridge()
+        let result = await bridge.publish([Fixture.reading(at: 3_600)], session: nil)
+        XCTAssertFalse(result.didWrite || result.didRemovePayload)
+        XCTAssertEqual(store.payload, leftover)
+        XCTAssertEqual(store.operations, ["setData latestReadings"], "only the setup write")
+    }
+
+    func test_S2_firstCallWithLiveSessionAndNothingPassingLeavesLeftoverPayload() async throws {
+        let leftover = Data("[]".utf8)
+        store.setData(leftover, forKey: "latestReadings")
+        let bridge = makeBridge()
+        await bridge.publish([Fixture.reading(at: 3_600, source: .mock)], session: Fixture.session)
+        XCTAssertEqual(store.payload, leftover)
+        // The first write replaces it.
+        await bridge.publish([Fixture.reading(at: 3_600)], session: Fixture.session)
+        XCTAssertEqual(try trioReads().count, 1)
     }
 
     func test_S2_newSessionWithoutReadingsRemovesPreviousSessionPayload() async throws {
         let bridge = makeBridge()
         await bridge.publish([Fixture.reading(at: 3_600)], session: Fixture.session)
-        let newStart = Fixture.sessionStart.addingTimeInterval(11 * 86_400)
-        let newSession = SensorSession(
-            serial: "3MTEST0002", start: newStart, warmUpEndsAt: newStart.addingTimeInterval(1_800),
-            expiresAt: newStart.addingTimeInterval(10 * 86_400), gracePeriodEndsAt: newStart.addingTimeInterval(10 * 86_400 + 43_200)
-        )
-        clock.set(newStart.addingTimeInterval(600)) // new sensor warming up, no reading yet
+        let newSession = secondSession(startingAfterDays: 5) // first sensor replaced before it expired
+        clock.set(newSession.start.addingTimeInterval(600)) // new sensor warming up, no reading yet
         let result = await bridge.publish([], session: newSession)
         XCTAssertTrue(result.didRemovePayload)
         XCTAssertNil(store.payload)
-        XCTAssertTrue(diagnostics.events.contains { $0.message.contains("removed latestReadings") })
+        XCTAssertTrue(diagnostics.events.contains { $0.message.contains("removed latestReadings: session 3MTEST0002 replaced") })
+        // Its first valid reading is written alone.
+        let first = Fixture.reading(at: 1_800, value: .mgdl(140), serial: "3MTEST0002", sessionStart: newSession.start)
+        clock.set(first.date)
+        await bridge.publish([first], session: newSession)
+        XCTAssertEqual(try trioReads().map(\.mgdl), [140])
     }
 
-    func test_S2_firstCallOfAProcessRemovesALeftoverPayloadWhenNothingPasses() async throws {
-        // A payload left by an earlier process (e.g. for a sensor that has since expired).
-        store.setData(Data(#"[{"DT":"/Date(1)/","ST":"/Date(1)/","Trend":4,"Value":100,"direction":"Flat"}]"#.utf8), forKey: "latestReadings")
+    func test_S2_gracePeriodEndRemovesPayloadEvenWithNilSession() async throws {
         let bridge = makeBridge()
-        let result = await bridge.publish([Fixture.reading(at: 3_600, source: .mock)], session: nil)
+        let lastSeconds: UInt32 = 907_200 // exactly at the end of the grace period (10 d + 12 h)
+        clock.set(Fixture.time(lastSeconds))
+        await bridge.publish([Fixture.reading(at: lastSeconds)], session: Fixture.session)
+        XCTAssertNotNil(store.payload)
+
+        // Grace period over; the source now reports no session (D28). That nil is not the evidence — the
+        // ended session of the payload is.
+        clock.set(Fixture.time(lastSeconds + 60))
+        let result = await bridge.publish([], session: nil)
         XCTAssertTrue(result.didRemovePayload)
         XCTAssertNil(store.payload)
+        XCTAssertTrue(diagnostics.events.contains { $0.message.contains("removed latestReadings: session 3MTEST0001 ended") })
+
+        // A caller still passing the ended session cannot bring it back.
+        let late = await bridge.publish([Fixture.reading(at: lastSeconds - 300, backfill: true)], session: Fixture.session)
+        XCTAssertEqual(late.refusals.map(\.reason), [.sessionEnded])
+        XCTAssertFalse(late.didWrite)
+        XCTAssertNil(store.payload)
+        let status = await bridge.status
+        XCTAssertEqual(status.lastGateRefusal?.reason, .sessionEnded)
     }
 
-    func test_S2_failedRemovalIsReportedAndRetried() async throws {
+    func test_S2_failedRemovalIsReportedAndRetriedEvenWithNilSession() async throws {
         let bridge = makeBridge()
         await bridge.publish([Fixture.reading(at: 3_600)], session: Fixture.session)
+        let newSession = secondSession(startingAfterDays: 5)
+        clock.set(newSession.start.addingTimeInterval(600))
         store.dropsRemovals = true
-        let failed = await bridge.publish([], session: nil)
+        let failed = await bridge.publish([], session: newSession)
         XCTAssertEqual(failed.error, .readBackMismatch)
         XCTAssertNotNil(store.payload)
         let failing = await bridge.status
         XCTAssertEqual(failing.consecutiveFailures, 1)
+        // The evidence was established; the retry does not need the session again.
         store.dropsRemovals = false
         let retried = await bridge.publish([], session: nil)
         XCTAssertTrue(retried.didRemovePayload)
         XCTAssertNil(store.payload)
         let recovered = await bridge.status
         XCTAssertEqual(recovered.consecutiveFailures, 0)
+    }
+
+    func test_S2_failedWriteIsNotRetriedWithNilSession() async throws {
+        let bridge = makeBridge()
+        store.dropsDataWrites = true
+        await bridge.publish([Fixture.reading(at: 3_600)], session: Fixture.session)
+        store.dropsDataWrites = false
+        let withoutSession = await bridge.publish([], session: nil)
+        XCTAssertFalse(withoutSession.didWrite || withoutSession.didRemovePayload)
+        XCTAssertNil(store.payload)
+        let withSession = await bridge.publish([], session: Fixture.session)
+        XCTAssertTrue(withSession.didWrite)
+        XCTAssertEqual(try trioReads().count, 1)
     }
 
     func test_S2_capRefusalDoesNotMaskGateRefusal() async throws {
@@ -525,7 +586,7 @@ final class TrioBridgeSafetyTests: XCTestCase {
         XCTAssertEqual(status.firstLiveReadingOfferedAt, Fixture.time(3_600))
     }
 
-    func test_S5_starvationIgnoresSensorGapsBackfillNonLiveSourcesAndFutureDates() async {
+    func test_S5_starvationIgnoresGapsBackfillAndNonLiveSourcesButCountsFutureDatedReadingsUpToNow() async {
         let bridge = makeBridge()
         let initial = await bridge.status
         XCTAssertNil(initial.trioLag, "nothing offered yet")
@@ -539,11 +600,14 @@ final class TrioBridgeSafetyTests: XCTestCase {
         var status = await bridge.status
         XCTAssertEqual(status.trioLag, 0)
         XCTAssertFalse(status.isStarving())
-        // A reading dated an hour ahead (clock fault) counts only up to the bridge's clock.
+        // A reading dated an hour ahead (clock fault) is refused, but it is a live reading Trio did not get:
+        // it counts, capped at the bridge's clock, so Trio is reported starving (fail loud).
         await bridge.publish([Fixture.reading(at: 10_800)], session: Fixture.session)
         status = await bridge.status
         XCTAssertEqual(status.newestLiveReadingOfferedAt, Fixture.time(7_200))
         XCTAssertEqual(status.lastGateRefusal?.reason, .gate(.inFuture))
+        XCTAssertEqual(status.trioLag, 3_600)
+        XCTAssertTrue(status.isStarving())
         XCTAssertEqual(TrioBridgeStatus.starvationThreshold, 15 * 60)
     }
 
