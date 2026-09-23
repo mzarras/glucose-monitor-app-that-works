@@ -13,10 +13,15 @@ import Foundation
 /// - **replay** (DEBUG only) — a separate in-memory store or separate file used while a ReplayKit
 ///   source runs. Stores only `.replay`/`.mock` readings and throws for anything else.
 ///
-/// Both roles refuse a numeric value outside `GlucoseValue.sensorReportableRange` (40...400) with
-/// `GlucoseReadingRepositoryError.implausibleValue`, rejecting the whole batch: such a number can
-/// only come from a parse fault, and storing it would put it in charts and stats (S1). Importers
-/// filter their rows before calling `insert`, so in practice this only fires on a bug.
+/// Both roles reject the whole batch, storing nothing, when any reading has:
+/// - a numeric value outside `GlucoseValue.sensorReportableRange` (40...400) →
+///   `GlucoseReadingRepositoryError.implausibleValue`;
+/// - a non-finite trend rate → `.nonFiniteTrendRate` (never rewritten to nil: the returned
+///   readings must be exactly what the caller passed, so `LiveReadingGate` sees the fault);
+/// - a date later than the store's clock plus `LiveReadingGate.futureTolerance` → `.futureDated`.
+/// Each can only come from a parse or clock fault; storing it would put it in charts, stats or the
+/// current value (S1, S5). Sources and importers filter before calling `insert`, so in practice
+/// these only fire on a bug.
 public protocol GlucoseReadingRepository: Sendable {
     /// Insert-or-ignore keyed by `id` (S3 dedupe): inserting the same readings again changes nothing.
     ///
@@ -29,7 +34,8 @@ public protocol GlucoseReadingRepository: Sendable {
     /// Readings inside one call are applied in ascending date order, so these rules also hold
     /// within a single batch.
     ///
-    /// - Returns: only the readings that were newly stored, ascending by date. The pipeline passes
+    /// - Returns: only the readings that were newly stored, ascending by date, exactly as passed in
+    ///   (no field rewritten). The pipeline passes
     ///   each of these through `LiveReadingGate` before handing it to Trio, uploaders or alerts, so
     ///   a re-delivered reading is never re-published and an imported one never reaches them.
     func insert(_ readings: [GlucoseReading]) async throws -> [GlucoseReading]
@@ -53,4 +59,8 @@ public enum GlucoseReadingRepositoryError: Error, Sendable, Equatable {
     case sourceNotAllowed(ReadingSource)
     /// A numeric value outside `GlucoseValue.sensorReportableRange`.
     case implausibleValue(Int)
+    /// A trend rate that is NaN or infinite.
+    case nonFiniteTrendRate
+    /// A reading dated later than the store's clock plus `LiveReadingGate.futureTolerance`.
+    case futureDated(Date)
 }
