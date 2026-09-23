@@ -57,6 +57,11 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// again under a new iOS identifier.
     private var candidate: (name: String, identifier: UUID)?
     private var candidateAttempt = 0
+    /// Consecutive connections that authenticated with our own solicited status and then saw a `05`
+    /// rejection (safety review P9): from the second one on, another app is the likely cause.
+    private var rejectionAfterAuthenticationStreak = 0
+    private var connectionAuthenticated = false
+    private var connectionRejectedAfterAuthentication = false
 
     init(
         store: G7CredentialStore,
@@ -90,14 +95,22 @@ final class G7Controller: G7ConnectionCycleDelegate {
             emit(.notPaired)
         case .success(let stored?):
             record = stored
-            emit(stored.requiresNewPairing ? .failed(reason: G7FailureReason.savedKeyRejected) : .searching)
+            if stored.requiresNewPairing {
+                emit(.failed(reason: G7FailureReason.savedKeyRejected))
+            } else if let end = stored.sessionEnd {
+                // Safety review N1: a latched end stays visible after a relaunch.
+                lastSensorState = end.state
+                emit(end.state)
+            } else {
+                emit(.searching)
+            }
         }
     }
 
     /// D28: the session this source authenticated to, persisted across disconnects and relaunches;
     /// nil before the first `0x4E` of a pairing, after the grace-period end, after the sensor reported
-    /// the session over (expired, failed, stopped), for an unsupported sensor, and when a new pairing
-    /// is required.
+    /// the session over (expired, failed, stopped) on two separate connections (N1, persisted), for an
+    /// unsupported sensor, and when a new pairing is required.
     var currentSession: SensorSession? {
         guard let record, !record.requiresNewPairing, !record.sessionEnded,
               let serial = record.serial, let start = record.sessionStart,
@@ -132,6 +145,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
             record = newRecord
             pipeline = nil
             lastSensorState = nil
+            rejectionAfterAuthenticationStreak = 0
             excludedSensorNames = Set([previous?.sensorName].compactMap { $0 })
             candidate = nil
             log(.sensor, "pairing a new sensor in slot \(slot.rawValue)")
@@ -153,10 +167,12 @@ final class G7Controller: G7ConnectionCycleDelegate {
             emit(.failed(reason: G7FailureReason.savedKeyRejected))
             return
         }
+        if let end = record.sessionEnd { lastSensorState = end.state }
         if let power = G7SensorStatus.state(for: bluetoothPower) {
             emit(power)
             return
         }
+        if let end = record.sessionEnd { emit(end.state) }
         connectIfPossible()
     }
 
@@ -178,6 +194,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
         record = nil
         pipeline = nil
         lastSensorState = nil
+        rejectionAfterAuthenticationStreak = 0
         candidate = nil
         excludedSensorNames = []
         log(.sensor, "sensor forgotten")
@@ -278,7 +295,13 @@ final class G7Controller: G7ConnectionCycleDelegate {
             log(.ble, "disconnect of an unrelated peripheral ignored")
             return
         }
+        let sessionLengthUnanswered = cycle?.isAwaitingSessionLength == true
         finishCycle()
+        if sessionLengthUnanswered {
+            // Safety review P7: `52` was never answered, so no GetData was sent; say why nothing came.
+            log(.sensor, "the sensor did not answer the session-length request before disconnecting")
+            emit(.failed(reason: G7FailureReason.sessionLengthUnknown))
+        }
         guard isRunning, let record, !record.requiresNewPairing else { return }
         if let known = record.peripheralIdentifier {
             // Keep a pending connection so iOS reconnects at the next advertisement, even in the
@@ -326,17 +349,20 @@ final class G7Controller: G7ConnectionCycleDelegate {
                 serial: serial,
                 reportedParameters: reportedParameters(current),
                 sessionStart: current.sessionStart,
-                sessionEnded: current.sessionEnded
+                sessionEnd: current.sessionEnd,
+                newestReading: current.newestReading
             ) { [weak self] message in
                 self?.log(.sensor, message)
             }
             pipeline?.beginConnection()
         }
+        connectionAuthenticated = true
         log(.ble, "authenticated")
     }
 
     func cycleSavedKeyRejected() {
         guard var current = record else { return }
+        rejectionAfterAuthenticationStreak = 0
         current.requiresNewPairing = true
         saveRecord(current)
         log(.sensor, "saved key rejected; automatic reconnection stopped")
@@ -345,12 +371,23 @@ final class G7Controller: G7ConnectionCycleDelegate {
     }
 
     /// B1: a rejection seen after we authenticated may be the sensor revoking our key or another app
-    /// failing on the shared link. Surface it and end the connection; the next connection's own,
-    /// solicited status decides whether the key is really gone (then `requiresNewPairing`).
+    /// failing on the shared link. N2: this connection is finished at once (the auth session has
+    /// already stopped forwarding; backfill not yet published is discarded), then the disconnect is
+    /// requested. The next connection's own, solicited status decides whether the key is really gone
+    /// (then `requiresNewPairing` and "Pair again"). P9: while our own authentication keeps succeeding
+    /// and the rejection recurs, the reason names the likely cause instead.
     func cycleSawRejectionAfterAuthentication() {
-        log(.sensor, "authentication rejection seen after authenticating; connection ended, key re-checked next time")
-        emit(.failed(reason: G7FailureReason.savedKeyRejected))
-        cycle?.link.disconnect()
+        guard let ending = cycle else { return }
+        rejectionAfterAuthenticationStreak += 1
+        connectionRejectedAfterAuthentication = true
+        let reason = rejectionAfterAuthenticationStreak >= 2
+            ? G7FailureReason.otherAppRejected
+            : G7FailureReason.rejectedAfterAuthentication
+        log(.sensor, "authentication rejection after authenticating (\(rejectionAfterAuthenticationStreak) in a row); connection ended, key re-checked next time")
+        pipeline?.discardConnection()
+        finishCycle()
+        emit(.failed(reason: reason))
+        ending.link.disconnect()
     }
 
     func cycleNeedsFullBootstrap() {
@@ -399,12 +436,13 @@ final class G7Controller: G7ConnectionCycleDelegate {
     func cycleReceivedGlucose(_ message: G7GlucoseMessage) {
         guard let pipeline else { return }
         let result = pipeline.handleGlucose(message, receivedAt: now())
-        if let state = result.state {
+        if let end = pipeline.sessionEnd {
+            // N1: the latched end is the sensor's state from now on (also for Bluetooth-on and calibration).
+            lastSensorState = end.state
+        } else if let state = result.state {
             if case .failed = state {} else { lastSensorState = state }
-            emit(state)
         }
-        syncSession()
-        result.readings.forEach(publish)
+        apply(result)
     }
 
     func cycleReceivedBackfillFrame(_ frame: Data) {
@@ -412,7 +450,8 @@ final class G7Controller: G7ConnectionCycleDelegate {
     }
 
     func cycleBackfillFinished() {
-        pipeline?.flushBackfill().forEach(publish)
+        guard let pipeline else { return }
+        apply(pipeline.flushBackfill())
     }
 
     func cycleReceivedExtendedVersion(_ message: G7ExtendedVersionMessage) {
@@ -488,12 +527,21 @@ final class G7Controller: G7ConnectionCycleDelegate {
         return identifier == record?.peripheralIdentifier || identifier == candidate?.identifier
     }
 
-    /// D28: keep the persisted session in step with the pipeline.
+    /// Emits the pipeline's state, publishes its readings, then persists the session.
+    private func apply(_ result: G7ReadingPipeline.Output) {
+        if let state = result.state { emit(state) }
+        result.readings.forEach(publish)
+        syncSession()
+    }
+
+    /// D28: keep the persisted session (start, latched end, newest reading) in step with the pipeline.
     private func syncSession() {
         guard let pipeline, var current = record, current.serial == pipeline.serial else { return }
-        guard current.sessionStart != pipeline.sessionStart || current.sessionEnded != pipeline.sessionEnded else { return }
+        guard current.sessionStart != pipeline.sessionStart || current.sessionEnd != pipeline.sessionEnd
+            || current.newestReading != pipeline.newestReading else { return }
         current.sessionStart = pipeline.sessionStart
-        current.sessionEnded = pipeline.sessionEnded
+        current.sessionEnd = pipeline.sessionEnd
+        current.newestReading = pipeline.newestReading
         saveRecord(current)
     }
 
@@ -501,7 +549,10 @@ final class G7Controller: G7ConnectionCycleDelegate {
         guard let ending = cycle else { return }
         ending.finish()
         cycle = nil
-        pipeline?.endConnection().forEach(publish)
+        if connectionAuthenticated, !connectionRejectedAfterAuthentication { rejectionAfterAuthenticationStreak = 0 }
+        connectionAuthenticated = false
+        connectionRejectedAfterAuthentication = false
+        if let pipeline { apply(pipeline.endConnection()) }
         calibration.endConnection()
         log(.ble, "disconnected")
     }

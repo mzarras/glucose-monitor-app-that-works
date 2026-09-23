@@ -42,7 +42,7 @@ final class G7ReadingPipelineTests: XCTestCase {
         let later = Fixture.glucose(sensorClock: 154_405, age: 298, glucose: 150, state: 0x06)
         _ = second.handleGlucose(glucose(later), receivedAt: receivedAt.addingTimeInterval(300))
         second.handleBackfillFrame(Data(hex: "cf5802008f00060f10"), now: receivedAt.addingTimeInterval(300))
-        let backfilled = try XCTUnwrap(second.flushBackfill().first)
+        let backfilled = try XCTUnwrap(second.flushBackfill().readings.first)
         XCTAssertEqual(backfilled.id, live.id)
         XCTAssertEqual(backfilled.date, live.date)
         XCTAssertEqual(backfilled.value, live.value)
@@ -77,7 +77,7 @@ final class G7ReadingPipelineTests: XCTestCase {
         pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 100_295, glucose: 110), now: receivedAt)
         pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 99_995, glucose: 108), now: receivedAt)
         pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 99_995, glucose: 108), now: receivedAt)
-        let batch = pipeline.flushBackfill()
+        let batch = pipeline.flushBackfill().readings
         XCTAssertEqual(batch.map(\.id), ["\(serial):99995"])
         XCTAssertEqual(Set(batch.map(\.id)).count, batch.count)
     }
@@ -91,7 +91,7 @@ final class G7ReadingPipelineTests: XCTestCase {
         for timestamp: UInt32 in [49_096, 48_496, 48_796] {
             pipeline.handleBackfillFrame(Fixture.backfill(timestamp: timestamp, glucose: 90), now: receivedAt)
         }
-        let batch = pipeline.flushBackfill()
+        let batch = pipeline.flushBackfill().readings
         XCTAssertEqual(batch.map(\.id), ["\(serial):48496", "\(serial):48796", "\(serial):49096"])
         XCTAssertEqual(batch.map(\.date), [48_496, 48_796, 49_096].map { start.addingTimeInterval($0) })
         XCTAssertTrue(batch.allSatisfy(\.isBackfill))
@@ -115,13 +115,13 @@ final class G7ReadingPipelineTests: XCTestCase {
         let pipeline = makePipeline()
         pipeline.beginConnection()
         pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 69_700, glucose: 95), now: receivedAt)
-        XCTAssertTrue(pipeline.flushBackfill().isEmpty)
+        XCTAssertTrue(pipeline.flushBackfill().readings.isEmpty)
         _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 70_000, age: 3, glucose: 97, state: 0x06)), receivedAt: receivedAt)
-        XCTAssertEqual(pipeline.endConnection().map(\.id), ["\(serial):69700"])
+        XCTAssertEqual(pipeline.endConnection().readings.map(\.id), ["\(serial):69700"])
 
         pipeline.beginConnection()
         pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 70_000, glucose: 95), now: receivedAt)
-        XCTAssertTrue(pipeline.endConnection().isEmpty)
+        XCTAssertTrue(pipeline.endConnection().readings.isEmpty)
         XCTAssertTrue(logs.contains { $0.contains("discarded 1 record") })
     }
 
@@ -198,6 +198,169 @@ final class G7ReadingPipelineTests: XCTestCase {
         XCTAssertEqual(pipeline.session, session)
     }
 
+    /// Probe P4 (backfill): after the phone clock was set back and the session re-anchored, a backfill
+    /// record is published only if its date keeps the published readings in sensor-time order, like a
+    /// live reading; the withheld ones are surfaced.
+    func test_S3_backfillDuringClockMismatchKeepsSensorTimeOrder() throws {
+        let t0 = receivedAt
+        let back = t0.addingTimeInterval(-3_600)
+        let pipeline = makePipeline()
+        pipeline.beginConnection()
+        var published = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(200_000, t0: t0)).readings
+        var surfacedByBackfill = 0
+        for step in 1...16 {
+            // Each connection also backfills the previous connection's reading (clock − 305).
+            let clock = UInt32(200_000 + 300 * step)
+            pipeline.beginConnection()
+            published += pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(clock, t0: back)).readings
+            pipeline.handleBackfillFrame(Fixture.backfill(timestamp: clock - 305, glucose: 100), now: arrival(clock, t0: back))
+            let backfill = pipeline.endConnection()
+            published += backfill.readings
+            if backfill.state == .failed(reason: G7FailureReason.sensorClockMismatch) { surfacedByBackfill += 1 }
+        }
+        let timestamps = published.map { UInt32($0.id.split(separator: ":").last!)! }
+        let byTimestamp = zip(timestamps, published).sorted { $0.0 < $1.0 }.map(\.1)
+        XCTAssertEqual(byTimestamp.map(\.date), published.map(\.date).sorted(), "dates follow sensor time")
+        XCTAssertEqual(Set(published.map(\.date)).count, published.count, "strictly")
+        XCTAssertEqual(Set(timestamps).count, published.count)
+        XCTAssertGreaterThan(surfacedByBackfill, 0)
+        XCTAssertTrue(logs.contains { $0.contains("out of sensor-time order") })
+
+        // Gap filling: an older record that still fits before the published one is kept; a newer
+        // record dated before the last published one is withheld and surfaced.
+        let fresh = makePipeline()
+        fresh.beginConnection()
+        _ = fresh.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(200_000, t0: t0))
+        for _ in 0..<2 {
+            fresh.beginConnection()
+            _ = fresh.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_600, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(200_600, t0: back))
+        }
+        fresh.handleBackfillFrame(Fixture.backfill(timestamp: 200_295, glucose: 104), now: arrival(200_600, t0: back))
+        fresh.handleBackfillFrame(Fixture.backfill(timestamp: 199_000, glucose: 103), now: arrival(200_600, t0: back))
+        let flushed = fresh.flushBackfill()
+        XCTAssertEqual(flushed.readings.map(\.id), ["\(serial):199000"])
+        XCTAssertEqual(flushed.state, .failed(reason: G7FailureReason.sensorClockMismatch))
+    }
+
+    /// Probe P4 (relaunch): the newest published reading is persisted, so a relaunched pipeline whose
+    /// clock is re-anchored backwards still publishes nothing dated before it.
+    func test_S3_dateOrderHoldsAcrossRelaunch() throws {
+        let t0 = receivedAt
+        let first = makePipeline()
+        first.beginConnection()
+        let a = try XCTUnwrap(first.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(200_000, t0: t0)).readings.first)
+        let mark = try XCTUnwrap(first.newestReading)
+        XCTAssertEqual(mark, G7ReadingMark(sensorTimestamp: 199_995, date: a.date))
+
+        let back = t0.addingTimeInterval(-3_600)
+        let relaunched = G7ReadingPipeline(serial: serial, reportedParameters: tenDayParameters, sessionStart: first.sessionStart, newestReading: mark) { _ in }
+        for clock: UInt32 in [200_300, 200_600, 200_900] {
+            relaunched.beginConnection()
+            let output = relaunched.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(clock, t0: back))
+            XCTAssertTrue(output.readings.isEmpty, "clock \(clock)")
+            XCTAssertEqual(output.state, .failed(reason: G7FailureReason.sensorClockMismatch))
+            relaunched.handleBackfillFrame(Fixture.backfill(timestamp: clock - 305, glucose: 100), now: arrival(clock, t0: back))
+            XCTAssertTrue(relaunched.endConnection().readings.isEmpty, "the backfill copy would be dated before the persisted newest reading")
+        }
+        relaunched.beginConnection()
+        let resumed = relaunched.handleGlucose(glucose(Fixture.glucose(sensorClock: 203_700, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(203_700, t0: back))
+        XCTAssertGreaterThan(try XCTUnwrap(resumed.readings.first).date, a.date)
+    }
+
+    // MARK: - Session end (N1)
+
+    /// Probe P8: a non-zero-status reply carrying stopped/expired/failed never ends the session, even
+    /// on two separate connections; the next OK reading is published and the session is active.
+    func test_S5_statusReplyWithEndStateNeverEndsTheSession() throws {
+        let t0 = receivedAt
+        for state: UInt8 in [0x01, 0x18, 0x19] {
+            let pipeline = makePipeline()
+            pipeline.beginConnection()
+            _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(200_000, t0: t0))
+            for clock: UInt32 in [200_300, 200_600] {
+                pipeline.beginConnection()
+                let reply = pipeline.handleGlucose(glucose(Fixture.glucose(status: 0x80, sensorClock: clock, age: 5, glucose: 100, state: state)), receivedAt: arrival(clock, t0: t0))
+                XCTAssertTrue(reply.readings.isEmpty)
+                XCTAssertNotNil(reply.state, "the reported state is still shown for that connection")
+            }
+            XCTAssertFalse(pipeline.sessionEnded, "state 0x\(String(state, radix: 16))")
+            pipeline.beginConnection()
+            let later = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_900, age: 5, glucose: 101, state: 0x06)), receivedAt: arrival(200_900, t0: t0))
+            XCTAssertEqual(later.readings.map(\.value), [.mgdl(101)])
+            if case .active = later.state {} else { XCTFail("expected active, got \(String(describing: later.state))") }
+            XCTAssertNotNil(pipeline.session)
+        }
+    }
+
+    /// Probe P8b: one status-0 end report is shown, but does not end the session; the next OK
+    /// reading is published and the session is active again.
+    func test_S5_oneEndReportDoesNotEndTheSession() throws {
+        let t0 = receivedAt
+        let pipeline = makePipeline()
+        pipeline.beginConnection()
+        _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(200_000, t0: t0))
+        pipeline.beginConnection()
+        let stopped = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_300, age: 5, glucose: nil, state: 0x01)), receivedAt: arrival(200_300, t0: t0))
+        XCTAssertEqual(stopped.state, .error(code: 1, description: "Session stopped"))
+        XCTAssertFalse(pipeline.sessionEnded)
+        pipeline.beginConnection()
+        let later = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_600, age: 5, glucose: 125, state: 0x06)), receivedAt: arrival(200_600, t0: t0))
+        XCTAssertEqual(later.readings.map(\.value), [.mgdl(125)])
+        if case .active = later.state {} else { XCTFail("expected active, got \(String(describing: later.state))") }
+    }
+
+    /// N1: an end reported with status 0 on two separate connections ends the session. From then on
+    /// every `0x4E`, OK or not, shows the end with its reason; nothing more is published.
+    func test_S5_endReportedOnTwoConnectionsEndsTheSessionVisibly() throws {
+        let t0 = receivedAt
+        let pipeline = makePipeline()
+        pipeline.beginConnection()
+        _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(200_000, t0: t0))
+        pipeline.beginConnection()
+        XCTAssertEqual(pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_300, age: 5, glucose: nil, state: 0x19)), receivedAt: arrival(200_300, t0: t0)).state,
+                       .error(code: 0x19, description: "Sensor failed"))
+        XCTAssertFalse(pipeline.sessionEnded)
+        pipeline.beginConnection()
+        let second = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_600, age: 5, glucose: nil, state: 0x19)), receivedAt: arrival(200_600, t0: t0))
+        XCTAssertEqual(second.state, .failed(reason: G7FailureReason.sensorFailed))
+        XCTAssertEqual(pipeline.sessionEnd, .sensorFailed)
+        XCTAssertNil(pipeline.session)
+
+        pipeline.beginConnection()
+        let okAfterEnd = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_900, age: 5, glucose: 130, state: 0x06)), receivedAt: arrival(200_900, t0: t0))
+        XCTAssertTrue(okAfterEnd.readings.isEmpty)
+        XCTAssertEqual(okAfterEnd.state, .failed(reason: G7FailureReason.sensorFailed), "never .active after a latched end")
+        pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 200_595, glucose: 120), now: arrival(200_900, t0: t0))
+        XCTAssertTrue(pipeline.endConnection().readings.isEmpty)
+
+        // A latched end restored from the pairing record behaves the same.
+        let restored = G7ReadingPipeline(serial: serial, reportedParameters: tenDayParameters, sessionStart: pipeline.sessionStart, sessionEnd: .expired) { _ in }
+        restored.beginConnection()
+        let restoredOutput = restored.handleGlucose(glucose(Fixture.glucose(sensorClock: 201_200, age: 5, glucose: 130, state: 0x06)), receivedAt: arrival(201_200, t0: t0))
+        XCTAssertTrue(restoredOutput.readings.isEmpty)
+        XCTAssertEqual(restoredOutput.state, .expired)
+    }
+
+    /// N1: two end reports on the same connection, or separated by a status-0 report of a running
+    /// session, do not end it; two consecutive connections do.
+    func test_S5_endNeedsTwoSeparateConsecutiveConnections() {
+        let t0 = receivedAt
+        let pipeline = makePipeline()
+        func send(_ clock: UInt32, state: UInt8, newConnection: Bool = true) -> G7ReadingPipeline.Output {
+            if newConnection { pipeline.beginConnection() }
+            return pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: state == 0x06 ? 110 : nil, state: state)), receivedAt: arrival(clock, t0: t0))
+        }
+        _ = send(200_000, state: 0x06)
+        _ = send(200_300, state: 0x18)
+        _ = send(200_310, state: 0x18, newConnection: false)
+        XCTAssertFalse(pipeline.sessionEnded, "one connection, two packets")
+        _ = send(200_600, state: 0x12) // temporary issue: the session is still running
+        _ = send(200_900, state: 0x18)
+        XCTAssertFalse(pipeline.sessionEnded, "the first report was cleared by the running-session report")
+        _ = send(201_200, state: 0x01)
+        XCTAssertEqual(pipeline.sessionEnd, .stopped, "two consecutive connections (the latest end is kept)")
+    }
+
     // MARK: - S2
 
     /// Warm-up readings carry numbers (G7SensorKitTests/G7GlucoseMessageTests.swift:40-66: 145, 125,
@@ -242,19 +405,25 @@ final class G7ReadingPipelineTests: XCTestCase {
             XCTAssertTrue(output.readings.isEmpty, "state 0x\(String(raw, radix: 16))")
             XCTAssertNotNil(output.state)
             pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 299_695, glucose: 118, state: raw), now: receivedAt)
-            XCTAssertTrue(pipeline.flushBackfill().isEmpty, "backfill state 0x\(String(raw, radix: 16))")
+            XCTAssertTrue(pipeline.flushBackfill().readings.isEmpty, "backfill state 0x\(String(raw, radix: 16))")
         }
     }
 
-    /// Expired: the sensor's own expired state (captured 0x18, 7 h after the end) ends the session;
-    /// an "OK" value whose derived time is past the grace end is refused.
+    /// Expired: the sensor's own expired state (captured 0x18, 7 h after the end) is shown and, once
+    /// a second connection reports it too, ends the session; an "OK" value whose derived time is past
+    /// the grace end is refused.
     func test_S2_expiredReadingsAreNotEmitted() throws {
         let pipeline = makePipeline()
         pipeline.beginConnection()
-        let expired = pipeline.handleGlucose(glucose(Data(hex: "4e004d440e00d40b0001d46b650018036a000e")), receivedAt: receivedAt)
+        let captured = glucose(Data(hex: "4e004d440e00d40b0001d46b650018036a000e"))
+        let expired = pipeline.handleGlucose(captured, receivedAt: receivedAt)
         XCTAssertTrue(expired.readings.isEmpty)
         XCTAssertEqual(expired.state, .expired)
-        XCTAssertTrue(pipeline.sessionEnded)
+        XCTAssertFalse(pipeline.sessionEnded, "one report is not enough (N1)")
+        pipeline.beginConnection()
+        let again = Fixture.glucose(sensorClock: captured.sensorClock + 300, age: 5, glucose: nil, state: 0x18)
+        XCTAssertEqual(pipeline.handleGlucose(glucose(again), receivedAt: receivedAt.addingTimeInterval(300)).state, .expired)
+        XCTAssertEqual(pipeline.sessionEnd, .expired)
         XCTAssertNil(pipeline.session)
 
         let pastGrace = makePipeline()
@@ -281,7 +450,7 @@ final class G7ReadingPipelineTests: XCTestCase {
         XCTAssertEqual(output.state, .error(code: 0x1B, description: "Sensor failed"))
         XCTAssertNil(pipeline.clock, "a status reply does not anchor the clock")
         XCTAssertNil(pipeline.sessionStart)
-        XCTAssertTrue(pipeline.sessionEnded, "a failed sensor ends the session")
+        XCTAssertFalse(pipeline.sessionEnded, "a status reply may be cached: it never ends the session (N1)")
     }
 
     /// A reading with an impossible age, or no value, or a backfill record in the future is refused.
@@ -296,7 +465,7 @@ final class G7ReadingPipelineTests: XCTestCase {
         XCTAssertTrue(output.readings.isEmpty)
         XCTAssertEqual(output.state, .failed(reason: G7FailureReason.noGlucoseValue), "OK without a value is surfaced (S5)")
         second.handleBackfillFrame(Fixture.backfill(timestamp: 95_000, glucose: 100), now: receivedAt)
-        XCTAssertTrue(second.flushBackfill().isEmpty, "a record 5 000 s after 'now' is in the future")
+        XCTAssertTrue(second.flushBackfill().readings.isEmpty, "a record 5 000 s after 'now' is in the future")
     }
 
     /// Minor 1: until the sensor has reported its session length, nothing is published and the reason
@@ -319,7 +488,7 @@ final class G7ReadingPipelineTests: XCTestCase {
         let output = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 100_000, age: 5, glucose: 100, state: 0x06)), receivedAt: receivedAt)
         XCTAssertTrue(output.readings.isEmpty)
         pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 99_000, glucose: 100), now: receivedAt)
-        XCTAssertTrue(pipeline.flushBackfill().isEmpty)
+        XCTAssertTrue(pipeline.flushBackfill().readings.isEmpty)
         XCTAssertNil(pipeline.session)
     }
 
@@ -332,7 +501,7 @@ final class G7ReadingPipelineTests: XCTestCase {
         for step in 1...20 {
             pipeline.handleBackfillFrame(Fixture.backfill(timestamp: UInt32(400_000 - 5 - 300 * step), glucose: UInt16(100 + step)), now: receivedAt)
         }
-        let readings = pipeline.flushBackfill()
+        let readings = pipeline.flushBackfill().readings
         XCTAssertEqual(readings.count, 20)
         let session = try XCTUnwrap(pipeline.session)
         for reading in readings {
@@ -358,7 +527,7 @@ final class G7ReadingPipelineTests: XCTestCase {
         pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 499_695, glucose: 20), now: receivedAt.addingTimeInterval(300))
         pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 499_095, glucose: 40), now: receivedAt.addingTimeInterval(300))
         pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 499_395, glucose: 401), now: receivedAt.addingTimeInterval(300))
-        XCTAssertEqual(pipeline.flushBackfill().map(\.value), [.mgdl(40), .aboveRange, .belowRange])
+        XCTAssertEqual(pipeline.flushBackfill().readings.map(\.value), [.mgdl(40), .aboveRange, .belowRange])
     }
 
     /// D31 / probe P3: raw 0, 0x0FFF and 0xFFFE are "no value" — withheld, logged, surfaced — never
@@ -380,7 +549,7 @@ final class G7ReadingPipelineTests: XCTestCase {
             XCTAssertTrue(output.readings.isEmpty, name)
             XCTAssertEqual(output.state, .failed(reason: G7FailureReason.noGlucoseValue), name)
             pipeline.handleBackfillFrame(Fixture.backfill(timestamp: clock - 305, glucose: name == "0" ? 0 : 0x0FFF), now: arrival(clock, t0: t0))
-            XCTAssertTrue(pipeline.flushBackfill().isEmpty, name)
+            XCTAssertTrue(pipeline.flushBackfill().readings.isEmpty, name)
         }
         XCTAssertTrue(logs.contains { $0.contains("no usable value") })
     }
@@ -397,7 +566,7 @@ final class G7ReadingPipelineTests: XCTestCase {
         // Clock 901 390 s (10.43 days): the sensor is running, in its grace period.
         if case .gracePeriod = output.state {} else { XCTFail("the sensor is still running, got \(String(describing: output.state))") }
         pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 901_000, glucose: 100, flags: 0x1E), now: receivedAt)
-        XCTAssertTrue(pipeline.flushBackfill().isEmpty)
+        XCTAssertTrue(pipeline.flushBackfill().readings.isEmpty)
     }
 }
 
@@ -430,20 +599,29 @@ final class G7SensorStatusTests: XCTestCase {
         XCTAssertEqual(G7SensorStatus.state(for: G7AlgorithmState(rawValue: 0x12), session: session, now: mid), .error(code: 0x12, description: "Temporary sensor issue"))
     }
 
-    /// D28: only the sensor's own status ends a session; time past grace is checked where read.
+    /// D28: only the sensor's own status reports an end; time past grace is checked where read.
     func test_whichStatesEndTheSession() {
         let mid = Date(timeIntervalSince1970: 100_000)
-        func ends(_ raw: UInt8, _ now: Date = mid) -> Bool {
+        func end(_ raw: UInt8, _ now: Date = mid) -> G7SessionEnd? {
             let algorithm = G7AlgorithmState(rawValue: raw)
-            return G7SensorStatus.endsSession(G7SensorStatus.state(for: algorithm, session: session, now: now), algorithmState: algorithm)
+            return G7SensorStatus.sessionEnd(for: G7SensorStatus.state(for: algorithm, session: session, now: now), algorithmState: algorithm)
         }
-        XCTAssertTrue(ends(0x19), "failed")
-        XCTAssertTrue(ends(0x0F), "expired")
-        XCTAssertTrue(ends(0x01), "stopped after warm-up")
-        XCTAssertFalse(ends(0x01, Date(timeIntervalSince1970: 600)), "stopped at activation")
-        XCTAssertFalse(ends(0x06, Date(timeIntervalSince1970: 1_000_000)), "OK past grace is a time check, not an end")
-        XCTAssertFalse(ends(0x12), "temporary issue")
-        XCTAssertFalse(ends(0x07), "calibration needed")
-        XCTAssertFalse(ends(0x02), "warm-up")
+        XCTAssertEqual(end(0x19), .sensorFailed)
+        XCTAssertEqual(end(0x0B), .sensorFailed)
+        XCTAssertEqual(end(0x0F), .expired)
+        XCTAssertEqual(end(0x18), .expired)
+        XCTAssertEqual(end(0x01), .stopped, "stopped after warm-up")
+        XCTAssertNil(end(0x01, Date(timeIntervalSince1970: 600)), "stopped at activation")
+        XCTAssertNil(end(0x06, Date(timeIntervalSince1970: 1_000_000)), "OK past grace is a time check, not an end")
+        XCTAssertNil(end(0x12), "temporary issue")
+        XCTAssertNil(end(0x07), "calibration needed")
+        XCTAssertNil(end(0x02), "warm-up")
+    }
+
+    /// N1: a latched end is always visible, with its reason.
+    func test_S5_latchedEndStatesAreVisible() {
+        XCTAssertEqual(G7SessionEnd.expired.state, .expired)
+        XCTAssertEqual(G7SessionEnd.sensorFailed.state, .failed(reason: G7FailureReason.sensorFailed))
+        XCTAssertEqual(G7SessionEnd.stopped.state, .failed(reason: G7FailureReason.sessionStopped))
     }
 }

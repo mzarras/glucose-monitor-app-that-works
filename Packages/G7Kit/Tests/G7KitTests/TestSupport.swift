@@ -181,6 +181,9 @@ final class LinkDriver {
     let deliverValue: (G7Characteristic, Data) -> Void
     /// Notify requests for these characteristics fail (simulates a cancelled iOS pairing prompt).
     var failingNotify: [G7Characteristic: G7LinkError] = [:]
+    /// Runs after each write reached the sensor and before its replies are delivered (another app's
+    /// traffic on the shared link can land there).
+    var afterWrite: ((Data, G7Characteristic) -> Void)?
     private var pendingValues: [(G7Characteristic, Data)] = []
 
     init(link: FakeLink, sensor: G7SensorSimulator,
@@ -211,6 +214,7 @@ final class LinkDriver {
             if !link.writes.isEmpty {
                 let write = link.writes.removeFirst()
                 pendingValues += sensor.handleWrite(write.data, to: write.characteristic)
+                afterWrite?(write.data, write.characteristic)
                 continue
             }
             if !pendingValues.isEmpty {

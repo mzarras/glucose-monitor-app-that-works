@@ -35,6 +35,21 @@ public enum G7FailureReason {
     /// The sensor has not reported its session length (`0x52`), so no reading can be checked yet.
     public static let sessionLengthUnknown =
         "The sensor has not reported its session length yet, so readings are held back. This normally clears at the next sensor connection."
+    /// The sensor reported a failed state (G7AlgorithmState sensorFailed) on two separate connections.
+    public static let sensorFailed =
+        "The sensor reported that it has failed. No more readings will come from it. Replace the sensor."
+    /// The sensor reported "session stopped" after warm-up on two separate connections.
+    public static let sessionStopped =
+        "The sensor reported that its session has stopped. No more readings will come from it. Replace the sensor."
+    /// A `05` "not authenticated" arrived after this connection authenticated (safety review B1/N2).
+    /// It may be the sensor refusing this phone or another app on the phone being refused on the
+    /// shared Bluetooth link; the connection is ended and the next one checks this phone's key again.
+    public static let rejectedAfterAuthentication =
+        "The sensor refused a connection after it had started. The next sensor connection (within about 5 minutes) checks whether this phone is still accepted."
+    /// The same happened again although this phone's own authentication keeps succeeding: most likely
+    /// another app on this phone is connecting to the sensor and being refused (safety review P9).
+    public static let otherAppRejected =
+        "Another app on this phone seems to be connecting to the sensor and being refused, which cuts connections short. This phone is still accepted. Close or remove other Dexcom G7 apps."
     /// The pairing record could not be read (for example, the Keychain is locked before the first
     /// unlock after a restart). Not the same as "not paired".
     public static let credentialsUnavailable =

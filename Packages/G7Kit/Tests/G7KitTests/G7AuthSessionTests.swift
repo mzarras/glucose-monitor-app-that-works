@@ -188,6 +188,41 @@ final class G7AuthSessionTests: XCTestCase {
         session.receiveAuthentication(Data([0x05, 0x00, 0x02]))
         XCTAssertEqual(delegate.rejectionsAfterAuthentication, 1)
         XCTAssertEqual(delegate.savedKeyRejected, 0, "not treated as our own solicited rejection")
+        XCTAssertFalse(session.isAuthenticated, "N2: the session stops being authenticated at once")
+        session.receiveAuthentication(Data([0x05, 0x01, 0x01]))
+        session.receiveAuthentication(Data([0x05, 0x00, 0x02]))
+        XCTAssertFalse(session.isAuthenticated, "nothing re-authenticates this connection")
+        XCTAssertEqual(delegate.rejectionsAfterAuthentication, 1)
+        XCTAssertEqual(delegate.authenticatedKeys.count, 1)
+    }
+
+    /// Probe P1c: our key was evicted; another app's `05 01 01` lands between our `04` and the
+    /// sensor's real `05 00 02`. The spoof is taken as our answer (it cannot be told apart), but the
+    /// real rejection right after ends the session and nothing stays authenticated.
+    func test_S2_spoofedStatusBeforeTheRealRejectionDoesNotStayAuthenticated() throws {
+        let sensor = G7SensorSimulator(pairingCode: "1234")
+        sensor.confirmedKeys[0x02] = G7Random.bytes(16)
+        let (session, delegate, link, _) = makeSession(code: "1234", savedKey: G7Random.bytes(16), sensor: sensor)
+        session.begin()
+        link.notifying = [.authStream, .receiveAuthentication]
+        session.notificationStateChanged(for: .authStream, isNotifying: true)
+        session.notificationStateChanged(for: .receiveAuthentication, isNotifying: true)
+        var realReplies: [(G7Characteristic, Data)] = []
+        while !link.writes.isEmpty {
+            let write = link.writes.removeFirst()
+            let replies = sensor.handleWrite(write.data, to: write.characteristic)
+            if write.data.first == 0x04 {
+                session.receiveAuthentication(Data([0x05, 0x01, 0x01]))
+                realReplies = replies
+                break
+            }
+            replies.forEach { session.receiveAuthentication($0.1) }
+        }
+        XCTAssertTrue(session.isAuthenticated, "the spoof is indistinguishable from our answer")
+        XCTAssertEqual(realReplies.map(\.1), [Data([0x05, 0x02, 0x02])])
+        realReplies.forEach { session.receiveAuthentication($0.1) }
+        XCTAssertFalse(session.isAuthenticated)
+        XCTAssertEqual(delegate.rejectionsAfterAuthentication, 1)
     }
 
     func test_cancelInvalidatesScheduledWrites() {

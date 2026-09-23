@@ -66,7 +66,8 @@ final class ControllerHarness {
     /// One sensor wake: connect, exchange everything, disconnect. Returns the link for inspection.
     @discardableResult
     func connection(glucose: Data?, backfill: [Data] = [], failingNotify: [G7Characteristic: G7LinkError] = [:],
-                    peripheral: UUID? = nil, disconnect: Bool = true) -> FakeLink {
+                    peripheral: UUID? = nil, disconnect: Bool = true,
+                    afterWrite: ((Data, G7Characteristic) -> Void)? = nil) -> FakeLink {
         let peripheral = peripheral ?? identifier
         sensor.beginConnection()
         sensor.glucoseResponse = glucose
@@ -76,6 +77,7 @@ final class ControllerHarness {
                                 deliverNotify: { [unowned self] in controller.notificationStateChanged(for: $0, isNotifying: $1, error: $2) },
                                 deliverValue: { [unowned self] in controller.valueUpdated(for: $0, value: $1) })
         driver.failingNotify = failingNotify
+        driver.afterWrite = afterWrite
         controller.didConnect(link: link, availableCharacteristics: Set(G7Characteristic.allCases))
         driver.pump()
         if disconnect { controller.didDisconnect(peripheralIdentifier: peripheral) }

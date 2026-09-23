@@ -319,8 +319,12 @@ final class G7AuthSession {
     private func handleStatus(_ value: Data) {
         if stage == .authenticated {
             // Already authenticated in this connection: a later "not authenticated" is surfaced and
-            // ends the connection; anything else is not ours to act on.
+            // ends the connection; anything else is not ours to act on. The stage leaves
+            // `.authenticated` first, so nothing more is forwarded from this connection (safety
+            // review N2: with a spoofed `05 01 01` before our real `05`, we were never authenticated).
             if let status = G7AuthStatusMessage(value), !status.authenticated {
+                stage = .failed
+                writeGeneration &+= 1
                 delegate?.authSessionLog("auth: 05 rejection after authentication; ending this connection")
                 delegate?.authSessionSawRejectionAfterAuthentication()
             } else {

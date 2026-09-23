@@ -54,19 +54,22 @@ enum G7SensorStatus {
         }
     }
 
-    /// True when the sensor's own status says the session is over for good (D28: `currentSession`
-    /// becomes nil): reported expired, failed, or stopped after warm-up. Temporary issues and
-    /// calibration states do not end it. "OK but past the grace end" is not included: that is a time
-    /// check on the session, so a garbled clock cannot end a session permanently.
-    static func endsSession(_ state: SensorState, algorithmState: G7AlgorithmState) -> Bool {
+    /// The end this status reports, if it says the session is over for good: expired, failed, or
+    /// stopped after warm-up. Temporary issues and calibration states do not end it. "OK but past the
+    /// grace end" is not included: that is a time check on the session, so a garbled clock cannot end
+    /// a session permanently. One report does not end the session either (G7ReadingPipeline latches
+    /// only after two separate connections reported an end).
+    static func sessionEnd(for state: SensorState, algorithmState: G7AlgorithmState) -> G7SessionEnd? {
         switch algorithmState.category {
-        case .sensorFailed, .expired:
-            return true
+        case .sensorFailed:
+            return .sensorFailed
+        case .expired:
+            return .expired
         case .stopped:
-            if case .warmingUp = state { return false }
-            return true
+            if case .warmingUp = state { return nil }
+            return .stopped
         case .ok, .warmUp, .calibrationNeeded, .calibrationError, .temporaryIssue, .unknown:
-            return false
+            return nil
         }
     }
 }

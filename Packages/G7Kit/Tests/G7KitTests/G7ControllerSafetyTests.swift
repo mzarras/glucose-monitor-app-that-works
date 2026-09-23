@@ -35,7 +35,7 @@ final class G7ControllerSafetyTests: XCTestCase {
         harness.clock.advance(300)
         let link = harness.connection(glucose: harness.currentGlucose(121), disconnect: false)
         harness.controller.valueUpdated(for: .receiveAuthentication, value: Data([0x05, 0x00, 0x02]))
-        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.savedKeyRejected))
+        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.rejectedAfterAuthentication), "not \"pair again\" yet")
         XCTAssertEqual(link.disconnectCount, 1)
         XCTAssertEqual(harness.record?.requiresNewPairing, false, "decided by the next solicited status")
         harness.controller.didDisconnect(peripheralIdentifier: harness.identifier)
@@ -69,14 +69,18 @@ final class G7ControllerSafetyTests: XCTestCase {
         XCTAssertEqual(relaunched.readings.map(\.value), [.mgdl(125)])
     }
 
-    /// Probe P2b: a failed sensor ends the session (also after a relaunch); separately, the grace end
-    /// ends it with no connection at all (20 days later).
+    /// Probe P2b: a failed sensor (reported on two connections, N1) ends the session, also after a
+    /// relaunch; separately, the grace end ends it with no connection at all (20 days later).
     func test_S2_currentSessionEndsOnFailureAndAfterGrace() throws {
         let failing = ControllerHarness()
         try failing.pair(glucose: failing.currentGlucose(120))
         failing.clock.advance(300)
         failing.connection(glucose: failing.currentGlucose(nil, state: 0x19))
         XCTAssertEqual(failing.states.last, .error(code: 0x19, description: "Sensor failed"))
+        XCTAssertNotNil(failing.controller.currentSession, "one report is not enough")
+        failing.clock.advance(300)
+        failing.connection(glucose: failing.currentGlucose(nil, state: 0x19))
+        XCTAssertEqual(failing.states.last, .failed(reason: G7FailureReason.sensorFailed))
         XCTAssertNil(failing.controller.currentSession)
         XCTAssertEqual(failing.record?.sessionEnded, true)
         let relaunchedFailing = ControllerHarness(store: failing.store, relaunchOf: failing)
@@ -88,6 +92,154 @@ final class G7ControllerSafetyTests: XCTestCase {
         XCTAssertNotNil(aging.controller.currentSession)
         aging.clock.advance(20 * 86_400)
         XCTAssertNil(aging.controller.currentSession)
+    }
+
+    // MARK: - N2
+
+    /// Probe P10: after a post-authentication `05` rejection nothing more from the connection is
+    /// published before `didDisconnect` (live, backfill, a batch received before the rejection).
+    func test_S2_nothingIsPublishedAfterARejectionBeforeTheDisconnect() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        harness.clock.advance(300)
+        let link = harness.connection(glucose: harness.currentGlucose(121), disconnect: false)
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(121)])
+        harness.controller.valueUpdated(for: .backfill, value: Fixture.backfill(timestamp: harness.sensorClock - 150, glucose: 170))
+        harness.controller.valueUpdated(for: .receiveAuthentication, value: Data([0x05, 0x00, 0x02]))
+        XCTAssertEqual(link.disconnectCount, 1, "the disconnect is requested after the cycle is finished")
+        harness.clock.advance(1)
+        harness.controller.valueUpdated(for: .writeControl, value: Fixture.glucose(sensorClock: harness.sensorClock + 300, age: 2, glucose: 180, state: 0x06))
+        harness.controller.valueUpdated(for: .backfill, value: Fixture.backfill(timestamp: harness.sensorClock - 100, glucose: 175))
+        harness.controller.valueUpdated(for: .writeControl, value: Data([0x59]))
+        harness.controller.didDisconnect(peripheralIdentifier: harness.identifier)
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(121)])
+        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.rejectedAfterAuthentication))
+        XCTAssertTrue(harness.log.messages.contains { $0.contains("of a rejected connection discarded") })
+    }
+
+    /// Probe P1c at the controller: our key was evicted; another app's `05 01 01` lands between our
+    /// `04` and the sensor's real rejection. Nothing is published, the connection ends at the real
+    /// rejection, and the next connection's own status asks to pair again.
+    func test_S2_spoofedStatusBeforeTheRealRejectionPublishesNothing() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        harness.sensor.confirmedKeys[0x02] = G7Random.bytes(16)
+        harness.clock.advance(300)
+        let link = harness.connection(glucose: harness.currentGlucose(121), disconnect: false) { [unowned harness] data, characteristic in
+            guard characteristic == .receiveAuthentication, data.first == 0x04 else { return }
+            harness.controller.valueUpdated(for: .receiveAuthentication, value: Data([0x05, 0x01, 0x01]))
+        }
+        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.rejectedAfterAuthentication))
+        XCTAssertEqual(link.disconnectCount, 1)
+        harness.controller.valueUpdated(for: .writeControl, value: harness.currentGlucose(122))
+        harness.controller.valueUpdated(for: .backfill, value: Fixture.backfill(timestamp: harness.sensorClock - 305, glucose: 121))
+        harness.controller.valueUpdated(for: .writeControl, value: Data([0x59]))
+        harness.controller.didDisconnect(peripheralIdentifier: harness.identifier)
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120)])
+
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(123))
+        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.savedKeyRejected))
+        XCTAssertEqual(harness.record?.requiresNewPairing, true)
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120)])
+    }
+
+    /// Probe P9: the rejection recurs while our own authentication keeps succeeding: the status names
+    /// the likely cause (another app) and never says "pair again"; a clean connection resets it.
+    func test_S5_recurringRejectionAfterAuthenticationNamesAnotherApp() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        var reasons: [SensorState?] = []
+        for value: UInt16 in [121, 122, 123] {
+            harness.clock.advance(300)
+            harness.connection(glucose: harness.currentGlucose(value), disconnect: false)
+            harness.controller.valueUpdated(for: .receiveAuthentication, value: Data([0x05, 0x00, 0x02]))
+            harness.controller.didDisconnect(peripheralIdentifier: harness.identifier)
+            reasons.append(harness.states.last)
+        }
+        XCTAssertEqual(reasons, [
+            .failed(reason: G7FailureReason.rejectedAfterAuthentication),
+            .failed(reason: G7FailureReason.otherAppRejected),
+            .failed(reason: G7FailureReason.otherAppRejected),
+        ])
+        XCTAssertFalse(harness.states.contains(.failed(reason: G7FailureReason.savedKeyRejected)))
+        XCTAssertEqual(harness.record?.requiresNewPairing, false)
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(121), .mgdl(122), .mgdl(123)])
+        XCTAssertNotEqual(G7FailureReason.otherAppRejected, G7FailureReason.savedKeyRejected)
+
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(124))
+        if case .active = harness.states.last {} else { XCTFail("clean connection: \(harness.states)") }
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(125), disconnect: false)
+        harness.controller.valueUpdated(for: .receiveAuthentication, value: Data([0x05, 0x00, 0x02]))
+        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.rejectedAfterAuthentication), "streak reset by the clean connection")
+    }
+
+    // MARK: - N1 (D28)
+
+    /// Probe P8b: one status-0 "stopped" report is shown but does not end the session; the next OK
+    /// reading is published, the status is active and the session is still there.
+    func test_S5_oneEndReportDoesNotEndTheSession() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(nil, state: 0x01))
+        XCTAssertEqual(harness.states.last, .error(code: 1, description: "Session stopped"))
+        XCTAssertNotNil(harness.controller.currentSession)
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(125))
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(125)])
+        if case .active = harness.states.last {} else { XCTFail("expected active: \(harness.states)") }
+        XCTAssertNotNil(harness.controller.currentSession)
+        XCTAssertNil(harness.record?.sessionEnd)
+    }
+
+    /// N1: the end reported on two connections is latched and persisted; afterwards an OK packet shows
+    /// the end (never active), publishes nothing, and the same holds after a relaunch and after
+    /// Bluetooth is switched off and on.
+    func test_S5_latchedEndStaysVisibleAndPersists() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        for _ in 0..<2 {
+            harness.clock.advance(300)
+            harness.connection(glucose: harness.currentGlucose(nil, state: 0x19))
+        }
+        let ended = SensorState.failed(reason: G7FailureReason.sensorFailed)
+        XCTAssertEqual(harness.states.last, ended)
+        XCTAssertEqual(harness.record?.sessionEnd, .sensorFailed)
+        XCTAssertNil(harness.controller.currentSession)
+        let emittedBefore = harness.states.count
+
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(130))
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120)])
+        XCTAssertFalse(harness.states[emittedBefore...].contains { if case .active = $0 { return true } else { return false } })
+        XCTAssertEqual(harness.states.last, ended)
+        harness.controller.bluetoothPowerChanged(.poweredOff)
+        harness.controller.bluetoothPowerChanged(.poweredOn)
+        XCTAssertEqual(harness.states.last, ended)
+        XCTAssertThrowsError(try harness.controller.submitCalibration(CalibrationRequest(mgdl: 120, takenAt: harness.clock.now)))
+
+        let relaunched = ControllerHarness(store: harness.store, relaunchOf: harness)
+        relaunched.controller.emitInitialState()
+        XCTAssertEqual(relaunched.states.last, ended)
+        XCTAssertNil(relaunched.controller.currentSession)
+        try relaunched.controller.start(pairingCode: nil)
+        relaunched.clock.advance(300)
+        relaunched.connection(glucose: relaunched.currentGlucose(131))
+        XCTAssertTrue(relaunched.readings.isEmpty)
+        XCTAssertFalse(relaunched.states.contains { if case .active = $0 { return true } else { return false } })
+        XCTAssertEqual(relaunched.states.last, ended)
+    }
+
+    /// P4: the newest published reading is persisted with the session.
+    func test_S3_newestReadingIsPersisted() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        let reading = try XCTUnwrap(harness.readings.last)
+        XCTAssertEqual(harness.record?.newestReading?.date, reading.date)
+        XCTAssertEqual(harness.record.flatMap { $0.newestReading.map { "\($0.sensorTimestamp)" } }, reading.id.split(separator: ":").last.map(String.init))
     }
 
     /// B2: unsupported sensor, a rejected key, and forget all leave no session.
@@ -130,6 +282,22 @@ final class G7ControllerSafetyTests: XCTestCase {
         try silent.pair(glucose: silent.currentGlucose(120))
         XCTAssertTrue(silent.readings.isEmpty)
         XCTAssertEqual(silent.states.last, .failed(reason: G7FailureReason.sessionLengthUnknown))
+    }
+
+    /// Probe P7: `52` is never answered during a new pairing, so GetData is never sent; when the
+    /// connection ends the reason is surfaced (not left at "authenticating"), and `52` is asked again.
+    func test_S5_unansweredSessionLengthIsSurfacedAtDisconnect() throws {
+        let harness = ControllerHarness()
+        harness.sensor.extendedVersionResponse = nil
+        let link = try harness.pair(glucose: harness.currentGlucose(120))
+        XCTAssertEqual(link.allWrites.filter { $0.characteristic == .writeControl }.map(\.data), [Data([0x52])])
+        XCTAssertTrue(harness.readings.isEmpty)
+        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.sessionLengthUnknown))
+        XCTAssertNil(harness.record?.reportedSessionLength)
+        harness.clock.advance(300)
+        harness.sensor.extendedVersionResponse = Fixture.tenDayExtendedVersion
+        harness.connection(glucose: harness.currentGlucose(121))
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(121)])
     }
 
     // MARK: - M3

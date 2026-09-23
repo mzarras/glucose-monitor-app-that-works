@@ -91,14 +91,18 @@ except the lengths inside the J-PAKE hash (big-endian, §3.3).
 4. Notify Write_Control. While the sensor has never reported its session length, write `52` first
    and wait for its answer (Sensor change: xDrip4iOS asks after the first reading,
    `CGMG7Transmitter.swift:1361-1389`, which would let a 15-day sensor publish one reading). Then
-   write `4E` once (`CGMG7Transmitter.swift:952-967`, `:1624-1642`).
+   write `4E` once (`CGMG7Transmitter.swift:952-967`, `:1624-1642`). If the connection ends with
+   `52` unanswered (so no `4E` was sent), `.failed(sessionLengthUnknown)` is reported at the
+   disconnect instead of leaving the status at "authenticating" (safety review P7); `52` is asked
+   again next time.
 5. On the `0x4E` response: notify Backfill (`:1165-1174`), then write the next control request,
    one at a time, each after the previous response: pending calibration `34`, else calibration
    record `32` (`:1237-1248`).
 6. Backfill records arrive on Backfill; `59` on Write_Control ends them (`:1010-1012`).
 7. The sensor disconnects; undated backfill is discarded, dated backfill published (`:656-688`).
 
-Nothing received on Write_Control or Backfill is used before authentication completes (S2).
+Nothing received on Write_Control or Backfill is used before authentication completes, nor after a
+`05` rejection ends it (S2; §3.1).
 
 ### 2.4 The iOS pairing prompt
 
@@ -138,11 +142,21 @@ authentication traffic (the Dexcom app, xDrip4iOS) reaches us too. xDrip4iOS acc
 authentication, bypassing the pairing code. G7Kit accepts a `03` only after its own `02`, a `05` only
 after its own `04` and only once, `0A` only during its own J-PAKE and for the phase it expects, `0B`/
 `0C` only in the certificate stage, `0D`/`06`/`07`/`08` only in their stages; everything else is
-logged and ignored. After authentication, a `05` saying "not authenticated" is surfaced as
-`.failed(savedKeyRejected)` and ends the connection; whether the key is really gone is decided by the
-next connection's own, solicited `05` (only that sets `requiresNewPairing`), because the rejection may
-belong to another app on the shared link. `paired` is byte 2 == `01` (G7SensorKit); xDrip4iOS used
-`!= 02` — they agree on every captured value.
+logged and ignored. `paired` is byte 2 == `01` (G7SensorKit); xDrip4iOS used `!= 02` — they agree
+on every captured value.
+
+**A `05` rejection after authentication (safety review B1, N2, P9).** It may be the sensor refusing
+this phone, or another app on the shared link being refused. It can also follow a spoofed success:
+another app's `05 01 01` landing between our `04` and the sensor's real answer is indistinguishable
+from our own and is taken as our answer, and the real `05 02 02` then arrives as a "later"
+rejection (probe P1c). So, at once and in this order: the auth session leaves "authenticated" (the
+connection forwards nothing more from Write_Control or Backfill), the controller finishes the
+connection and discards its backfill not yet published, reports the state, and only then asks for
+the disconnect. Whether the key is really gone is decided by the next connection's own, solicited
+`05` (only that sets `requiresNewPairing` and shows `.failed(savedKeyRejected)`, "Pair again"). The
+state is `.failed(rejectedAfterAuthentication)`; when it recurs on consecutive connections whose own
+authentication succeeded, `.failed(otherAppRejected)` (another app on this phone is the likely cause).
+A connection without a rejection resets the count.
 
 Decision on the solicited `05` (`DexcomG7AuthSession.swift:463-475`, unchanged):
 
@@ -313,14 +327,23 @@ No captured G7 J-PAKE exchange exists in either repository. Tests:
     and the session is **not** moved; only a second anchor agreeing with the first disagreeing one
     (within 30 s of it) re-anchors the session. One garbled packet can neither move nor end a session.
   Every anchor more than 5 s off is logged, so drift over a session can be read from the diagnostics.
-- **Live dates are monotonic:** a live reading dated at or before the last published live reading is
-  withheld and `.failed(sensorClockMismatch)` reported (e.g. after the phone clock was set back: no
-  reading is published "in the past"; readings resume when their dates pass the last published one).
+- **Dates follow sensor time (monotonic), live and backfill (safety review P4):** a reading is
+  published only if its date lies strictly between the dates of the published readings just before
+  and just after it in sensor time. With one fixed session start this always holds; it fails only
+  after a re-anchor (the phone clock was changed), when the new dates would interleave with those
+  already published. A live reading that fails it is withheld with `.failed(sensorClockMismatch)` (e.g.
+  after the phone clock was set back: nothing is published "in the past"; readings resume when their
+  dates pass the last published one). A backfill record that fails it is withheld the same way and the
+  batch reports `.failed(sensorClockMismatch)`; a gap-filling record that still fits between its
+  neighbours is kept. The newest published reading (sensor timestamp and date, `G7ReadingMark`) is
+  persisted with the pairing record, so the rule also holds across app relaunches.
 - Backfill arriving before this connection's `0x4E` waits for an agreeing anchor; records never dated
   are discarded at disconnect (`CGMG7Transmitter.swift:656-667`).
 - `id = GlucoseReading.sensorID(serial:sensorTimestamp:)`; duplicates by sensor timestamp are
   dropped; a live reading must be strictly newer (in sensor time and in date) than every published
   reading; each backfill batch is published in ascending order with `isBackfill = true`.
+- Backfill received before a `05` rejection after authentication (§3.1) and not yet published is
+  discarded with that connection.
 
 ### 5.2 Validity (S2) — a reading is published only if all hold
 
@@ -392,9 +415,19 @@ Persisted in the pairing record (serial, session start, reported timing) and res
 it stays non-nil across the ~5-minute disconnects and app relaunches. It is `nil`:
 - before the first status-0 `0x4E` of a pairing (and before `0x52` answered);
 - after `gracePeriodEndsAt` (a time check when read — no connection needed);
-- once the sensor itself reports the session over: expired states, failed states, or "stopped"
-  after warm-up (`G7SensorStatus.endsSession`; persisted, so also after a relaunch). An "OK" packet
-  whose time lies past the grace end does *not* end the session permanently (a garbled clock could);
+- once the sensor itself has reported the session over — expired states, failed states, or
+  "stopped" after warm-up (`G7SensorStatus.sessionEnd`) — **with response status 0 on two separate
+  connections** (safety review N1). A non-zero-status reply never counts (it may carry a cached state,
+  §4.1); one status-0 report counts only if the next connection's status-0 `0x4E` reports an end
+  again, and any status-0 report of a running session in between (OK, warm-up, calibration,
+  temporary issue) clears it. A single report is shown for that connection (`.expired` or
+  `.error(code:)`) and a later OK reading is used as usual, so one bad byte cannot end a session.
+  Once latched, the end (`G7SessionEnd`) is persisted in the pairing record; every later `0x4E`, OK
+  or not, shows it — `.expired`, `.failed(sensorFailed)` or `.failed(sessionStopped)`, never
+  `.active` — and publishes nothing; the same state is shown at launch, after Bluetooth returns, and
+  refuses calibration. The unconfirmed first report is not persisted (a relaunch in between needs two
+  new reports). An "OK" packet whose time lies past the grace end does *not* end the session
+  permanently (a garbled clock could);
 - for an unsupported sensor; when a new pairing is required; after "Forget sensor".
 A new pairing replaces it with the new sensor's session.
 
@@ -409,12 +442,12 @@ A `0x52` session length ≠ 907 200 s (e.g. 15-day `5200406f1400880e…` = 1 339
 |---|---|---|---|
 | `06` | OK | ok | `.active` / `.gracePeriod` / `.expired` by the derived session |
 | `02` | warm-up | warmUp | `.warmingUp(endsAt:)` |
-| `01` | session stopped | stopped | `.warmingUp` before warm-up end (first message after activation reports it, G7SensorKit `:40-66`), else `.error(1, …)` |
+| `01` | session stopped | stopped | `.warmingUp` before warm-up end (first message after activation reports it, G7SensorKit `:40-66`), else `.error(1, …)`; after two connections (§6.1a) `.failed(sessionStopped)` |
 | `04 05 07 0E` | BG(s) needed / calibration needed / outlier request | calibrationNeeded | `.error(code: byte, …)` |
 | `08 09 0A 0D` | calibration errors / out of calibration | calibrationError | `.error(code: byte, …)` |
 | `03 12` | excess noise / temporary issue | temporaryIssue | `.error(code: byte, …)` |
-| `0B 0C 10 11 13-16 19 1B 25` | failed | sensorFailed | `.error(code: byte, …)` |
-| `0F 18 1A 24` | expired / session ended | expired | `.expired` |
+| `0B 0C 10 11 13-16 19 1B 25` | failed | sensorFailed | `.error(code: byte, …)`; after two connections (§6.1a) `.failed(sensorFailed)` |
+| `0F 18 1A 24` | expired / session ended | expired | `.expired` (latched after two connections, §6.1a) |
 | other | unknown | unknown | `.error(code: byte, "Unknown sensor state 0x..")` |
 
 Names: `Generic/DexcomAlgorithmState.swift:19-81`. `0x18`: xDrip4iOS calls it `questionMarks`,
@@ -592,11 +625,13 @@ that Trio's loop cadence follows the sensor (§13).
 | 6-digit pairing-code branch (`DexcomG7AuthBridge.m:926-929`) | G7 codes are 4 digits; codes must be ASCII digits (xDrip's `isNumber` also accepts non-ASCII digits) |
 
 Behaviour changed relative to xDrip4iOS 7.1.0 (each explained where it is documented above):
-solicited-only authentication packets (§3.1); `paired` = byte 2 == `01` (§3.1); reading time = sensor
-clock − age (§5.1); session start fixed per serial with the 30 s two-anchor rule and monotonic dates
-(§5.1); "no value" raws and LOW/HIGH flags (§5.3); display-only values withheld (§5.4); serial with the
-iOS identifier (§5.5); `0x52` before GetData and no default timing (§2.3, §6.1); persisted
-`currentSession` (§6.1a); backfill state byte checked (§4.2); calibration clock pairing (§8.2).
+solicited-only authentication packets, and a later `05` rejection ends the connection at once
+(§3.1); `paired` = byte 2 == `01` (§3.1); reading time = sensor clock − age (§5.1); session start
+fixed per serial with the 30 s two-anchor rule, and dates kept in sensor-time order for live and
+backfill, across relaunches (§5.1); "no value" raws and LOW/HIGH flags (§5.3); display-only values
+withheld (§5.4); serial with the iOS identifier (§5.5); `0x52` before GetData and no default timing
+(§2.3, §6.1); persisted `currentSession`, ended only by a sensor-reported end on two connections
+(§6.1a); backfill state byte checked (§4.2); calibration clock pairing (§8.2).
 
 Layering for future sensor families (HANDOFF §1.1): `Messages/` (pure parsers), `Auth/`,
 `Connection/` (link + cycle), `Session/` (clock, pipeline, status), `Calibration/`, `Credentials/`,
@@ -620,3 +655,7 @@ package or folder behind `CGMSource`; nothing G7-specific leaks into GlucoseCore
    re-anchor (§5.1). Tell the orchestrator if this happens more than rarely.
 8. Signal loss: walk away for 20 min; `state` stays as last reported and the missed-readings alert
    fires from reading age (§2.2).
+9. Session end: at a real expiry (or failure), the ended state appears within two sensor wakes
+   (~10 min) and stays after an app relaunch (§6.1a). With the Dexcom or xDrip app also installed,
+   note whether `.failed(rejectedAfterAuthentication)` / `.failed(otherAppRejected)` ever appears
+   (§3.1).

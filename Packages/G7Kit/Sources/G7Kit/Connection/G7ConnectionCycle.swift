@@ -45,7 +45,8 @@ protocol G7ConnectionCycleDelegate: AnyObject {
 /// 3. on the `0x4E` response: notify Backfill (CGMG7Transmitter.swift:1165-1174), then write the
 ///    caller's control requests one at a time, each after the previous response;
 /// 4. backfill records arrive on Backfill, `59` on Write_Control ends them.
-/// Nothing from Write_Control or Backfill is forwarded before authentication completes (S2).
+/// Nothing from Write_Control or Backfill is forwarded before authentication completes, nor after a
+/// `05` rejection ends it (S2).
 final class G7ConnectionCycle: G7AuthSessionDelegate {
     weak var delegate: G7ConnectionCycleDelegate?
     let link: G7Link
@@ -62,6 +63,9 @@ final class G7ConnectionCycle: G7AuthSessionDelegate {
     }
 
     var isAuthenticated: Bool { auth.isAuthenticated }
+
+    /// `52` was written and not answered: the session length is still unknown.
+    var isAwaitingSessionLength: Bool { awaitingControlResponse == G7ControlRequest.extendedVersion }
 
     /// Call once the characteristics are discovered.
     func start(availableCharacteristics: Set<G7Characteristic>) {
@@ -149,6 +153,8 @@ final class G7ConnectionCycle: G7AuthSessionDelegate {
     func authSessionDidRejectSavedKey() { delegate?.cycleSavedKeyRejected() }
     func authSessionNeedsFullBootstrap() { delegate?.cycleNeedsFullBootstrap() }
     func authSessionDidFail(_ failure: G7AuthFailure) { delegate?.cycleAuthFailed(failure) }
+    /// The auth session has already left `.authenticated`, so Write_Control and Backfill data are no
+    /// longer forwarded; the delegate finishes this cycle before asking for the disconnect.
     func authSessionSawRejectionAfterAuthentication() { delegate?.cycleSawRejectionAfterAuthentication() }
     func authSessionLog(_ message: String) { delegate?.cycleLog(message) }
 
