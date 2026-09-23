@@ -18,8 +18,15 @@ public protocol CGMSource: Sendable {
     var readings: AsyncStream<GlucoseReading> { get }
     /// State changes, starting with the current state.
     var state: AsyncStream<SensorState> { get }
-    /// Added in Phase 0 (not in HANDOFF §4.3): the session this source is authenticated to, or
-    /// `nil`. Downstream consumers pass it to `LiveReadingGate` (S2).
+    /// Added in Phase 0 (not in HANDOFF §4.3): the sensor session this source has authenticated to.
+    /// Downstream consumers pass it to `LiveReadingGate` (S2).
+    ///
+    /// Lifetime rule: once known, it stays non-nil across the G7's routine ~5-minute
+    /// disconnect/reconnect cycle and across an app relaunch (the source persists it), until the
+    /// session actually ends — after the grace period, or when the sensor is stopped, fails, or is
+    /// replaced (then the new session). It is `nil` only before the first authentication of a
+    /// session or after that session has ended. Consumers may treat `nil` as "no valid session",
+    /// never as "temporarily disconnected".
     var currentSession: SensorSession? { get async }
     /// Starts scanning/connecting. `pairingCode` is the 4-digit sensor code, needed only to pair.
     func start(pairingCode: String?) async throws
