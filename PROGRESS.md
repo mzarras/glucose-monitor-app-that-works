@@ -49,25 +49,5 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D13 | Sounds and fonts are copied flat into the bundle root from `Resources/Sounds` and `Resources/Fonts` (file names must be unique). | `UNNotificationSound` requires sounds in the main bundle; `UIAppFonts` lists file names. |
 | D14 | Subagents are dispatched as general-purpose agents with the full role prompt (§2 verbatim, working rules, brief, return format) embedded; opus for ble/alerts/trio/reviewer roles. The `.claude/agents/*.md` definitions are committed and load in future sessions. | Custom agent types are read at session start, so this session could not select them by name. |
 | D15 | Branch model: `main` = Phase 0 bootstrap only until all §10 gates pass; day-to-day orchestrator work happens on `integration`; each workstream branches from `integration` in `../wt-<ws>`. | §10: every merge to `main` needs all gates; gate 4 needs Phase 2. The Phase 0 bootstrap commit itself could not pass gates 3–4 (no feature code yet). |
-
-## Discrepancies with HANDOFF (resolved)
-
-- Mockups are in `designs/`, not `design/`.
-- Trends mockup shows a 7/14/30/90 D selector, a forecast line (Now), and an "In range after runs" row; §7.3/§7.5/§6 win: 1/3/7/14/30/90 D, no forecast, after-runs row hidden until v1.1.
-- xDrip4iOS has a `7.1.1` tag after `7.1.0`. Reference checkout is `7.1.0` as specified; WS1 reviews the `7.1.0..7.1.1` diff for G7 fixes and reports.
-- Trio's App Group key is resolved through Info.plist `AppGroupID`, not a hard-coded string (see D2).
-
-## Open questions for Michael
-
-- Apply for the Critical Alerts entitlement (developer.apple.com → Contact → "Critical Alerts Entitlement request"), then flip `SENSOR_APP_ENTITLEMENTS` (D4).
-- Nightscout token (read + write), when ready — enter it in the app, not in chat or files.
-
-## Phase log
-
-### Phase 0 — Bootstrap (2026-09-23)
-
-- Scaffold: `LICENSE` (GPL-3.0), `NOTICE.md`, `README.md`, `project.yml` (XcodeGen 2.46.0), `Config/` xcconfigs, nine packages under `Packages/`, app + widget + test targets, `.claude/agents/*` (9 roles, §2 verbatim), `scripts/check.sh`.
-- Contracts in `GlucoseCore` with 17 contract tests (S2, S3, S4, S6 covered).
-- `vendor-ref/xdripswift` @ `7.1.0` (`0370937`), `vendor-ref/Trio` @ `29350e31a` with submodules.
-- Phase 0 contracts sent to an independent safety review (in progress).
-- Gate results on the scaffold: build Debug/Release pass with zero warnings; package tests pass; safety S2/S3/S4/S6 pass, S1/S5/S7/S8 have no tests yet; coverage minimums fail (no code yet); replay gate fails (Phase 2). Expected at this point.
+| D16 | **Sensor calibration added to v1** (not in HANDOFF). G7Kit ports xDrip4iOS 7.1.0's primary-mode calibration (`0x34` command, `0x32` bounds record, all rejection reasons); UI requires re-typed confirmation, warns on > 20 mg/dL / 20% difference from the current reading and when not steady. A calibration is never a reading (S1); no app-side calibration math. Nightscout "BG Check" upload and chart markers beyond the Now chart are v1.1. | Michael, 2026-09-23. |
+| D17 | Alarm audibility on silent: in-app `AVAudioSession .playback` while awake for a BLE event is the primary path (xDrip4iOS "override mute" model); Time Sensitive notifications for banner/vibration; Critical Alerts optional, used automatically if ever granted. Per-alert "Sound on silent" setting. Known gap to resolve in Phase 1 review: missed-readings/signal-loss alarms while the app is suspended cannot play audio. | Michael prefers not to depend on Critical Alerts; Time Sensitive does not bypass the silent switch. |
