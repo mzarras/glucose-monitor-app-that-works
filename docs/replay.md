@@ -60,7 +60,16 @@ for await reading in source.readings { _ = try await store.insert([reading]) }
   iterator cancels the stream).
 - **State** starts with `.searching` (emitted when the source is created), then follows the
   timeline's state events.
-- **`currentSession`** is nil until the first `start`, then the timeline's session.
+- **`currentSession`** follows the CGMSource lifetime rule (PROGRESS D28): nil until the first
+  `start`; then the timeline's session, unchanged across `stop`/`start` (a routine disconnect);
+  nil again once the session has ended — the timeline delivered `.expired` or `.failed` (set before
+  the state is yielded, so a consumer that sees `.expired` already gets nil), or replay time
+  (`clock.now()`) is past `gracePeriodEndsAt`. In `sensorExpiry` it becomes nil at +750 min; the
+  other scenarios' timelines end before their sessions do, so the session stays. A replay run is
+  not persisted: after an app relaunch a new source starts a new run. Tests:
+  `test_currentSessionLifetimeFollowsTheCGMSourceRule`,
+  `test_currentSessionAfterPlaybackEndsOnlyWhenTheScenarioEndsTheSession`,
+  `test_currentSessionEndsWhenReplayTimePassesTheGracePeriod`.
 - **`start` / `stop`.** `start` begins or resumes playback (a second `start` while playing does
   nothing). `stop` pauses and returns only once the playback task has ended, so nothing is
   delivered while stopped. After `start` again, events whose time passed while stopped are
@@ -224,7 +233,7 @@ newest first, device `synthetic-fixture`:
 
 ## Tests
 
-`swift test` in `Packages/ReplayKit` (35 tests; every test file is also inside `#if DEBUG`):
+`swift test` in `Packages/ReplayKit` (38 tests; every test file is also inside `#if DEBUG`):
 
 - determinism: same origin → same timeline and same streams; ids independent of the origin;
 - `test_S1_*`: a source emits exactly the script/export and nothing else (the playback log is the
@@ -239,4 +248,5 @@ newest first, device `synthetic-fixture`:
   source file is inside `#if DEBUG`;
 - stream rules: a 288-reading backfill burst arrives complete (scripted and Nightscout);
   `stop()` then `start()` keeps delivering on the same streams (scripted and Nightscout);
+- `currentSession` lifetime (nil before start, kept across stop/start, nil once ended);
 - milestones recomputed from the timelines.

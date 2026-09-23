@@ -93,6 +93,64 @@ final class ReplaySourceTests: XCTestCase {
         XCTAssertEqual(stopped, source.timeline.session, "the session stays known after stop")
     }
 
+    /// CGMSource.currentSession lifetime (D28): nil before the first authentication; unchanged
+    /// across stop/start (a routine disconnect); nil once the session has ended.
+    func test_currentSessionLifetimeFollowsTheCGMSourceRule() async throws {
+        let clock = ManualReplayClock(start: testOrigin)
+        let source = ReplayScenario.sensorExpiry.makeSource(origin: testOrigin, clock: clock)
+        let session = source.timeline.session
+        var states = source.state.makeAsyncIterator()
+
+        var current = await source.currentSession
+        XCTAssertNil(current, "before the first start")
+
+        try await source.start(pairingCode: nil)
+        current = await source.currentSession
+        XCTAssertEqual(current, session)
+
+        await clock.advance(to: testOrigin.addingTimeInterval(40 * minute))
+        let upToGrace = await states.next(3)
+        XCTAssertEqual(upToGrace.last, .gracePeriod(endsAt: session.gracePeriodEndsAt))
+        current = await source.currentSession
+        XCTAssertEqual(current, session, "the grace period is still the session")
+
+        await source.stop()
+        current = await source.currentSession
+        XCTAssertEqual(current, session, "a disconnect does not end the session")
+        await clock.advance(to: testOrigin.addingTimeInterval(700 * minute))
+        current = await source.currentSession
+        XCTAssertEqual(current, session, "still stopped, session not ended")
+
+        try await source.start(pairingCode: nil)
+        await clock.advance(to: testOrigin.addingTimeInterval(749 * minute))
+        current = await source.currentSession
+        XCTAssertEqual(current, session)
+
+        await clock.advance(to: testOrigin.addingTimeInterval(750 * minute))
+        let expired = await states.next(1)
+        XCTAssertEqual(expired, [.expired])
+        current = await source.currentSession
+        XCTAssertNil(current, "the session has ended")
+
+        await source.stop()
+        try await source.start(pairingCode: nil)
+        current = await source.currentSession
+        XCTAssertNil(current, "an ended session does not come back on reconnect")
+    }
+
+    func test_currentSessionAfterPlaybackEndsOnlyWhenTheScenarioEndsTheSession() async throws {
+        for scenario in ReplayScenario.allCases {
+            let source = scenario.makeSource(origin: testOrigin, clock: ImmediateReplayClock(start: testOrigin))
+            _ = try await playToEnd(source)
+            let current = await source.currentSession
+            if scenario == .sensorExpiry {
+                XCTAssertNil(current, "\(scenario)")
+            } else {
+                XCTAssertEqual(current, source.timeline.session, "\(scenario): the timeline ran out, the session did not")
+            }
+        }
+    }
+
     func test_stateStreamStartsWithTheCurrentStateBeforeStart() async {
         let source = ReplayScenario.sensorExpiry.makeSource(origin: testOrigin, clock: ManualReplayClock(start: testOrigin))
         var states = source.state.makeAsyncIterator()

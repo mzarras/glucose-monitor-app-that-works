@@ -27,6 +27,8 @@ public actor ReplaySource: CGMSource {
     private var nextEventIndex = 0
     private var playback: Task<Void, Never>?
     private var hasStarted = false
+    /// Set when the timeline delivers a state that ends the session (`.expired`, `.failed`).
+    private var sessionEnded = false
 
     /// Everything put on the streams so far, in order. `emit` and `deliver(state:)` are the only
     /// places that yield, and they append here first, so tests can prove the streams carry exactly
@@ -52,10 +54,19 @@ public actor ReplaySource: CGMSource {
         stateContinuation.yield(timeline.initialState)
     }
 
-    /// nil until the first `start` (a real source knows its session only once authenticated),
-    /// then the timeline's session.
+    /// The CGMSource lifetime rule: nil before the first `start` (a real source knows its session
+    /// only once authenticated); then the timeline's session, unchanged across `stop`/`start`
+    /// (a routine disconnect); nil again once the session has ended — the timeline delivered
+    /// `.expired` or `.failed`, or replay time is past `gracePeriodEndsAt`.
+    ///
+    /// A replay run is not persisted: after an app relaunch a new source starts a new run, so the
+    /// relaunch part of the rule does not apply.
     public var currentSession: SensorSession? {
-        hasStarted ? timeline.session : nil
+        get async {
+            guard hasStarted, !sessionEnded else { return nil }
+            guard await clock.now() <= timeline.session.gracePeriodEndsAt else { return nil }
+            return timeline.session
+        }
     }
 
     /// Begins or resumes playback. `pairingCode` is ignored. Calling it while playing does nothing.
@@ -103,6 +114,10 @@ public actor ReplaySource: CGMSource {
                 emit(reading)
             }
         case .state(let newState):
+            switch newState {
+            case .expired, .failed: sessionEnded = true
+            default: break
+            }
             emittedStates.append(newState)
             stateContinuation.yield(newState)
         }

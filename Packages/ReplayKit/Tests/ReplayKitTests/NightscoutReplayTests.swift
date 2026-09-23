@@ -138,6 +138,28 @@ final class NightscoutReplayTests: XCTestCase {
         XCTAssertEqual(first + rest, script)
     }
 
+    func test_currentSessionEndsWhenReplayTimePassesTheGracePeriod() async throws {
+        // No state event ends a Nightscout replay's session; replay time alone does (D28).
+        let export = try export()
+        let clock = ManualReplayClock(start: segmentA)
+        let source = try NightscoutReplaySource(export: export, origin: segmentA, clock: clock)
+        let session = source.timeline.session
+
+        var current = await source.currentSession
+        XCTAssertNil(current, "before the first start")
+        try await source.start(pairingCode: nil)
+        await source.stop()
+        current = await source.currentSession
+        XCTAssertEqual(current, session, "kept across a disconnect")
+
+        await clock.advance(to: session.gracePeriodEndsAt)
+        current = await source.currentSession
+        XCTAssertEqual(current, session, "valid up to and including the end of the grace period")
+        await clock.advance(by: 1)
+        current = await source.currentSession
+        XCTAssertNil(current, "ended after the grace period")
+    }
+
     func test_backfillBurstOf288OverdueReadingsArrivesComplete() async throws {
         // A 24-hour export (288 entries) started a day late: every reading is overdue at start and
         // is delivered in one burst before the consumer reads anything.
