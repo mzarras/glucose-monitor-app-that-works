@@ -43,6 +43,24 @@ final class GlucoseDisplayStateTests: XCTestCase {
         XCTAssertEqual(classify(Fixture.latest(.mgdl(105), minutesAgo: 12), .bluetoothUnavailable(.unauthorized)), .stale(Fixture.latest(.mgdl(105), minutesAgo: 12)))
     }
 
+    func test_clockMismatchLatchRules() {
+        let reading = Fixture.latest(.mgdl(105), minutesAgo: -10)
+        // Seen ahead → latched; stays latched after the clock passes the reading's date.
+        let latch = ClockMismatchLatch.update(latchedFor: nil, latest: reading, now: Fixture.now)
+        XCTAssertEqual(latch, reading.date)
+        XCTAssertEqual(ClockMismatchLatch.update(latchedFor: latch, latest: reading, now: Fixture.now.addingTimeInterval(3_600)), reading.date)
+        // Never latched for an ordinary reading; cleared by a newer one; nothing without a reading.
+        XCTAssertNil(ClockMismatchLatch.update(latchedFor: nil, latest: Fixture.latest(.mgdl(105), minutesAgo: 3), now: Fixture.now))
+        XCTAssertNil(ClockMismatchLatch.update(latchedFor: latch, latest: Fixture.latest(.mgdl(99), minutesAgo: 1), now: Fixture.now))
+        XCTAssertNil(ClockMismatchLatch.update(latchedFor: latch, latest: nil, now: Fixture.now))
+        // Applying: a number or an age becomes the mismatch; sensor messages stay.
+        XCTAssertEqual(ClockMismatchLatch.apply(.current(reading), latest: reading, latchedFor: latch), .clockMismatch(latest: reading))
+        XCTAssertEqual(ClockMismatchLatch.apply(.stale(reading), latest: reading, latchedFor: latch), .clockMismatch(latest: reading))
+        XCTAssertEqual(ClockMismatchLatch.apply(.noData(last: reading), latest: reading, latchedFor: latch), .clockMismatch(latest: reading))
+        XCTAssertEqual(ClockMismatchLatch.apply(.sensorExpired(last: reading), latest: reading, latchedFor: latch), .sensorExpired(last: reading))
+        XCTAssertEqual(ClockMismatchLatch.apply(.current(reading), latest: reading, latchedFor: nil), .current(reading))
+    }
+
     func test_sensorStates() {
         let reading = Fixture.latest(.mgdl(105), minutesAgo: 1)
         let warmUpEnd = Fixture.now.addingTimeInterval(3_600)

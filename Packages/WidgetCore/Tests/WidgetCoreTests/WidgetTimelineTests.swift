@@ -67,23 +67,54 @@ final class WidgetTimelineTests: XCTestCase {
         }
     }
 
-    /// Review M1: a snapshot whose reading is dated ahead of the phone's clock never shows it as
-    /// current until the clock has caught up.
+    /// Reviews M1 + N1: a snapshot whose reading is dated ahead of the phone's clock never shows
+    /// that reading as current or stale — not in any later entry of the timeline (after the clock
+    /// "catches up" with the wrong date), and not in a timeline built later from the same snapshot.
     func test_S5_futureDatedReadingIsNeverShownAsCurrent() {
         for minutesAhead in [5.0, 60, 600] {
             let reading = Fixture.latest(.mgdl(105), minutesAgo: -minutesAhead)
-            let entries = WidgetTimeline.entries(snapshot: snapshot(reading), now: Fixture.now)
+            let snap = snapshot(reading)
+            let entries = WidgetTimeline.entries(snapshot: snap, now: Fixture.now)
             XCTAssertEqual(entries.first?.display, .clockMismatch(latest: reading), "\(minutesAhead) min ahead")
-            for entry in entries where entry.date < reading.date.addingTimeInterval(-LiveReadingGate.futureTolerance) {
-                XCTAssertNil(entry.display.displayedReading, "\(minutesAhead) min ahead: number shown at \(entry.date)")
+            for entry in entries {
+                XCTAssertEqual(entry.display, .clockMismatch(latest: reading), "\(minutesAhead) min ahead: entry at \(entry.date)")
+                XCTAssertNil(entry.display.displayedReading)
             }
-            XCTAssertEqual(entries.map(\.date), [
-                Fixture.now,
-                reading.date.addingTimeInterval(-LiveReadingGate.futureTolerance),
-                reading.date.addingTimeInterval(Freshness.staleAfter),
-                reading.date.addingTimeInterval(Freshness.noDataAfter),
-            ])
+            // Timelines built later (reloads), before and after the clock passes the reading's date,
+            // with the persisted latch — and even without it, because the reading is dated ahead of
+            // the snapshot's own write time.
+            let latch = WidgetTimeline.clockMismatchLatch(snapshot: snap, now: Fixture.now, previous: nil)
+            XCTAssertEqual(latch, reading.date)
+            for later in [reading.date.addingTimeInterval(-120), reading.date, reading.date.addingTimeInterval(5 * 60), reading.date.addingTimeInterval(15 * 60)] {
+                for previous in [latch, nil] {
+                    for entry in WidgetTimeline.entries(snapshot: snap, now: later, latchedFor: previous) {
+                        XCTAssertNil(entry.display.displayedReading, "\(minutesAhead) min ahead, reload at \(later): number shown")
+                        if case .current = entry.display { XCTFail("current after a clock mismatch") }
+                    }
+                }
+            }
         }
+    }
+
+    /// Review N1: the phone clock moved back after the app wrote the snapshot.
+    func test_S5_clockMovedBackAfterTheSnapshotIsAMismatch() {
+        let reading = Fixture.latest(.mgdl(105), minutesAgo: 3)
+        let snap = snapshot(reading) // written at Fixture.now
+        let earlier = Fixture.now.addingTimeInterval(-60 * 60)
+        let entries = WidgetTimeline.entries(snapshot: snap, now: earlier)
+        XCTAssertTrue(entries.allSatisfy { $0.display == .clockMismatch(latest: reading) })
+        // Within the 60 s tolerance it is not.
+        XCTAssertEqual(WidgetTimeline.entries(snapshot: snap, now: Fixture.now.addingTimeInterval(-30)).first?.display, .current(reading))
+    }
+
+    /// Review N1: a newer reading clears the latch.
+    func test_newerReadingClearsTheMismatchLatch() {
+        let old = Fixture.latest(.mgdl(105), minutesAgo: -600)
+        let fresh = Fixture.latest(.mgdl(110), minutesAgo: 2)
+        let newSnapshot = snapshot(fresh)
+        let latch = WidgetTimeline.clockMismatchLatch(snapshot: newSnapshot, now: Fixture.now, previous: old.date)
+        XCTAssertNil(latch)
+        XCTAssertEqual(WidgetTimeline.entries(snapshot: newSnapshot, now: Fixture.now, latchedFor: old.date).first?.display, .current(fresh))
     }
 
     // MARK: warm-up / expired

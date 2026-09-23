@@ -61,11 +61,12 @@ enum AppBanners {
         latestLiveReadingDate: Date?,
         health: ServiceHealth,
         now: Date,
+        clockMismatchLatched: Bool = false,
         context: DisplayContext = .current
     ) -> [AppBanner] {
         var banners: [AppBanner] = []
 
-        if let banner = missedReadings(sensorState: sensorState, latest: latestLiveReadingDate, now: now, context: context) {
+        if let banner = missedReadings(sensorState: sensorState, latest: latestLiveReadingDate, now: now, clockMismatchLatched: clockMismatchLatched, context: context) {
             banners.append(banner)
         }
         banners += sensorBanners(sensorState, now: now, context: context)
@@ -144,7 +145,7 @@ enum AppBanners {
 
     /// No live reading for 15 min while the sensor should be delivering (S5). Not raised when no
     /// sensor is paired, during warm-up, or when the sensor has ended (those have their own banner).
-    static func missedReadings(sensorState: SensorState, latest: Date?, now: Date, context: DisplayContext = .current) -> AppBanner? {
+    static func missedReadings(sensorState: SensorState, latest: Date?, now: Date, clockMismatchLatched: Bool = false, context: DisplayContext = .current) -> AppBanner? {
         switch sensorState {
         case .notPaired, .expired, .failed, .error:
             return nil
@@ -161,12 +162,12 @@ enum AppBanners {
                 action: .openSensorSettings, actionTitle: "Sensor")
         }
         // A reading dated ahead of the phone's clock (clock moved back) is not a current reading
-        // (review M1), however new it looks.
-        if latest > now.addingTimeInterval(LiveReadingGate.futureTolerance) {
+        // (review M1), however new it looks — and stays so after the clock catches up (N1).
+        if clockMismatchLatched || latest > now.addingTimeInterval(LiveReadingGate.futureTolerance) {
             return AppBanner(
                 kind: .missedReadings, severity: .critical,
                 title: "No current reading",
-                detail: "The latest reading is dated \(TimeText.time(latest, context)), ahead of this phone's clock. Check Settings › General › Date & Time and turn on Set Automatically.",
+                detail: "The latest reading is dated \(TimeText.time(latest, context)), which doesn't match this phone's clock. Check Settings › General › Date & Time and turn on Set Automatically.",
                 action: nil, actionTitle: nil)
         }
         let age = now.timeIntervalSince(latest)

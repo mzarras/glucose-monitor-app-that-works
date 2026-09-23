@@ -78,7 +78,7 @@ final class AppBannerTests: XCTestCase {
             let banner = result.first { $0.kind == .missedReadings }
             XCTAssertEqual(banner?.severity, .critical, "\(ahead) min ahead")
             XCTAssertEqual(banner?.title, "No current reading", "\(ahead) min ahead")
-            XCTAssertTrue(banner?.detail.contains("ahead of this phone's clock") ?? false)
+            XCTAssertTrue(banner?.detail.contains("doesn't match this phone's clock") ?? false)
         }
         XCTAssertNil(banners(latestAge: -0.5).first { $0.kind == .missedReadings }, "within the 60 s tolerance")
     }

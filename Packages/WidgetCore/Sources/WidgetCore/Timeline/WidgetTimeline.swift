@@ -5,6 +5,9 @@
 //   latest reading + 20 min → "no data" (the number disappears)
 //   warm-up end             → stops claiming warm-up (shows "no data" until the app writes again)
 //   grace-period end        → "sensor expired"
+// A clock mismatch (reading dated ahead of the phone, or inconsistent with the snapshot's write
+// time) is latched for the whole timeline and across reloads (ClockMismatchLatch, review N1): no
+// later entry shows that reading as current or stale.
 // Every entry shows the snapshot's own reading or none at all; entries never carry a value the
 // snapshot does not contain (S1, asserted in WidgetTimelineTests).
 
@@ -36,12 +39,21 @@ public enum WidgetTimeline {
     /// case the app wrote a snapshot but its reload request was throttled.
     public static let idleRefreshInterval: TimeInterval = 15 * 60
 
+    /// The clock-mismatch latch for this snapshot at `now` (persist it and pass it back next time).
+    public static func clockMismatchLatch(snapshot: WidgetSnapshot?, now: Date, previous: Date?) -> Date? {
+        guard let snapshot else { return nil }
+        return ClockMismatchLatch.update(latchedFor: previous, latest: snapshot.latest, now: now, snapshotWrittenAt: snapshot.writtenAt)
+    }
+
     /// Timeline entries, ascending by date, starting at `now`.
-    /// - Parameter snapshot: the last snapshot the app wrote, or `nil` if none (or unreadable).
-    public static func entries(snapshot: WidgetSnapshot?, now: Date) -> [WidgetEntryContent] {
+    /// - Parameters:
+    ///   - snapshot: the last snapshot the app wrote, or `nil` if none (or unreadable).
+    ///   - latchedFor: the latch persisted from the previous timeline, if any.
+    public static func entries(snapshot: WidgetSnapshot?, now: Date, latchedFor: Date? = nil) -> [WidgetEntryContent] {
         guard let snapshot else {
             return [WidgetEntryContent(date: now, display: .noData(last: nil), recent: [], accent: .default, snapshotWrittenAt: nil)]
         }
+        let latch = clockMismatchLatch(snapshot: snapshot, now: now, previous: latchedFor)
         let future = GlucoseDisplayState
             .transitionDates(latest: snapshot.latest, sensorState: snapshot.sensorState)
             .filter { $0 > now }
@@ -51,7 +63,11 @@ public enum WidgetTimeline {
         return dates.map { date in
             WidgetEntryContent(
                 date: date,
-                display: GlucoseDisplayState.classify(latest: snapshot.latest, sensorState: snapshot.sensorState, now: date),
+                display: ClockMismatchLatch.apply(
+                    GlucoseDisplayState.classify(latest: snapshot.latest, sensorState: snapshot.sensorState, now: date),
+                    latest: snapshot.latest,
+                    latchedFor: latch
+                ),
                 recent: snapshot.recent,
                 accent: snapshot.accent,
                 snapshotWrittenAt: snapshot.writtenAt

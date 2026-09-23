@@ -63,6 +63,9 @@ final class CalibrationRulesTests: XCTestCase {
         // No current reading (stale) → "are you sure".
         XCTAssertEqual(CalibrationRules.difference(fingerstick: 105, latest: latest(.mgdl(105), ageMinutes: 12), sensorState: activeSensor, now: t0), .noCurrentReading)
         XCTAssertEqual(CalibrationRules.difference(fingerstick: 105, latest: nil, sensorState: activeSensor, now: t0), .noCurrentReading)
+        // Review N1: a latched clock mismatch means there is no current reading to compare with.
+        let fresh = latest(.mgdl(105), ageMinutes: 3)
+        XCTAssertEqual(CalibrationRules.difference(fingerstick: 105, latest: fresh, sensorState: activeSensor, now: t0, clockMismatchLatchedFor: fresh.date), .noCurrentReading)
         XCTAssertNotNil(CalibrationRules.largeDifferenceMessage(.sensorFlag(.belowRange), fingerstick: 45))
         XCTAssertFalse(CalibrationRules.largeDifferenceMessage(.sensorFlag(.belowRange), fingerstick: 45)!.contains("40"), "S4")
     }

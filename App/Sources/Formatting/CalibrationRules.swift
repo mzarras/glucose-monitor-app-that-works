@@ -107,9 +107,13 @@ enum CalibrationRules {
         difference > absoluteLimitMgdl && difference * relativeLimitDivisor > sensorMgdl
     }
 
-    /// Compares with the latest live reading, if it is current (< 10 min, same rule as the hero).
-    static func difference(fingerstick: Int, latest: LatestReading?, sensorState: SensorState, now: Date) -> CalibrationDifference {
-        guard case .current(let reading) = GlucoseDisplayState.classify(latest: latest, sensorState: sensorState, now: now) else {
+    /// Compares with the latest live reading, if it is current (< 10 min, same rule as the hero,
+    /// including a latched clock mismatch).
+    static func difference(fingerstick: Int, latest: LatestReading?, sensorState: SensorState, now: Date, clockMismatchLatchedFor: Date? = nil) -> CalibrationDifference {
+        let display = ClockMismatchLatch.apply(
+            GlucoseDisplayState.classify(latest: latest, sensorState: sensorState, now: now),
+            latest: latest, latchedFor: clockMismatchLatchedFor)
+        guard case .current(let reading) = display else {
             return .noCurrentReading
         }
         guard let sensor = reading.value.numericMgdl else { return .sensorFlag(reading.value) }
@@ -203,9 +207,10 @@ struct CalibrationFlow: Equatable, Sendable {
 
     /// Confirm → are-you-sure, or straight to a request ready to submit.
     /// - Returns: the request to submit, or nil if another step is needed (or the retype doesn't match).
-    mutating func continueFromConfirm(latest: LatestReading?, sensorState: SensorState, now: Date) -> CalibrationRequest? {
+    mutating func continueFromConfirm(latest: LatestReading?, sensorState: SensorState, now: Date, clockMismatchLatchedFor: Date? = nil) -> CalibrationRequest? {
         guard case .confirm(let value, let takenAt) = step, CalibrationRules.retypeMatches(value, retyped: confirmText) else { return nil }
-        let difference = CalibrationRules.difference(fingerstick: value, latest: latest, sensorState: sensorState, now: now)
+        let difference = CalibrationRules.difference(fingerstick: value, latest: latest, sensorState: sensorState, now: now,
+                                                     clockMismatchLatchedFor: clockMismatchLatchedFor)
         if difference.needsExtraConfirmation {
             step = .largeDifference(value: value, takenAt: takenAt, difference: difference)
             return nil

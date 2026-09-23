@@ -110,6 +110,17 @@ final class AppModel {
 
     // MARK: - Now
 
+    /// Review N1: re-evaluate the clock-mismatch latch. Called by the root view's clock (every
+    /// 15 s while in the foreground, like the Now screen's); Phase 2 also calls it after every new
+    /// state and must carry `clockMismatchLatchedFor` over when it rebuilds `NowViewState`.
+    func updateClockMismatchLatch(now date: Date) {
+        let updated = now.updatingClockMismatchLatch(now: date)
+        if updated.clockMismatchLatchedFor != now.clockMismatchLatchedFor {
+            now = updated
+            calibration.clockMismatchLatchedFor = updated.clockMismatchLatchedFor
+        }
+    }
+
     func selectChartWindow(_ window: ChartWindow) {
         now.chartWindow = window
     }

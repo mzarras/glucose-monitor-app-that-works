@@ -85,11 +85,17 @@ runs again (S5):
 | When | Entry |
 |---|---|
 | now | current state |
-| latest − 60 s | only when the reading is dated ahead of the phone's clock (clock moved back): until then **"Check phone clock"**, no number |
 | latest + 10 min | **stale**: number in the muted colour (≥ 3:1, not faded), VoiceOver "Stale: 105 …", "STALE · 10 min ago" in the alert colour, chart dimmed to 0.6 without the "latest" dot |
 | latest + 20 min | **no data**: the number is gone; "No data · Last reading 20 min ago" |
 | warm-up end | stops claiming warm-up; *No data* until the app writes a reading |
 | grace-period end | *Sensor expired* |
+
+**Clock mismatch (reviews M1, N1).** If the latest reading is dated more than 60 s ahead of the
+phone's clock, dated after the snapshot's own write time, or the clock is now earlier than that
+write time (the clock was moved back), the widget shows **"Check phone clock"** and no number. This
+is latched (`ClockMismatchLatch`): every later entry of the timeline, and every timeline built from
+the same reading (the extension keeps the reading's date in its own `UserDefaults`), stays a
+mismatch — even after the clock passes the reading's date — until the app writes a newer reading.
 
 Timeline policy: `.after(last entry + 1 min)`, or `.after(now + 15 min)` when nothing is scheduled
 (so a snapshot written while the app's reload request was throttled is still picked up).

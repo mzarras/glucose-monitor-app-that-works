@@ -28,9 +28,12 @@ struct OnboardingActions {
 struct OnboardingFlowView: View {
     let state: OnboardingState
     let actions: OnboardingActions
-    /// Drawn on top in DEBUG builds (D19): pairing a real sensor from a DEBUG build must be
-    /// unmistakable (review M3). Nil in Release.
-    var buildBanner: BuildBanner? = BuildBanner.forThisBuild(replayScenario: nil)
+    /// DEBUG only: the active replay scenario, named in the build banner.
+    var replayScenario: String? = nil
+
+    /// Drawn on top in every DEBUG build (D19): pairing a real sensor from a DEBUG build must be
+    /// unmistakable (review M3). Computed here, not passed in, so no caller can hide it (n3).
+    var buildBanner: BuildBanner? { BuildBanner.forThisBuild(replayScenario: replayScenario) }
 
     var body: some View {
         VStack(spacing: 0) {

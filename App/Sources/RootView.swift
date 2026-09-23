@@ -15,12 +15,15 @@ struct RootView: View {
             }
             screen
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            TimelineView(.periodic(from: .now, by: 30)) { timeline in
+            TimelineView(.periodic(from: .now, by: 15)) { timeline in
                 SensorTabBar(
                     selected: model.selectedTab,
                     nowHasProblems: !model.now.banners(now: timeline.date).isEmpty,
                     select: { model.selectedTab = $0 }
                 )
+                .onChange(of: timeline.date, initial: true) { _, date in
+                    model.updateClockMismatchLatch(now: date)
+                }
             }
         }
         .editorialScreen()
@@ -28,12 +31,12 @@ struct RootView: View {
         .tint(Theme.accentColor(model.accent, scheme: colorScheme))
         .preferredColorScheme(model.settings.appearance.colorScheme)
         .sheet(isPresented: $model.isCalibrationPresented) {
-            CalibrationFlowView(state: model.calibration, buildBanner: model.now.buildBanner, submit: model.submitCalibration, close: { model.isCalibrationPresented = false })
+            CalibrationFlowView(state: model.calibration, replayScenario: model.now.replayScenario, submit: model.submitCalibration, close: { model.isCalibrationPresented = false })
                 .environment(\.accentChoice, model.accent)
         }
         .fullScreenCover(isPresented: onboardingPresented) {
             if let onboarding = model.onboarding {
-                OnboardingFlowView(state: onboarding, actions: onboardingActions, buildBanner: model.now.buildBanner)
+                OnboardingFlowView(state: onboarding, actions: onboardingActions, replayScenario: model.now.replayScenario)
                     .environment(\.accentChoice, model.accent)
             }
         }

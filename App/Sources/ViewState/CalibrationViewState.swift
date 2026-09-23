@@ -14,6 +14,9 @@ struct CalibrationViewState: Equatable, Sendable {
     var acceptedRange: ClosedRange<Int>?
     /// The most recent submission and what happened to it.
     var lastSubmission: CalibrationSubmission?
+    /// Review N1: same latch as `NowViewState.clockMismatchLatchedFor`; while set for the latest
+    /// reading there is no current reading to compare with.
+    var clockMismatchLatchedFor: Date? = nil
 
     static let unavailable = CalibrationViewState(sensorState: .notPaired, latestLiveReading: nil, acceptedRange: nil, lastSubmission: nil)
 }

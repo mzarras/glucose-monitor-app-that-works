@@ -68,6 +68,36 @@ final class NowFormattingTests: XCTestCase {
         }
     }
 
+    /// Review N1: the Now screen keeps the mismatch until a newer reading arrives, even after the
+    /// phone's clock passes the (wrong) reading date — as the app's clock ticks, minute by minute.
+    func test_S5_clockMismatchStaysLatchedUntilANewerReading() {
+        for ahead in [5.0, 60, 600] {
+            var state = NowViewState.empty
+            state.sensorState = activeSensor
+            let reading = latest(.mgdl(105), ageMinutes: -ahead)
+            state.latestLiveReading = reading
+            var clock = t0
+            let end = reading.date.addingTimeInterval(30 * 60)
+            while clock <= end {
+                state = state.updatingClockMismatchLatch(now: clock)
+                let display = state.display(now: clock)
+                XCTAssertNil(display.displayedReading, "\(ahead) min ahead: a number at \(clock)")
+                guard case .message = NowHero.make(display, now: clock) else {
+                    XCTFail("\(ahead) min ahead: hero shows a reading at \(clock)")
+                    break
+                }
+                XCTAssertEqual(state.banners(now: clock, context: testContext).first?.title, "No current reading", "\(ahead) min ahead at \(clock)")
+                clock = clock.addingTimeInterval(60)
+            }
+            // A newer live reading clears the latch.
+            let fresh = LatestReading(date: clock.addingTimeInterval(-60), value: .mgdl(98), trend: .flat, delta: nil)
+            state.latestLiveReading = fresh
+            state = state.updatingClockMismatchLatch(now: clock)
+            XCTAssertNil(state.clockMismatchLatchedFor)
+            XCTAssertEqual(state.display(now: clock), .current(fresh))
+        }
+    }
+
     /// Review M2: the Now chart is scrubbable in every window.
     @MainActor
     func test_nowChartIsScrubbable() {

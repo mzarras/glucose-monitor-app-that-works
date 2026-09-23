@@ -222,7 +222,7 @@ struct WidgetDetailText: View {
             case .notPaired:
                 Text(verbatim: "Pair a sensor in the app")
             case .clockMismatch:
-                Text(verbatim: "Latest reading is dated ahead of this phone's clock")
+                Text(verbatim: "The latest reading's time doesn't match this phone's clock")
             case .current, .stale:
                 EmptyView()
             }

@@ -10,17 +10,20 @@ struct CalibrationFlowView: View {
     let state: CalibrationViewState
     let submit: @MainActor (CalibrationRequest) -> Void
     let close: @MainActor () -> Void
-    /// Drawn on top in DEBUG builds (D19, review M3). Nil in Release.
-    let buildBanner: BuildBanner?
+    /// DEBUG only: the active replay scenario, named in the build banner.
+    let replayScenario: String?
     @State private var flow: CalibrationFlow
 
-    init(state: CalibrationViewState, initialFlow: CalibrationFlow = CalibrationFlow(),
-         buildBanner: BuildBanner? = BuildBanner.forThisBuild(replayScenario: nil),
+    /// Drawn on top in every DEBUG build (D19, review M3). Computed here, not passed in, so no
+    /// caller can hide it (n3).
+    var buildBanner: BuildBanner? { BuildBanner.forThisBuild(replayScenario: replayScenario) }
+
+    init(state: CalibrationViewState, initialFlow: CalibrationFlow = CalibrationFlow(), replayScenario: String? = nil,
          submit: @escaping @MainActor (CalibrationRequest) -> Void, close: @escaping @MainActor () -> Void) {
         self.state = state
         self.submit = submit
         self.close = close
-        self.buildBanner = buildBanner
+        self.replayScenario = replayScenario
         _flow = State(initialValue: initialFlow)
     }
 
@@ -152,7 +155,8 @@ struct CalibrationContent: View {
                 FingerstickFigure(value: value, takenAt: takenAt)
             }
             Button("Confirm") {
-                if let request = flow.continueFromConfirm(latest: state.latestLiveReading, sensorState: state.sensorState, now: now) {
+                if let request = flow.continueFromConfirm(latest: state.latestLiveReading, sensorState: state.sensorState, now: now,
+                                                          clockMismatchLatchedFor: state.clockMismatchLatchedFor) {
                     submit(request)
                 }
             }
@@ -207,7 +211,10 @@ struct CalibrationContent: View {
 
     /// "Sensor now: 105 mg/dL, steady, 3 min ago" for context; from the live reading only.
     private var sensorNow: String {
-        guard case .current(let reading) = GlucoseDisplayState.classify(latest: state.latestLiveReading, sensorState: state.sensorState, now: now) else {
+        let display = ClockMismatchLatch.apply(
+            GlucoseDisplayState.classify(latest: state.latestLiveReading, sensorState: state.sensorState, now: now),
+            latest: state.latestLiveReading, latchedFor: state.clockMismatchLatchedFor)
+        guard case .current(let reading) = display else {
             return "NO CURRENT SENSOR READING TO COMPARE WITH"
         }
         let age = AgeText.upper(minutes: AgeText.wholeMinutes(from: reading.date, to: now))

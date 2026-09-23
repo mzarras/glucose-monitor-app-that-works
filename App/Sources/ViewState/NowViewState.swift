@@ -26,17 +26,37 @@ struct NowViewState: Equatable, Sendable {
     /// DEBUG only: name of the active ReplayKit scenario, shown in the build banner. Always nil in
     /// Release builds.
     var replayScenario: String?
+    /// Review N1: the latest reading's date while a clock mismatch is latched for it. Maintained
+    /// with `updatingClockMismatchLatch(now:)` on every clock tick and every new state; cleared
+    /// when a newer live reading arrives. Phase 2 persists it with the rest of the Now state.
+    var clockMismatchLatchedFor: Date? = nil
 
     /// The DEBUG/REPLAY banner. Computed, not stored, so no code path can clear it in a DEBUG
     /// build; nil in Release.
     var buildBanner: BuildBanner? { BuildBanner.forThisBuild(replayScenario: replayScenario) }
 
     func banners(now: Date, context: DisplayContext = .current) -> [AppBanner] {
-        AppBanners.make(sensorState: sensorState, latestLiveReadingDate: latestLiveReading?.date, health: health, now: now, context: context)
+        AppBanners.make(sensorState: sensorState, latestLiveReadingDate: latestLiveReading?.date, health: health, now: now,
+                        clockMismatchLatched: isClockMismatchLatched, context: context)
     }
 
     func display(now: Date) -> GlucoseDisplayState {
-        GlucoseDisplayState.classify(latest: latestLiveReading, sensorState: sensorState, now: now)
+        ClockMismatchLatch.apply(
+            GlucoseDisplayState.classify(latest: latestLiveReading, sensorState: sensorState, now: now),
+            latest: latestLiveReading,
+            latchedFor: clockMismatchLatchedFor
+        )
+    }
+
+    var isClockMismatchLatched: Bool {
+        clockMismatchLatchedFor != nil && clockMismatchLatchedFor == latestLiveReading?.date
+    }
+
+    /// The latch after looking at the clock `now` (pure; call on every tick and state change).
+    func updatingClockMismatchLatch(now: Date) -> NowViewState {
+        var copy = self
+        copy.clockMismatchLatchedFor = ClockMismatchLatch.update(latchedFor: clockMismatchLatchedFor, latest: latestLiveReading, now: now)
+        return copy
     }
 
     /// Nothing known yet (before Phase 2 wiring, and a fresh install).

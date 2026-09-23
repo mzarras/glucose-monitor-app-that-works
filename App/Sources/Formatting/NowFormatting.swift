@@ -50,7 +50,7 @@ enum NowHero: Equatable, Sendable {
         case .clockMismatch(let latest):
             return .message(
                 title: "Phone clock doesn't match",
-                detail: "The latest reading is dated \(TimeText.time(latest.date, context)), ahead of this phone's clock, so it can't be shown as current. Check Settings › General › Date & Time and turn on Set Automatically.",
+                detail: "The latest reading is dated \(TimeText.time(latest.date, context)), which doesn't match this phone's clock, so it can't be shown as current. Check Settings › General › Date & Time and turn on Set Automatically.",
                 action: nil)
         }
     }

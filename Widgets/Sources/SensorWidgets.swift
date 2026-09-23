@@ -53,7 +53,11 @@ struct GlucoseTimelineProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping @Sendable (Timeline<GlucoseEntry>) -> Void) {
         let now = Date()
-        let contents = WidgetTimeline.entries(snapshot: SnapshotSource.read(), now: now)
+        let snapshot = SnapshotSource.read()
+        // Review N1: a clock mismatch stays latched across reloads until a newer reading arrives.
+        let latch = WidgetTimeline.clockMismatchLatch(snapshot: snapshot, now: now, previous: MismatchLatchStore.load())
+        MismatchLatchStore.save(latch)
+        let contents = WidgetTimeline.entries(snapshot: snapshot, now: now, latchedFor: latch)
         let reload = WidgetTimeline.nextReload(entries: contents, now: now)
         completion(Timeline(entries: contents.map(GlucoseEntry.init), policy: .after(reload)))
     }
@@ -74,6 +78,24 @@ enum SnapshotSource {
             return nil
         }
         return URL(string: "\(scheme)://now")
+    }
+}
+
+/// The widget extension's own memory of a latched clock mismatch (the reading's date).
+enum MismatchLatchStore {
+    private static let key = "clockMismatchLatchedFor"
+
+    static func load() -> Date? {
+        let seconds = UserDefaults.standard.double(forKey: key)
+        return seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
+    }
+
+    static func save(_ date: Date?) {
+        if let date {
+            UserDefaults.standard.set(date.timeIntervalSince1970, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 }
 

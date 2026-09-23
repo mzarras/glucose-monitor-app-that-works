@@ -102,6 +102,22 @@ final class AccessibilityLayoutTests: XCTestCase {
         }
     }
 
+    /// Review n2: negative control. The pre-fix hero layout (fixed-size side column next to a
+    /// number allowed to shrink to 40 %) must fail the same measurement at AX5, proving the check
+    /// above can detect a truncated hero.
+    @MainActor
+    func test_harnessDetectsTheOldTruncatingHeroLayout() {
+        for value in [GlucoseValue.belowRange, .aboveRange] {
+            let numberText = Text(verbatim: GlucoseText.value(value))
+                .font(NowHeroView.numberFont(value))
+                .tracking(NowHeroView.numberTracking(value))
+            let sizes = LayoutHarness.probe(LegacyHeroLayout(value: value), width: 350, typeSize: .accessibility5)
+            let ideal = LayoutHarness.idealSize(numberText, typeSize: .accessibility5)
+            guard let number = sizes["hero.number"] else { return XCTFail("legacy hero not rendered") }
+            XCTAssertLessThan(number.width + 0.5, ideal.width, "the old layout should have squeezed \(GlucoseText.value(value))")
+        }
+    }
+
     // MARK: Review m9
 
     @MainActor
@@ -146,6 +162,10 @@ final class AccessibilityLayoutTests: XCTestCase {
     @MainActor
     func test_buildBannerIsDrawnOnOnboardingAndCalibration() {
         #if DEBUG
+        // n3: computed inside the flows; a caller can name a replay but cannot remove the banner.
+        XCTAssertEqual(OnboardingFlowView(state: .initial, actions: .noop).buildBanner?.title, "DEBUG BUILD")
+        XCTAssertEqual(CalibrationFlowView(state: .unavailable, replayScenario: "steady", submit: { _ in }, close: {}).buildBanner?.title,
+                       "DEBUG BUILD · REPLAY: STEADY")
         let onboarding = LayoutHarness.probe(OnboardingFlowView(state: .initial, actions: .noop), width: 390, typeSize: .large)
         XCTAssertGreaterThan(onboarding["build.banner"]?.height ?? 0, 0, "DEBUG banner missing on onboarding (pairing happens here)")
         let calibration = LayoutHarness.probe(CalibrationFlowView(state: .unavailable, submit: { _ in }, close: {}), width: 390, typeSize: .large)
@@ -153,5 +173,26 @@ final class AccessibilityLayoutTests: XCTestCase {
         #else
         XCTAssertNil(OnboardingFlowView(state: .initial, actions: .noop).buildBanner)
         #endif
+    }
+}
+
+/// The hero layout before review B1, kept only as the negative control above.
+private struct LegacyHeroLayout: View {
+    let value: GlucoseValue
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 16) {
+            Text(verbatim: GlucoseText.value(value))
+                .font(NowHeroView.numberFont(value))
+                .tracking(NowHeroView.numberTracking(value))
+                .lineLimit(1)
+                .minimumScaleFactor(0.4)
+                .layoutProbe("hero.number")
+            VStack(alignment: .leading, spacing: 6) {
+                TrendArrowView(arrow: .flat, size: 32, lineWidth: 2).frame(height: 24)
+                Text(verbatim: GlucoseText.flagCaption(value) ?? GlucoseText.unit).font(Typography.label(size: 12))
+            }
+            .fixedSize()
+        }
     }
 }
