@@ -65,7 +65,13 @@ below 1970.
 | `sgv` > 400 | `.aboveRange` (HIGH) | `lib/client/index.js:546-547`, `lib/sandbox.js:251-252` |
 
 The classification is exactly Nightscout's own display rule, so a value shows the same here as on
-the Nightscout site. `trendRate` is always `nil`: Nightscout has no rate field (`direction` and
+the Nightscout site.
+
+**LOW/HIGH that were already lost.** History uploaded by Trio's native G7 path holds a sensor LOW
+as sgv 40 and a HIGH as 400 (Trio sends 40/400 and drops the flag; PROGRESS D21). Those entries
+are indistinguishable from real 40 and 400 readings, so they import as the numbers 40 and 400; the
+flags cannot be recovered. Only entries uploaded as 39/401 (e.g. by this app)
+import as LOW/HIGH. `trendRate` is always `nil`: Nightscout has no rate field (`direction` and
 `trend` are arrow buckets, `delta` is a difference between readings). The timestamp is the entry's
 `date`, unchanged (S3).
 
@@ -93,25 +99,29 @@ sensor reported).
 **Time zone**: timestamps are local wall-clock time without an offset. The app asks which zone the
 data was recorded in (default: the current one) and passes it to the parser.
 
-**DST rules** (`LocalTimeResolver`, `ClarityExportParser`): a local time is converted by finding
+**DST rules** (`LocalTimeResolver`, `FallBackHourResolver`): a local time is converted by finding
 every instant at which the zone's clocks showed it (candidate offsets are the zone's offsets a day
 either side).
 
 - *Spring forward* (e.g. 02:30 on the US spring-forward day): no instant exists. The row is
   rejected and counted (`rejectedNonexistentLocalTime`).
-- *Fall back* (e.g. 01:30 on the US fall-back day happens twice, earlier E and later L). EGV rows
-  are in chronological order in the file, so with P = the previous EGV row's instant:
-  1. no previous row → E;
-  2. E after P → E (still the first pass);
-  3. E equal to P (same wall-clock time as the previous row) → L if the two rows' transmitter
-     times differ by ≥ 30 min, else E (the row repeats the previous reading and is dropped as a
-     duplicate — inventing a reading an hour away is worse than dropping a repeat, S1);
-  4. L not before P → L (the clock went back: second pass);
-  5. otherwise the file is out of order there → rejected, counted (`rejectedAmbiguousLocalTime`).
+- *Fall back* (e.g. 01:30 on the US fall-back day happens twice, earlier E and later L):
+  1. **Transmitter time decides when available.** "Transmitter Time (Long Integer)" counts seconds
+     on the transmitter's own clock, which does not jump at DST. Take the nearest row in file
+     order whose instant is already known and has a transmitter time from the same transmitter
+     (same "Transmitter ID"). The row must be at
+     `anchor instant + (row transmitter time − anchor transmitter time)` ± 60 s: the candidate
+     (E or L) within that tolerance is used; if neither is, the row is rejected
+     (`rejectedAmbiguousLocalTime`). File order plays no part, so an export that lists the two
+     passes interleaved is still placed correctly.
+  2. **Only without transmitter-time evidence** (no transmitter time, or no comparable known row):
+     chronological file order, with P = the nearest earlier known instant — no earlier row → E;
+     E not before P → E (E equal to P means the same reading listed twice: a duplicate, not a new
+     reading an hour away, S1); L not before P → L (second pass); otherwise rejected as out of
+     order. Known limitation of this fallback: with a gap covering the whole first pass, a
+     second-pass reading lands an hour early.
 
-  So two readings at the same wall-clock time, one per pass, get two instants and two ids. Known
-  limitation: if the data has a gap covering the whole first pass, a second-pass reading is placed
-  one hour early (rule 2); nothing in the file distinguishes them.
+  So two readings at the same wall-clock time, one per pass, get two instants and two ids.
 
 ## Resume and idempotency
 

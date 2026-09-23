@@ -109,6 +109,72 @@ final class ClarityImportTests: XCTestCase {
         XCTAssertEqual(Set(adjacent.readings.map(\.id)).count, 2)
     }
 
+    /// Rows with an explicit transmitter ID (timestamp, value, transmitter time, transmitter ID).
+    private func export(rows: [(String, String, String, String)]) -> Data {
+        var lines = ["Index,Timestamp (YYYY-MM-DDThh:mm:ss),Event Type,Event Subtype,Patient Info,Device Info,Source Device ID,Glucose Value (mg/dL),Insulin Value (u),Carb Value (grams),Duration (hh:mm:ss),Glucose Rate of Change (mg/dL/min),Transmitter Time (Long Integer),Transmitter ID"]
+        for (index, row) in rows.enumerated() {
+            lines.append("\(index + 1),\(row.0),EGV,,,,iOS G7,\(row.1),,,,,\(row.2),\(row.3)")
+        }
+        return Data(lines.joined(separator: "\r\n").utf8)
+    }
+
+    func test_S3_clarityInterleavedFallBackPassesArePlacedByTransmitterTime() throws {
+        // Reviewer M1: an export that lists the repeated hour sorted by wall-clock time interleaves
+        // the two passes. Transmitter time (not file order) must place every row; none may land an
+        // hour early or late. EDT pass: tt 1000, 1300, 1600; EST pass: tt 4600, 4900, 5200.
+        let result = try ClarityExportParser.parse(export(rows: [
+            ("2025-11-02T00:55:00", "120", "700", "SYNTH1"),    // 04:55Z, anchor
+            ("2025-11-02T01:00:00", "121", "1000", "SYNTH1"),   // EDT → 05:00Z
+            ("2025-11-02T01:00:00", "131", "4600", "SYNTH1"),   // EST → 06:00Z
+            ("2025-11-02T01:05:00", "122", "1300", "SYNTH1"),   // EDT → 05:05Z
+            ("2025-11-02T01:05:00", "132", "4900", "SYNTH1"),   // EST → 06:05Z
+            ("2025-11-02T01:10:00", "123", "1600", "SYNTH1"),   // EDT → 05:10Z
+            ("2025-11-02T01:10:00", "133", "5200", "SYNTH1"),   // EST → 06:10Z
+            ("2025-11-02T02:00:00", "140", "8200", "SYNTH1"),   // 07:00Z
+        ]), timeZone: Self.newYork)
+        let placed = Dictionary(uniqueKeysWithValues: result.readings.map { ($0.value, $0.date) })
+        let expected: [(Int, String)] = [
+            (120, "2025-11-02T04:55:00Z"), (121, "2025-11-02T05:00:00Z"), (131, "2025-11-02T06:00:00Z"),
+            (122, "2025-11-02T05:05:00Z"), (132, "2025-11-02T06:05:00Z"), (123, "2025-11-02T05:10:00Z"),
+            (133, "2025-11-02T06:10:00Z"), (140, "2025-11-02T07:00:00Z"),
+        ]
+        for (value, iso) in expected {
+            XCTAssertEqual(placed[.mgdl(value)], Fixtures.date(iso), "reading \(value)")
+        }
+        XCTAssertEqual(result.readings.count, 8)
+        XCTAssertEqual(result.rejectedAmbiguousLocalTime, 0)
+    }
+
+    func test_S3_claritySecondPassAtFileStartIsPlacedByALaterAnchor() throws {
+        // The file starts inside the second pass: file order alone would pick the first pass (an
+        // hour early); the transmitter clock against the later 02:00 row places it correctly.
+        let result = try ClarityExportParser.parse(export(rows: [
+            ("2025-11-02T01:30:00", "99", "92100", "SYNTH1"),
+            ("2025-11-02T02:00:00", "96", "93900", "SYNTH1"),
+        ]), timeZone: Self.newYork)
+        XCTAssertEqual(result.readings.map(\.date), [Fixtures.date("2025-11-02T06:30:00Z"), Fixtures.date("2025-11-02T07:00:00Z")])
+    }
+
+    func test_S3_clarityTransmitterTimeThatMatchesNeitherPassIsRejected() throws {
+        // Transmitter clock says 01:40 EDT-equivalent (05:40Z) for a row stamped 01:30: neither
+        // 05:30Z nor 06:30Z is within 60 s, so the row is rejected rather than guessed.
+        let result = try ClarityExportParser.parse(export(rows: [
+            ("2025-11-02T00:55:00", "120", "700", "SYNTH1"),
+            ("2025-11-02T01:30:00", "110", "3400", "SYNTH1"),
+        ]), timeZone: Self.newYork)
+        XCTAssertEqual(result.readings.map(\.value), [.mgdl(120)])
+        XCTAssertEqual(result.rejectedAmbiguousLocalTime, 1)
+    }
+
+    func test_S3_clarityTransmitterTimeFromAnotherTransmitterIsNotEvidence() throws {
+        // A different transmitter's clock cannot be compared; file order applies (second pass here).
+        let result = try ClarityExportParser.parse(export(rows: [
+            ("2025-11-02T01:55:00", "104", "90000", "SYNTH1"),
+            ("2025-11-02T01:00:00", "103", "300", "OTHER2"),
+        ]), timeZone: Self.newYork)
+        XCTAssertEqual(result.readings.map(\.date), [Fixtures.date("2025-11-02T05:55:00Z"), Fixtures.date("2025-11-02T06:00:00Z")])
+    }
+
     func test_S3_clarityRepeatedRowWithoutEvidenceIsADuplicateNotANewReading() throws {
         // Same local time, same transmitter time (or none): one reading listed twice. It must not be
         // turned into a second reading an hour later (S1).

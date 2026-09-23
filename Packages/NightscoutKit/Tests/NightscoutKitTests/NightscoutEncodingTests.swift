@@ -109,6 +109,18 @@ final class NightscoutSiteTests: XCTestCase {
     }
 }
 
+extension NightscoutSiteTests {
+    func test_decodingValidatesLikeTypingTheURL() throws {
+        // Reviewer m1: a stored site (import checkpoint) goes through the same validation.
+        let decoder = JSONDecoder()
+        XCTAssertThrowsError(try decoder.decode(NightscoutSite.self, from: Data(#"{"baseURL":"http://ns.example.org"}"#.utf8)))
+        XCTAssertThrowsError(try decoder.decode(NightscoutSite.self, from: Data(#"{"baseURL":"https://u:p@ns.example.org"}"#.utf8)))
+        XCTAssertEqual(try decoder.decode(NightscoutSite.self, from: Data(#"{"baseURL":"http://127.0.0.1:1337"}"#.utf8)).baseURL.absoluteString, "http://127.0.0.1:1337")
+        let site = try NightscoutSite("https://ns.example.org/")
+        XCTAssertEqual(try decoder.decode(NightscoutSite.self, from: JSONEncoder().encode(site)), site)
+    }
+}
+
 final class RetryPolicyAndCredentialTests: XCTestCase {
     func test_backoffDoublesToTheCapAndCredentialsWaitLonger() {
         let policy = RetryPolicy.default

@@ -4,7 +4,7 @@ import Foundation
 import GlucoseCore
 
 /// Why an upload attempt failed. Messages never contain tokens or passwords.
-public struct UploadError: Error, Sendable, Equatable, CustomStringConvertible {
+public struct UploadError: Error, Sendable, Equatable, Codable, CustomStringConvertible {
     public enum Kind: String, Sendable, Equatable, Codable {
         /// No token / account / password stored.
         case missingCredentials
@@ -45,4 +45,12 @@ public protocol UploadDestination: Sendable {
     /// reading sent twice after a lost response must not create a second record. Either returns
     /// (all accepted) or throws (the queue keeps all of them and retries later).
     func upload(_ readings: [GlucoseReading]) async throws(UploadError)
+    /// Forgets any cached login (e.g. the Share session id) so the next upload logs in with the
+    /// credentials now in the store. Called by `ReadingUploader.credentialsChanged()`.
+    func resetSession() async
+}
+
+extension UploadDestination {
+    /// Destinations that send credentials with every request (Nightscout) have nothing to forget.
+    public func resetSession() async {}
 }

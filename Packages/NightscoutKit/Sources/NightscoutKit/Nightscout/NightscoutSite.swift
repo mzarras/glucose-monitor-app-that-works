@@ -25,6 +25,26 @@ public struct NightscoutSite: Sendable, Equatable, Hashable, Codable {
         try self.init(components: components)
     }
 
+    // Codable goes through `init(url:)`, so a stored value (e.g. an import checkpoint) can never
+    // carry a URL that would be refused if typed in (`http://` to a non-loopback host, credentials).
+    private enum CodingKeys: String, CodingKey { case baseURL }
+
+    public init(from decoder: any Decoder) throws {
+        let url = try decoder.container(keyedBy: CodingKeys.self).decode(URL.self, forKey: .baseURL)
+        do {
+            try self.init(url: url)
+        } catch {
+            throw DecodingError.dataCorrupted(DecodingError.Context(
+                codingPath: [CodingKeys.baseURL], debugDescription: "invalid Nightscout site: \(error)"
+            ))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(baseURL, forKey: .baseURL)
+    }
+
     public init(url: URL) throws(ValidationError) {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { throw .notAURL }
         try self.init(components: components)

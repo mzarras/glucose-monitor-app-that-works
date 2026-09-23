@@ -20,22 +20,22 @@ final class UploadSafetyTests: XCTestCase {
     private func uploaders(clock: TestClock) throws -> [(ReadingUploader, @Sendable () async -> Int)] {
         let nightscout = MockNightscoutServer(token: "synthetic-token-1234")
         let share = MockShareServer()
-        let nightscoutUploader = ReadingUploader.nightscout(
+        let nightscoutUploader = try ReadingUploader.nightscout(
             site: try NightscoutSite("https://nightscout.invalid"),
             credentials: InMemoryCredentialStore([.nightscoutToken: "synthetic-token-1234"]),
             deviceName: "Sensor",
-            queueDirectory: directory.appendingPathComponent("ns"),
+            queueDirectory: directory.appendingPathComponent(UUID().uuidString),
             transport: InProcessTransport(backend: nightscout),
             clock: clock
         )
-        let shareUploader = ReadingUploader.dexcomShare(
+        let shareUploader = try ReadingUploader.dexcomShare(
             server: DexcomShareServer(baseURL: URL(string: "https://share.invalid/ShareWebServices/Services")!),
             receiverSerialNumber: "SM12345678",
             credentials: InMemoryCredentialStore([
                 .dexcomShareAccountName: MockShareServer.accountName,
                 .dexcomSharePassword: MockShareServer.password,
             ]),
-            queueDirectory: directory.appendingPathComponent("share"),
+            queueDirectory: directory.appendingPathComponent(UUID().uuidString),
             transport: InProcessTransport(backend: share),
             clock: clock
         )

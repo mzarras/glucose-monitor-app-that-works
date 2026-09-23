@@ -132,8 +132,8 @@ extension ReadingUploader {
         retryPolicy: RetryPolicy = .default,
         clock: any WallClock = SystemWallClock(),
         log: any DiagnosticLog = NullDiagnosticLog()
-    ) -> ReadingUploader {
-        ReadingUploader(
+    ) throws(QueueFileInUse) -> ReadingUploader {
+        try ReadingUploader(
             destination: NightscoutUploadDestination(site: site, credentials: credentials, deviceName: deviceName, transport: transport),
             queueFile: queueDirectory.appendingPathComponent("nightscout-upload-queue.json"),
             retryPolicy: retryPolicy,

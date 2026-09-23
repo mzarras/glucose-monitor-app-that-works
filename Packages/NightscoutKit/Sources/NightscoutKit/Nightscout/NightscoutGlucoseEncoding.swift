@@ -14,8 +14,19 @@
 // "above the sensor's range". Neither is a clamp: the G7's numeric range is 40–400, so 39 and 401
 // can never be real measurements, and Nightscout renders them as the words LOW and HIGH rather
 // than as numbers. Clamping (which S4 forbids) would be sending 40 or 400, which Nightscout would
-// show as an ordinary reading. Follower apps: LoopFollow shows ≤ 39 as "LOW" and ≥ 400 as "HIGH"
-// (LoopFollow/Helpers/Globals.swift:16-20, Controllers/Nightscout/BGData.swift:294-297).
+// show as an ordinary reading. PROGRESS D29 (LOW = 39) and D21 (Trio uses the same values).
+//
+// CAVEAT (D29), disclosed in docs/following.md: Nightscout's OWN alarms do not fire for LOW.
+//   lib/plugins/simplealarms.js:21  alarms only when `mgdl > 39`, so 39 never raises low/urgent low;
+//   lib/plugins/bgnow.js:96         `notError` also requires `mgdl > 39`;
+//   lib/notifications.js:151-152, :52  with no alarm active, a running alarm is auto-acked with
+//                                    "All Clear" — a low alarm raised at, say, 45 is cleared when the
+//                                    sensor drops to LOW.
+// HIGH (401 > 39) does raise Nightscout's high/urgent-high alarms. Follower apps:
+//   LoopFollow alarms on 39 (Alarm/AlarmCondition/LowBGCondition.swift:23-26: sgv > 0 && sgv ≤
+//   threshold) and shows ≤ 39 as "LOW", ≥ 400 as "HIGH" (Helpers/Globals.swift:16-20,
+//   Controllers/Nightscout/BGData.swift:294-297) — the required app for followers relying on
+//   alarms. Nightguard shows the raw numbers 39/401 (nightguard/domain/BloodSugar.swift:45-47).
 
 import GlucoseCore
 

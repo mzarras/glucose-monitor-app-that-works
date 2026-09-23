@@ -24,16 +24,18 @@ final class DexcomShareUploadTests: XCTestCase {
         clock: TestClock,
         password: String = MockShareServer.password,
         serial: String = DexcomShareUploadTests.serial,
-        log: any DiagnosticLog = NullDiagnosticLog()
-    ) -> ReadingUploader {
-        ReadingUploader.dexcomShare(
+        log: any DiagnosticLog = NullDiagnosticLog(),
+        credentials: InMemoryCredentialStore? = nil,
+        queueDirectory: URL? = nil
+    ) throws -> ReadingUploader {
+        try ReadingUploader.dexcomShare(
             server: Self.server,
             receiverSerialNumber: serial,
-            credentials: InMemoryCredentialStore([
+            credentials: credentials ?? InMemoryCredentialStore([
                 .dexcomShareAccountName: MockShareServer.accountName,
                 .dexcomSharePassword: password,
             ]),
-            queueDirectory: directory,
+            queueDirectory: queueDirectory ?? directory,
             transport: InProcessTransport(backend: share),
             clock: clock,
             log: log
@@ -52,7 +54,7 @@ final class DexcomShareUploadTests: XCTestCase {
 
     func test_firstUploadLogsInStartsMonitoringAndPostsEGV() async throws {
         let share = MockShareServer()
-        let uploader = makeUploader(share: share, clock: clock(at: 3_600))
+        let uploader = try makeUploader(share: share, clock: clock(at: 3_600))
         try await uploader.submit(fixture.reading(at: 3_600, value: .mgdl(123), trendRate: 2.5), session: fixture.session)
         await XCTAssertEqualAsync(await uploader.flush(), .uploaded(count: 1))
 
@@ -92,7 +94,7 @@ final class DexcomShareUploadTests: XCTestCase {
     func test_sessionReusedThenRenewedWhenShareForgetsIt() async throws {
         let share = MockShareServer()
         let clock = clock(at: 3_600)
-        let uploader = makeUploader(share: share, clock: clock)
+        let uploader = try makeUploader(share: share, clock: clock)
         try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
         await uploader.flush()
         clock.advance(by: 300)
@@ -111,7 +113,7 @@ final class DexcomShareUploadTests: XCTestCase {
     func test_monitoringSessionRestartedWhenInactive() async throws {
         let share = MockShareServer()
         let clock = clock(at: 3_600)
-        let uploader = makeUploader(share: share, clock: clock)
+        let uploader = try makeUploader(share: share, clock: clock)
         try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
         await uploader.flush()
         await share.stopMonitoring()
@@ -129,7 +131,7 @@ final class DexcomShareUploadTests: XCTestCase {
         let a = fixture.reading(at: 3_600, value: .mgdl(110))
         let b = fixture.reading(at: 3_900, value: .mgdl(114))
         await share.seed(MockShareServer.PostedEGV(Trend: 4, ST: DexcomShareEGV.shareDate(a.date), DT: DexcomShareEGV.shareDate(a.date), Value: 110, direction: "Flat"))
-        let uploader = makeUploader(share: share, clock: clock(at: 3_900))
+        let uploader = try makeUploader(share: share, clock: clock(at: 3_900))
         try await uploader.submit(a, session: fixture.session)
         try await uploader.submit(b, session: fixture.session)
         await XCTAssertEqualAsync(await uploader.flush(), .uploaded(count: 2))
@@ -140,7 +142,7 @@ final class DexcomShareUploadTests: XCTestCase {
 
     func test_S3_dexcomShareBackfillKeepsOriginalTimestampAndNewestFirst() async throws {
         let share = MockShareServer()
-        let uploader = makeUploader(share: share, clock: clock(at: 5 * 3_600))
+        let uploader = try makeUploader(share: share, clock: clock(at: 5 * 3_600))
         let backfill = fixture.reading(at: 3 * 3_600, value: .mgdl(150), isBackfill: true)
         let live = fixture.reading(at: 5 * 3_600, value: .mgdl(140))
         try await uploader.submit(live, session: fixture.session)
@@ -156,7 +158,7 @@ final class DexcomShareUploadTests: XCTestCase {
         await share.setOffline(true)
         let clock = clock(at: 3_600)
         let log = RecordingDiagnosticLog()
-        let uploader = makeUploader(share: share, clock: clock, log: log)
+        let uploader = try makeUploader(share: share, clock: clock, log: log)
         try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
         await uploader.flush()
         clock.advance(by: 9 * 3_600)
@@ -167,24 +169,22 @@ final class DexcomShareUploadTests: XCTestCase {
         XCTAssertTrue(log.messages.contains { $0.contains("older than this destination accepts") })
     }
 
-    func test_S4_dexcomShareRefusesLowHigh() async throws {
+    func test_S4_dexcomShareEncodesFlagsAs39And401NotClamped() async throws {
+        // PROGRESS D30: LOW → 39, HIGH → 401 (unverified with Dexcom Follow until §11 step 4a).
         let share = MockShareServer()
-        let uploader = makeUploader(share: share, clock: clock(at: 3_600))
-        for value: GlucoseValue in [.belowRange, .aboveRange] {
-            do {
-                try await uploader.submit(fixture.reading(at: 3_600, value: value), session: fixture.session)
-                XCTFail("Share has no faithful LOW/HIGH representation; \(value) must be refused")
-            } catch {
-                XCTAssertEqual(error, .notRepresentable(value))
-            }
-        }
-        await XCTAssertEqualAsync(await uploader.status.notRepresentable, 2)
-        await XCTAssertEqualAsync(await uploader.status.queueDepth, 0)
-        XCTAssertNil(DexcomShareEGV(reading: fixture.reading(at: 3_600, value: .belowRange)))
-        XCTAssertNil(DexcomShareEGV(reading: fixture.reading(at: 3_600, value: .aboveRange)))
-        await uploader.flush()
-        await XCTAssertTrueAsync(await share.stored.isEmpty)
-        await XCTAssertFalseAsync(await share.uploadBodies.contains { $0.Egvs.contains { $0.Value == 40 || $0.Value == 400 || $0.Value == 39 || $0.Value == 401 } })
+        let uploader = try makeUploader(share: share, clock: clock(at: 3_600))
+        try await uploader.submit(fixture.reading(at: 3_000, value: .belowRange, trendRate: nil), session: fixture.session)
+        try await uploader.submit(fixture.reading(at: 3_300, value: .aboveRange, trendRate: nil), session: fixture.session)
+        try await uploader.submit(fixture.reading(at: 3_600, value: .mgdl(40)), session: fixture.session)
+        await XCTAssertEqualAsync(await uploader.flush(), .uploaded(count: 3))
+        let stored = await share.stored.sorted { $0.ST < $1.ST }
+        XCTAssertEqual(stored.map(\.Value), [39, 401, 40], "flags as 39/401; the number 40 stays 40")
+        XCTAssertEqual(stored.first?.Trend, 0, "no rate reported → trend 0 (xDrip4iOS hideSlope)")
+        XCTAssertEqual(DexcomShareEGV.value(for: .belowRange), 39)
+        XCTAssertEqual(DexcomShareEGV.value(for: .aboveRange), 401)
+        XCTAssertNil(DexcomShareEGV.value(for: .mgdl(39)), "a number is never sent as a flag value")
+        XCTAssertNil(DexcomShareEGV.value(for: .mgdl(401)))
+        await XCTAssertEqualAsync(await uploader.status.notRepresentable, 0)
     }
 
     func test_S5_dexcomShareFailureSurfacesInStatus() async throws {
@@ -192,7 +192,7 @@ final class DexcomShareUploadTests: XCTestCase {
         let share = MockShareServer()
         let clock = clock(at: 3_600)
         let log = RecordingDiagnosticLog()
-        let uploader = makeUploader(share: share, clock: clock, password: "wrong-password", log: log)
+        let uploader = try makeUploader(share: share, clock: clock, password: "wrong-password", log: log)
         try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
         guard case .failed(let error, _) = await uploader.flushIfDue() else { return XCTFail("expected failure") }
         XCTAssertEqual(error.kind, .unauthorized)
@@ -210,7 +210,7 @@ final class DexcomShareUploadTests: XCTestCase {
     func test_receiverNotAssignedIsAConfigurationError() async throws {
         let share = MockShareServer()
         await share.setAssignedSerial(nil)
-        let uploader = makeUploader(share: share, clock: clock(at: 3_600))
+        let uploader = try makeUploader(share: share, clock: clock(at: 3_600))
         try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
         guard case .failed(let error, _) = await uploader.flush() else { return XCTFail("expected failure") }
         XCTAssertEqual(error.kind, .configuration)
@@ -219,7 +219,7 @@ final class DexcomShareUploadTests: XCTestCase {
 
     func test_serialMismatchIsAConfigurationError() async throws {
         let share = MockShareServer()
-        let uploader = makeUploader(share: share, clock: clock(at: 3_600), serial: "sm00000000")
+        let uploader = try makeUploader(share: share, clock: clock(at: 3_600), serial: "sm00000000")
         try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
         guard case .failed(let error, _) = await uploader.flush() else { return XCTFail("expected failure") }
         XCTAssertEqual(error.kind, .configuration)
@@ -228,7 +228,7 @@ final class DexcomShareUploadTests: XCTestCase {
 
     func test_unknownAccountAndMissingCredentials() async throws {
         let share = MockShareServer()
-        let unknown = ReadingUploader.dexcomShare(
+        let unknown = try ReadingUploader.dexcomShare(
             server: Self.server, receiverSerialNumber: Self.serial,
             credentials: InMemoryCredentialStore([.dexcomShareAccountName: "nobody", .dexcomSharePassword: "x"]),
             queueDirectory: directory.appendingPathComponent("a"), transport: InProcessTransport(backend: share),
@@ -238,7 +238,7 @@ final class DexcomShareUploadTests: XCTestCase {
         guard case .failed(let error, _) = await unknown.flush() else { return XCTFail("expected failure") }
         XCTAssertEqual(error.kind, .unauthorized)
 
-        let empty = ReadingUploader.dexcomShare(
+        let empty = try ReadingUploader.dexcomShare(
             server: Self.server, receiverSerialNumber: Self.serial, credentials: InMemoryCredentialStore(),
             queueDirectory: directory.appendingPathComponent("b"), transport: InProcessTransport(backend: share),
             clock: clock(at: 3_600)
@@ -251,7 +251,7 @@ final class DexcomShareUploadTests: XCTestCase {
     func test_offlineIsATransportFailure() async throws {
         let share = MockShareServer()
         await share.setOffline(true)
-        let uploader = makeUploader(share: share, clock: clock(at: 3_600))
+        let uploader = try makeUploader(share: share, clock: clock(at: 3_600))
         try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
         guard case .failed(let error, _) = await uploader.flush() else { return XCTFail("expected failure") }
         XCTAssertEqual(error.kind, .transport)
@@ -272,7 +272,7 @@ final class DexcomShareUploadTests: XCTestCase {
     private func uploadError(scripted replies: [MockReply], serial: String = DexcomShareUploadTests.serial) async throws -> UploadError? {
         let share = MockShareServer()
         await share.scriptPublisher(replies)
-        let uploader = makeUploader(share: share, clock: clock(at: 3_600), serial: serial)
+        let uploader = try makeUploader(share: share, clock: clock(at: 3_600), serial: serial, queueDirectory: directory.appendingPathComponent(UUID().uuidString))
         try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
         guard case .failed(let error, _) = await uploader.flush() else { return nil }
         await XCTAssertEqualAsync(await uploader.status.queueDepth, 1, "a failed upload keeps the reading queued")
@@ -315,9 +315,51 @@ final class DexcomShareUploadTests: XCTestCase {
         for reply: MockReply in [.status(200, body: "{\"Accepted\":true}"), .json(500, ["Code": "DuplicateEgvPosted"])] {
             let share = MockShareServer()
             await share.scriptPublisher([reply])
-            let uploader = makeUploader(share: share, clock: clock(at: 3_600))
+            let uploader = try makeUploader(share: share, clock: clock(at: 3_600), queueDirectory: directory.appendingPathComponent(UUID().uuidString))
             try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
             await XCTAssertEqualAsync(await uploader.flush(), .uploaded(count: 1))
         }
+    }
+
+    func test_shareCredentialErrorsAreCaseInsensitiveAndHTTP401Or403IsUnauthorized() async throws {
+        XCTAssertEqual(DexcomShareClient.loginError(code: "sso_authenticatepasswordinvalid", statusCode: 500).kind, .unauthorized)
+        XCTAssertEqual(DexcomShareClient.loginError(code: "SSO_AUTHENTICATEACCOUNTNOTFOUND", statusCode: 500).kind, .unauthorized)
+        XCTAssertEqual(DexcomShareClient.loginError(code: nil, statusCode: 401).kind, .unauthorized)
+        XCTAssertEqual(DexcomShareClient.loginError(code: "Whatever", statusCode: 403).kind, .unauthorized)
+        XCTAssertEqual(ShareErrorCode(code: "sessionnotvalid"), .sessionNotValid)
+        XCTAssertNil(ShareErrorCode(code: "SessionNotValidX"))
+
+        let forbidden = try await uploadError(scripted: [.status(403)])
+        XCTAssertEqual(forbidden?.kind, .unauthorized, "30-minute backoff, not 30 s")
+        let lowerCase = try await uploadError(scripted: [.json(500, ["Code": "monitoredreceivernotassigned"])])
+        XCTAssertEqual(lowerCase?.kind, .configuration)
+    }
+
+    func test_credentialsChangedForgetsSessionAndBackoff() async throws {
+        let share = MockShareServer()
+        let clock = clock(at: 3_600)
+        let credentials = InMemoryCredentialStore([
+            .dexcomShareAccountName: MockShareServer.accountName,
+            .dexcomSharePassword: "old-wrong-password",
+        ])
+        let uploader = try makeUploader(share: share, clock: clock, credentials: credentials)
+        try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
+        guard case .failed(let error, _) = await uploader.flushIfDue() else { return XCTFail("expected failure") }
+        XCTAssertEqual(error.kind, .unauthorized)
+        await XCTAssertEqualAsync(await uploader.status.nextAttemptAt, clock.now().addingTimeInterval(30 * 60))
+
+        // The user fixes the password: no 30-minute wait, and a fresh login.
+        try credentials.write(MockShareServer.password, for: .dexcomSharePassword)
+        await uploader.credentialsChanged()
+        await XCTAssertNilAsync(await uploader.status.nextAttemptAt)
+        await XCTAssertEqualAsync(await uploader.flushIfDue(), .uploaded(count: 1))
+        await XCTAssertEqualAsync(await share.logins, 2)
+
+        // A later credential change drops the cached session: the next upload logs in again.
+        await uploader.credentialsChanged()
+        clock.advance(by: 300)
+        try await uploader.submit(fixture.reading(at: 3_900), session: fixture.session)
+        await XCTAssertEqualAsync(await uploader.flush(), .uploaded(count: 1))
+        await XCTAssertEqualAsync(await share.logins, 3)
     }
 }

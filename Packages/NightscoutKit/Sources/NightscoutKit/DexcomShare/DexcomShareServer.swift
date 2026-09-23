@@ -68,19 +68,27 @@ enum DexcomShareConstants {
 
     /// xDrip4iOS uploads at most the last 8 hours (DexcomShareUploadManager.swift:338-339).
     static let maxReadingAge: TimeInterval = 8 * 60 * 60
+}
 
-    /// Error `Code` values in Share's JSON error bodies, as handled by
-    /// DexcomShareUploadManager.swift:425-478 and :713-727.
-    enum ErrorCode {
-        static let sessionNotValid = "SessionNotValid"
-        static let sessionIDNotFound = "SessionIdNotFound"
-        static let monitoringSessionNotActive = "MonitoringSessionNotActive"
-        static let duplicateEgvPosted = "DuplicateEgvPosted"
-        static let monitoredReceiverSerialNumberDoesNotMatch = "MonitoredReceiverSerialNumberDoesNotMatch"
-        static let monitoredReceiverNotAssigned = "MonitoredReceiverNotAssigned"
-        static let accountNotFound = "SSO_AuthenticateAccountNotFound"
-        static let passwordInvalid = "SSO_AuthenticatePasswordInvalid"
-        /// Spelling as sent by Dexcom (DexcomShareUploadManager.swift:721).
-        static let maxAttemptsExceeded = "SSO_AuthenticateMaxAttemptsExceeed"
+/// Error `Code` values in Share's JSON error bodies, as handled by
+/// DexcomShareUploadManager.swift:425-478 (upload) and :713-727 (login). Matched
+/// case-insensitively, as xDrip4iOS does for the login codes (:717-722 compare `uppercased()`).
+enum ShareErrorCode: String, CaseIterable, Sendable {
+    case sessionNotValid = "SessionNotValid"
+    case sessionIDNotFound = "SessionIdNotFound"
+    case monitoringSessionNotActive = "MonitoringSessionNotActive"
+    case duplicateEgvPosted = "DuplicateEgvPosted"
+    case monitoredReceiverSerialNumberDoesNotMatch = "MonitoredReceiverSerialNumberDoesNotMatch"
+    case monitoredReceiverNotAssigned = "MonitoredReceiverNotAssigned"
+    case accountNotFound = "SSO_AuthenticateAccountNotFound"
+    case passwordInvalid = "SSO_AuthenticatePasswordInvalid"
+    /// Spelling as sent by Dexcom (DexcomShareUploadManager.swift:721).
+    case maxAttemptsExceeded = "SSO_AuthenticateMaxAttemptsExceeed"
+
+    /// `nil` for a missing or unknown code.
+    init?(code: String?) {
+        guard let code else { return nil }
+        guard let match = Self.allCases.first(where: { $0.rawValue.caseInsensitiveCompare(code) == .orderedSame }) else { return nil }
+        self = match
     }
 }

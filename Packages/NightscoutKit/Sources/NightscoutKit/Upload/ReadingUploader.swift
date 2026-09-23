@@ -7,10 +7,18 @@
 // value). Replay/mock/imported readings can never be queued. The DEBUG replay-accepting gate
 // variant is not used here (PROGRESS D11: uploaders never accept replay).
 //
-// Driving it (app wiring): for each reading the repository newly stored (`insert`'s return value),
-// call `submit(_:session:)` with the source's `currentSession`, then `flushIfDue()`. Also call
-// `flushIfDue()` when the app comes to the foreground or gets background time, and `flush()` when
-// the user taps "Retry now" or saves new credentials.
+// Driving it (app wiring):
+//   - For each reading the repository newly stored (`insert`'s return value), call
+//     `submit(_:session:)` with the source's `currentSession`, then `flushIfDue()`.
+//   - Call `flushIfDue()` when the app comes to the foreground or gets background time.
+//   - "Retry now": `flush()`.
+//   - After saving new credentials: `credentialsChanged()`, then `flush()`.
+//   - `flush()`/`flushIfDue()` return `.alreadyFlushing` while another flush is running; that flush
+//     may still be using the old credentials or may have taken its batch before a new reading was
+//     queued, so call `flush()` again once it has finished (e.g. after awaiting the status stream
+//     or on the next reading).
+//   - Exactly one `ReadingUploader` per queue file per process; `init` throws `QueueFileInUse` for
+//     a second one (two owners would each rewrite the file from their own memory and lose readings).
 
 import Foundation
 import GlucoseCore
@@ -19,13 +27,36 @@ import GlucoseCore
 public enum UploadRefusal: Error, Sendable, Equatable {
     /// S2/S6: `LiveReadingGate` rejected it.
     case gate(LiveReadingGate.Rejection)
-    /// S4: the destination has no faithful representation for this value (e.g. LOW/HIGH on Share).
+    /// S4: the destination has no faithful representation for this value.
     case notRepresentable(GlucoseValue)
+}
+
+/// Another live `ReadingUploader` in this process already owns the queue file.
+public struct QueueFileInUse: Error, Sendable, Equatable {
+    public let path: String
+}
+
+/// Process-wide set of queue files owned by a live `ReadingUploader`.
+final class QueueFileRegistry: @unchecked Sendable {
+    // @unchecked Sendable: `claimed` is only read and written while holding `lock`.
+    static let shared = QueueFileRegistry()
+    private let lock = NSLock()
+    private var claimed: Set<String> = []
+
+    /// True if `path` was free and is now claimed.
+    func claim(_ path: String) -> Bool {
+        lock.withLock { claimed.insert(path).inserted }
+    }
+
+    func release(_ path: String) {
+        _ = lock.withLock { claimed.remove(path) }
+    }
 }
 
 public enum FlushOutcome: Sendable, Equatable {
     case nothingQueued
-    /// Another flush is running; it will send what is queued.
+    /// Another flush is running. It sends the batches it takes, but may use old credentials or
+    /// miss a reading queued after it started: call `flush()` again when it has finished.
     case alreadyFlushing
     /// Backing off after a failure; `flushIfDue` does nothing until then.
     case deferred(until: Date)
@@ -45,15 +76,20 @@ public actor ReadingUploader {
     private var currentStatus: UploadStatus
     private var isFlushing = false
     private var observers: [UUID: AsyncStream<UploadStatus>.Continuation] = [:]
+    private nonisolated let queuePath: String
 
     /// - Parameter queueFile: where queued readings persist (one file per destination).
+    /// - Throws: `QueueFileInUse` if another live uploader in this process owns `queueFile`.
     public init(
         destination: any UploadDestination,
         queueFile: URL,
         retryPolicy: RetryPolicy = .default,
         clock: any WallClock = SystemWallClock(),
         log: any DiagnosticLog = NullDiagnosticLog()
-    ) {
+    ) throws(QueueFileInUse) {
+        let path = queueFile.standardizedFileURL.resolvingSymlinksInPath().path
+        guard QueueFileRegistry.shared.claim(path) else { throw QueueFileInUse(path: path) }
+        self.queuePath = path
         self.destinationName = destination.name
         self.destination = destination
         self.retryPolicy = retryPolicy
@@ -65,10 +101,19 @@ public actor ReadingUploader {
         status.lastSuccessAt = loaded.queue.lastSuccessAt
         status.queueDepth = loaded.queue.count
         status.queueLoadProblem = loaded.problem
+        // Persisted retry state: the S5 banner and the backoff survive a relaunch.
+        status.consecutiveFailures = loaded.queue.retry.consecutiveFailures
+        status.nextAttemptAt = loaded.queue.retry.nextAttemptAt
+        status.lastError = loaded.queue.retry.lastError
+        status.lastErrorAt = loaded.queue.retry.lastErrorAt
         self.currentStatus = status
         if let problem = loaded.problem {
             log.record(DiagnosticEvent(date: clock.now(), category: .upload, message: "\(destination.name): \(problem)"))
         }
+    }
+
+    deinit {
+        QueueFileRegistry.shared.release(queuePath)
     }
 
     public var status: UploadStatus { currentStatus }
@@ -95,12 +140,14 @@ public actor ReadingUploader {
             try LiveReadingGate.validate(reading, session: session, now: now)
         } catch {
             currentStatus.refusedByGate += 1
+            recordRefusal(.gate(error), at: now)
             record("refused reading \(reading.id) (\(reading.source)): \(error)")
             publish()
             throw .gate(error)
         }
         guard destination.canRepresent(reading.value) else {
             currentStatus.notRepresentable += 1
+            recordRefusal(.notRepresentable(reading.value), at: now)
             record("not uploading reading \(reading.id): \(reading.value) has no faithful representation here")
             publish()
             throw .notRepresentable(reading.value)
@@ -111,6 +158,20 @@ public actor ReadingUploader {
             record("queue over capacity: dropped \(result.dropped.count) oldest readings")
         }
         if result.appended { persist() }
+        publish()
+    }
+
+    // MARK: - Credentials
+
+    /// Call after the user saves new credentials: forgets any cached login (Share session) and the
+    /// backoff, so the next `flush()` uses the new credentials at once. See the file comment about
+    /// `.alreadyFlushing`.
+    public func credentialsChanged() async {
+        await destination.resetSession()
+        currentStatus.nextAttemptAt = nil
+        queue.retry.nextAttemptAt = nil
+        persist()
+        record("credentials changed; cached login and backoff cleared")
         publish()
     }
 
@@ -157,15 +218,19 @@ public actor ReadingUploader {
             // against ever re-sending the same batch in a loop.
             guard !removed.isEmpty else { break }
             let now = clock.now()
-            queue.recordSuccess(at: now)
-            persist()
-            uploaded += batch.count
             if currentStatus.consecutiveFailures > 0 {
                 record("recovered after \(currentStatus.consecutiveFailures) failed attempts")
             }
+            queue.recordSuccess(at: now)
+            // Keep the last error for Settings; clear what makes the status "failing".
+            queue.retry.consecutiveFailures = 0
+            queue.retry.nextAttemptAt = nil
+            persist()
+            uploaded += batch.count
             currentStatus.lastSuccessAt = now
             currentStatus.consecutiveFailures = 0
             currentStatus.nextAttemptAt = nil
+            currentStatus.refusalsSinceLastSuccess = 0
             publish()
         }
         return uploaded == 0 ? .nothingQueued : .uploaded(count: uploaded)
@@ -201,7 +266,20 @@ public actor ReadingUploader {
         currentStatus.lastErrorAt = now
         let delay = retryPolicy.delay(afterConsecutiveFailures: currentStatus.consecutiveFailures, kind: error.kind)
         currentStatus.nextAttemptAt = now.addingTimeInterval(delay)
+        queue.retry = PersistentReadingQueue.RetryState(
+            consecutiveFailures: currentStatus.consecutiveFailures,
+            nextAttemptAt: currentStatus.nextAttemptAt,
+            lastError: error,
+            lastErrorAt: now
+        )
+        persist()
         record("upload failed (\(currentStatus.consecutiveFailures) in a row, \(queue.count) queued, retry in \(Int(delay)) s): \(error)")
+    }
+
+    private func recordRefusal(_ refusal: UploadRefusal, at date: Date) {
+        currentStatus.lastRefusal = refusal
+        currentStatus.lastRefusedAt = date
+        currentStatus.refusalsSinceLastSuccess += 1
     }
 
     private func persist() {

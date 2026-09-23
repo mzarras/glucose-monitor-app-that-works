@@ -46,6 +46,9 @@ enum MockReply: Sendable {
     case http(HTTPResponse)
     /// No HTTP response at all (offline, connection dropped).
     case transportFailure(String)
+    /// 302 Found with a `Location` header (only `LocalHTTPServer` can send the header; the
+    /// in-process transport returns the bare 302).
+    case redirect(to: String)
 
     static func json(_ status: Int, _ object: Any) -> MockReply {
         .http(HTTPResponse(statusCode: status, body: (try? JSONSerialization.data(withJSONObject: object, options: [.fragmentsAllowed])) ?? Data()))
@@ -68,6 +71,7 @@ struct InProcessTransport: HTTPTransport {
         switch await backend.handle(MockHTTPRequest(request)) {
         case .http(let response): return response
         case .transportFailure(let message): throw TransportError(message: message)
+        case .redirect: return HTTPResponse(statusCode: 302, body: Data())
         }
     }
 }
@@ -141,6 +145,9 @@ final class LocalHTTPServer: @unchecked Sendable {
         switch reply {
         case .transportFailure:
             connection.cancel()
+        case .redirect(let location):
+            let head = "HTTP/1.1 302 Found\r\nLocation: \(location)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            connection.send(content: Data(head.utf8), completion: .contentProcessed { _ in connection.cancel() })
         case .http(let response):
             var head = "HTTP/1.1 \(response.statusCode) Mock\r\n"
             head += "Content-Type: application/json\r\n"
@@ -184,5 +191,20 @@ final class ResumeOnce: @unchecked Sendable {
             done = true
             return true
         }
+    }
+}
+
+/// Answers every request with a redirect to `location` and records what it saw.
+actor RedirectingBackend: MockBackend {
+    let location: String
+    private(set) var requests: [MockHTTPRequest] = []
+
+    init(location: String) {
+        self.location = location
+    }
+
+    func handle(_ request: MockHTTPRequest) async -> MockReply {
+        requests.append(request)
+        return .redirect(to: location)
     }
 }

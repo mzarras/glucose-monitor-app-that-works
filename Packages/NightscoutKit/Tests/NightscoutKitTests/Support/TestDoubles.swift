@@ -5,10 +5,11 @@ import Foundation
 import GlucoseCore
 @testable import NightscoutKit
 
-/// In-memory `GlucoseReadingRepository` following the contract in GlucoseCore
-/// GlucoseReadingRepository.swift: insert-or-ignore by id; an `.imported` reading is skipped when
-/// any stored reading lies within ±150 s (inclusive); a `.sensor` reading deletes `.imported`
-/// readings within ±150 s; a batch is applied in ascending date order.
+/// In-memory production-role `GlucoseReadingRepository` following the contract in GlucoseCore
+/// GlucoseReadingRepository.swift: whole-batch refusal of `.replay`/`.mock` and of numbers outside
+/// 40...400; insert-or-ignore by id; an `.imported` reading is skipped when any stored reading lies
+/// within ±150 s (inclusive); a `.sensor` reading deletes `.imported` readings within ±150 s; a
+/// batch is applied in ascending date order.
 actor InMemoryGlucoseReadingRepository: GlucoseReadingRepository {
     static let window: TimeInterval = 150
 
@@ -24,6 +25,15 @@ actor InMemoryGlucoseReadingRepository: GlucoseReadingRepository {
         if failNextInserts > 0 {
             failNextInserts -= 1
             throw CocoaError(.fileWriteUnknown)
+        }
+        for reading in readings {
+            switch reading.source {
+            case .replay, .mock: throw GlucoseReadingRepositoryError.sourceNotAllowed(reading.source)
+            case .sensor, .imported: break
+            }
+            if case .mgdl(let value) = reading.value, !GlucoseValue.sensorReportableRange.contains(value) {
+                throw GlucoseReadingRepositoryError.implausibleValue(value)
+            }
         }
         var added: [GlucoseReading] = []
         var changed = false

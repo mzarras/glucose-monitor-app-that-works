@@ -21,15 +21,16 @@ final class NightscoutUploadTests: XCTestCase {
         server: MockNightscoutServer,
         clock: TestClock,
         token: String? = NightscoutUploadTests.token,
-        log: any DiagnosticLog = NullDiagnosticLog()
+        log: any DiagnosticLog = NullDiagnosticLog(),
+        queueDirectory: URL? = nil
     ) throws -> ReadingUploader {
         var credentials: [CredentialKey: String] = [:]
         if let token { credentials[.nightscoutToken] = token }
-        return ReadingUploader.nightscout(
+        return try ReadingUploader.nightscout(
             site: try NightscoutSite("https://nightscout.invalid"),
             credentials: InMemoryCredentialStore(credentials),
             deviceName: "Sensor",
-            queueDirectory: directory,
+            queueDirectory: queueDirectory ?? directory,
             transport: InProcessTransport(backend: server),
             clock: clock,
             log: log
@@ -232,11 +233,14 @@ final class NightscoutUploadTests: XCTestCase {
             await uploader.flush()
         }
         await server.goOffline(afterRequests: nil)
-        let relaunched = try makeUploader(server: server, clock: clock)
-        await XCTAssertEqualAsync(await relaunched.status.queueDepth, 2)
-        await XCTAssertEqualAsync(await relaunched.flush(), .uploaded(count: 2))
-        await XCTAssertEqualAsync(await server.entries.count, 2)
-        let lastSuccess = await relaunched.status.lastSuccessAt
+        var lastSuccess: Date?
+        do {
+            let relaunched = try makeUploader(server: server, clock: clock)
+            await XCTAssertEqualAsync(await relaunched.status.queueDepth, 2)
+            await XCTAssertEqualAsync(await relaunched.flush(), .uploaded(count: 2))
+            await XCTAssertEqualAsync(await server.entries.count, 2)
+            lastSuccess = await relaunched.status.lastSuccessAt
+        }
 
         let again = try makeUploader(server: server, clock: clock)
         await XCTAssertEqualAsync(await again.status.queueDepth, 0)
@@ -327,5 +331,82 @@ final class NightscoutUploadTests: XCTestCase {
         let outcomes = await [a, b]
         XCTAssertTrue(outcomes.contains(.uploaded(count: 1)))
         await XCTAssertEqualAsync(await server.requests.count, 1)
+    }
+
+    func test_S5_failureAndBackoffSurviveRelaunch() async throws {
+        // Reviewer m2: a relaunch must not reset the S5 banner or skip the backoff.
+        let server = MockNightscoutServer(token: Self.token)
+        let clock = clock(at: 3_600)
+        var nextAttempt: Date?
+        do {
+            let uploader = try makeUploader(server: server, clock: clock, token: "revoked-token")
+            try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
+            guard case .failed = await uploader.flushIfDue() else { return XCTFail("expected 401") }
+            nextAttempt = await uploader.status.nextAttemptAt
+        }
+        clock.advance(by: 60)
+        let relaunched = try makeUploader(server: server, clock: clock, token: "revoked-token")
+        let status = await relaunched.status
+        XCTAssertTrue(status.isFailing)
+        XCTAssertEqual(status.consecutiveFailures, 1)
+        XCTAssertEqual(status.lastError?.kind, .unauthorized)
+        XCTAssertEqual(status.nextAttemptAt, nextAttempt)
+        guard case .deferred = await relaunched.flushIfDue() else { return XCTFail("relaunch must respect the backoff") }
+        await XCTAssertEqualAsync(await server.requests.count, 1, "no extra attempt with the rejected token")
+    }
+
+    func test_S5_nightscoutNonJSONSuccessIsNotTreatedAsStored() async throws {
+        // Reviewer m4: a 2xx that is not Nightscout's JSON array (captive portal, proxy page) must
+        // not drop the readings from the queue.
+        let server = MockNightscoutServer(token: Self.token)
+        await server.script([.status(200, body: "<html>Sign in to Wi-Fi</html>")])
+        let uploader = try makeUploader(server: server, clock: clock(at: 3_600))
+        try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
+        guard case .failed(let error, _) = await uploader.flush() else { return XCTFail("expected failure") }
+        XCTAssertEqual(error.kind, .server)
+        await XCTAssertEqualAsync(await uploader.status.queueDepth, 1)
+        await XCTAssertTrueAsync(await uploader.status.isFailing)
+        await XCTAssertEqualAsync(await uploader.flush(), .uploaded(count: 1))
+    }
+
+    func test_S5_refusalsSurfaceUntilAnUploadSucceeds() async throws {
+        // Reviewer m5.
+        let server = MockNightscoutServer(token: Self.token)
+        let clock = clock(at: 20 * 60)
+        let uploader = try makeUploader(server: server, clock: clock)
+        do {
+            try await uploader.submit(fixture.reading(at: 20 * 60), session: fixture.session)
+            XCTFail("warm-up reading accepted")
+        } catch {
+            XCTAssertEqual(error, .gate(.duringWarmUp))
+        }
+        var status = await uploader.status
+        XCTAssertEqual(status.lastRefusal, .gate(.duringWarmUp))
+        XCTAssertEqual(status.lastRefusedAt, clock.now())
+        XCTAssertEqual(status.refusalsSinceLastSuccess, 1)
+        XCTAssertTrue(status.isFailing, "readings refused and nothing uploaded since")
+
+        clock.advance(by: 15 * 60)
+        try await uploader.submit(fixture.reading(at: 35 * 60), session: fixture.session)
+        await XCTAssertEqualAsync(await uploader.flush(), .uploaded(count: 1))
+        status = await uploader.status
+        XCTAssertFalse(status.isFailing)
+        XCTAssertEqual(status.refusalsSinceLastSuccess, 0)
+        XCTAssertEqual(status.lastRefusal, .gate(.duringWarmUp), "kept for Settings")
+    }
+
+    func test_onlyOneUploaderPerQueueFile() async throws {
+        // Reviewer m7: two owners would each rewrite the file from their own memory.
+        let server = MockNightscoutServer(token: Self.token)
+        let clock = clock(at: 3_600)
+        do {
+            let first = try makeUploader(server: server, clock: clock)
+            XCTAssertThrowsError(try makeUploader(server: server, clock: clock)) { error in
+                XCTAssertNotNil(error as? QueueFileInUse)
+            }
+            try await first.submit(fixture.reading(at: 3_600), session: fixture.session)
+        }
+        let next = try makeUploader(server: server, clock: clock)
+        await XCTAssertEqualAsync(await next.status.queueDepth, 1, "the file is free again once the first uploader is gone")
     }
 }

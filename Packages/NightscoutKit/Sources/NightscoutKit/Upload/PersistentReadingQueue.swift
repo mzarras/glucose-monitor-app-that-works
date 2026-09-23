@@ -14,11 +14,22 @@ struct PersistentReadingQueue {
         let enqueuedAt: Date
     }
 
-    /// On-disk format. `lastSuccessAt` lives here so Settings shows it after a relaunch.
+    /// Upload health that must survive a relaunch: the S5 banner (`isFailing`) and the backoff,
+    /// so relaunching never retries a rejected password early (account lockout).
+    struct RetryState: Codable, Equatable, Sendable {
+        var consecutiveFailures = 0
+        var nextAttemptAt: Date?
+        var lastError: UploadError?
+        var lastErrorAt: Date?
+    }
+
+    /// On-disk format. `lastSuccessAt` and `retry` live here so Settings, the S5 banner and the
+    /// backoff are right after a relaunch. Both are optional so older files still load.
     private struct FileContents: Codable {
         var version: Int
         var items: [Item]
         var lastSuccessAt: Date?
+        var retry: RetryState?
     }
 
     private static let fileVersion = 1
@@ -28,6 +39,7 @@ struct PersistentReadingQueue {
     let fileURL: URL
     private(set) var items: [Item] = []
     private(set) var lastSuccessAt: Date?
+    var retry = RetryState()
 
     /// Loads the queue. An unreadable file is moved aside (kept for diagnostics, never deleted)
     /// and the queue starts empty; the returned problem must be surfaced (S5).
@@ -42,6 +54,7 @@ struct PersistentReadingQueue {
             }
             queue.items = contents.items
             queue.lastSuccessAt = contents.lastSuccessAt
+            queue.retry = contents.retry ?? RetryState()
             return (queue, nil)
         } catch {
             let aside = fileURL.appendingPathExtension("unreadable-\(Int(now.timeIntervalSince1970))")
@@ -84,7 +97,7 @@ struct PersistentReadingQueue {
     func save() throws {
         let directory = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let data = try JSONEncoder().encode(FileContents(version: Self.fileVersion, items: items, lastSuccessAt: lastSuccessAt))
+        let data = try JSONEncoder().encode(FileContents(version: Self.fileVersion, items: items, lastSuccessAt: lastSuccessAt, retry: retry))
         #if os(iOS)
         try data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         #else

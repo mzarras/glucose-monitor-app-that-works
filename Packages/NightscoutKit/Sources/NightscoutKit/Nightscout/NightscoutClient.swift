@@ -76,6 +76,12 @@ struct NightscoutClient: Sendable {
     /// POSTs a JSON array of entries. Nightscout upserts each on `sysTime` + `type`
     /// (lib/server/entries.js:122-139, 238-248), so posting the same entry again is idempotent.
     /// Arrays of up to 10000 documents are accepted (lib/api/shared/write-payload.js:6).
+    ///
+    /// Success means a 2xx **and** a JSON array body: Nightscout answers a stored POST with the
+    /// stored documents (15.0.8 lib/api/entries/index.js:255-262 `res.json(res.entries || [])`;
+    /// 14.2.6 answers through `format_entries`, JSON for `Accept: application/json`). Anything
+    /// else with a 2xx — a captive portal's or proxy's HTML page — is not proof the entries were
+    /// stored, so it fails and the readings stay queued.
     func postEntries(jsonArray body: Data) async throws(NightscoutClientError) {
         guard let token = try readToken() else { throw .missingToken }
         var request = URLRequest(url: site.entriesURL)
@@ -86,6 +92,9 @@ struct NightscoutClient: Sendable {
         request.setValue(token, forHTTPHeaderField: "api-secret")
         let response = try await send(request)
         try Self.check(response)
+        guard (try? JSONSerialization.jsonObject(with: response.body)) is [Any] else {
+            throw .malformedResponse("upload answer is not a JSON array (HTTP \(response.statusCode))")
+        }
     }
 
     private func getEntries(_ queryItems: [URLQueryItem]) async throws(NightscoutClientError) -> [NightscoutEntry] {

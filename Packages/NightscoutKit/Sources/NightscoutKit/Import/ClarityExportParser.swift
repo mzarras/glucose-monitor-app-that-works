@@ -19,23 +19,11 @@
 // DST (timestamps have no offset, so the caller supplies the time zone they were recorded in):
 //   - Spring forward: a local time inside the skipped hour never happened; the row is rejected and
 //     counted (`rejectedNonexistentLocalTime`).
-//   - Fall back: a local time inside the repeated hour happened twice (earlier instant E, later
-//     instant L). The file lists EGVs in chronological order, so with P = the previous EGV row's
-//     instant:
-//       1. no previous EGV row          → E
-//       2. E later than P               → E   (still in the first pass)
-//       3. E equal to P (same local time as the previous row): the rows are either one reading
-//          listed twice or two readings an hour apart. Their "Transmitter Time (Long Integer)"
-//          (seconds on the transmitter's own clock) decides: differing by ≥ 30 min → L; otherwise,
-//          or when either is missing → E, which makes the row a duplicate of the previous one
-//          (same id, counted in `duplicateRows`). Dropping a possible repeat is preferred to
-//          inventing a reading an hour away (S1).
-//       4. L not before P               → L   (the clock went back: second pass)
-//       5. otherwise the file is out of order here → rejected, `rejectedAmbiguousLocalTime`.
-//     So two readings at the same wall-clock time, one per pass, keep two instants and two ids.
-//     Limitation: if the data has a gap covering the whole first pass of the repeated hour, a
-//     second-pass reading is placed one hour early by rule 2 (nothing in the file tells them
-//     apart without an offset).
+//   - Fall back: a local time inside the repeated hour happened twice. The row is placed by its
+//     transmitter time relative to a row whose instant is known, or — only without transmitter
+//     times — by chronological file order; see FallBackHourResolver.swift for the exact rules.
+//     Rows the evidence does not place are rejected (`rejectedAmbiguousLocalTime`). Two readings at
+//     the same wall-clock time, one per pass, get two instants and two ids.
 
 import Foundation
 import GlucoseCore
@@ -89,9 +77,7 @@ public enum ClarityExportParser {
     static let glucoseColumnPrefix = "Glucose Value ("
     static let rateColumn = "Glucose Rate of Change (mg/dL/min)"
     static let transmitterTimeColumn = "Transmitter Time (Long Integer)"
-    /// Rule 3 above: transmitter clocks of two rows at the same wall-clock time in the repeated
-    /// hour differ by about 3600 s if they are one hour apart, by ~0 if they are the same reading.
-    static let secondPassTransmitterTimeDifference: Double = 30 * 60
+    static let transmitterIDColumn = "Transmitter ID"
     static let egvEventType = "EGV"
     static let lowText = "Low"
     static let highText = "High"
@@ -119,63 +105,72 @@ public enum ClarityExportParser {
         }
         let rateIndex = header.firstIndex(of: rateColumn)
         let transmitterTimeIndex = header.firstIndex(of: transmitterTimeColumn)
+        let transmitterIDIndex = header.firstIndex(of: transmitterIDColumn)
 
+        // Pass 1: EGV rows, their local times and transmitter clocks.
+        struct EGVRow {
+            let fields: [String]
+            let time: FallBackHourResolver.Row.Time
+            let invalidTimestamp: Bool
+            let nonexistent: Bool
+        }
         let resolver = LocalTimeResolver(timeZone: timeZone)
         var result = ClarityParseResult()
-        var seenIDs: Set<String> = []
-        var previousEGVDate: Date?
-        var previousEGVTransmitterTime: Double?
-
+        var egvs: [EGVRow] = []
+        var placementRows: [FallBackHourResolver.Row] = []
         for row in rows.dropFirst() {
-            func field(_ index: Int) -> String {
-                index < row.count ? row[index].trimmingCharacters(in: .whitespaces) : ""
+            let fields = row.map { $0.trimmingCharacters(in: .whitespaces) }
+            func field(_ index: Int?) -> String {
+                guard let index, index < fields.count else { return "" }
+                return fields[index]
             }
             guard field(eventTypeIndex) == egvEventType else {
                 result.ignoredRows += 1
                 continue
             }
             result.egvRows += 1
-
-            guard let local = LocalDateTime(clarityTimestamp: field(timestampIndex)) else {
-                result.rejectedInvalidTimestamp += 1
-                continue
-            }
-            let transmitterTime = transmitterTimeIndex.flatMap { Double(field($0)) }.flatMap { $0.isFinite ? $0 : nil }
-            let date: Date
-            switch resolver.resolve(local) {
-            case .unique(let instant):
-                date = instant
-            case .ambiguous(let earlier, let later):
-                // Fall-back rules 1–5 in the file comment.
-                if let previous = previousEGVDate {
-                    if earlier > previous {
-                        date = earlier
-                    } else if earlier == previous {
-                        if let transmitterTime, let previousTransmitterTime = previousEGVTransmitterTime,
-                           abs(transmitterTime - previousTransmitterTime) >= secondPassTransmitterTimeDifference {
-                            date = later
-                        } else {
-                            date = earlier
-                        }
-                    } else if later >= previous {
-                        date = later
-                    } else {
-                        result.rejectedAmbiguousLocalTime += 1
-                        continue
-                    }
-                } else {
-                    date = earlier
+            var time = FallBackHourResolver.Row.Time.unplaceable
+            var invalidTimestamp = false
+            var nonexistent = false
+            if let local = LocalDateTime(clarityTimestamp: field(timestampIndex)) {
+                switch resolver.resolve(local) {
+                case .unique(let instant): time = .known(instant)
+                case .ambiguous(let earlier, let later): time = .ambiguous(earlier: earlier, later: later)
+                case .nonexistent: nonexistent = true
+                case .invalid: invalidTimestamp = true
                 }
-            case .nonexistent:
-                result.rejectedNonexistentLocalTime += 1
+            } else {
+                invalidTimestamp = true
+            }
+            let transmitterTime = Double(field(transmitterTimeIndex)).flatMap { $0.isFinite ? $0 : nil }
+            let transmitterID = field(transmitterIDIndex)
+            egvs.append(EGVRow(fields: fields, time: time, invalidTimestamp: invalidTimestamp, nonexistent: nonexistent))
+            placementRows.append(FallBackHourResolver.Row(
+                time: time, transmitterTime: transmitterTime, transmitterID: transmitterID.isEmpty ? nil : transmitterID
+            ))
+        }
+
+        // Pass 2: instants (fall-back hour rules in FallBackHourResolver.swift).
+        let placements = FallBackHourResolver.place(placementRows)
+
+        // Pass 3: readings, in file order.
+        var seenIDs: Set<String> = []
+        for (egv, placement) in zip(egvs, placements) {
+            let date: Date
+            switch placement {
+            case .placed(let instant):
+                date = instant
+            case .rejectedAmbiguous:
+                result.rejectedAmbiguousLocalTime += 1
                 continue
-            case .invalid:
-                result.rejectedInvalidTimestamp += 1
+            case .unplaceable:
+                if egv.nonexistent { result.rejectedNonexistentLocalTime += 1 } else { result.rejectedInvalidTimestamp += 1 }
                 continue
             }
-            previousEGVDate = date
-            previousEGVTransmitterTime = transmitterTime
-
+            func field(_ index: Int?) -> String {
+                guard let index, index < egv.fields.count else { return "" }
+                return egv.fields[index]
+            }
             guard let value = glucoseValue(field(glucoseIndex)) else {
                 result.rejectedInvalidValue += 1
                 continue
@@ -192,7 +187,7 @@ public enum ClarityExportParser {
                 date: date,
                 value: value,
                 // Clarity's own recorded rate when the export has one; usually empty for EGVs.
-                trendRate: rateIndex.flatMap { Double(field($0)) }.flatMap { $0.isFinite ? $0 : nil },
+                trendRate: Double(field(rateIndex)).flatMap { $0.isFinite ? $0 : nil },
                 isBackfill: false,
                 source: .imported(.clarityCSV),
                 // Unknown for imported history (GlucoseCore GlucoseReading.sensorSerial); also keeps

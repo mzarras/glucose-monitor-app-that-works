@@ -96,16 +96,21 @@ struct DexcomShareClient: Sendable {
         return text
     }
 
-    /// Login error codes (DexcomShareUploadManager.swift:713-727).
+    /// Login errors (DexcomShareUploadManager.swift:713-727), plus HTTP 401/403 as credentials
+    /// failures whatever the body says.
     static func loginError(code: String?, statusCode: Int) -> UploadError {
-        switch code {
-        case DexcomShareConstants.ErrorCode.accountNotFound, DexcomShareConstants.ErrorCode.passwordInvalid:
+        switch ShareErrorCode(code: code) {
+        case .accountNotFound?, .passwordInvalid?:
             return UploadError(.unauthorized, "Dexcom Share rejected the account name or password")
-        case DexcomShareConstants.ErrorCode.maxAttemptsExceeded:
+        case .maxAttemptsExceeded?:
             return UploadError(.unauthorized, "Dexcom Share: too many login attempts; wait before retrying")
-        case .some(let code):
-            return UploadError(.server, "Dexcom Share login failed: \(code) (HTTP \(statusCode))")
-        case .none:
+        default:
+            if statusCode == 401 || statusCode == 403 {
+                return UploadError(.unauthorized, "Dexcom Share refused the login (HTTP \(statusCode))")
+            }
+            if let code {
+                return UploadError(.server, "Dexcom Share login failed: \(code) (HTTP \(statusCode))")
+            }
             return UploadError(.server, "Dexcom Share login failed (HTTP \(statusCode))")
         }
     }

@@ -53,11 +53,10 @@ public actor DexcomShareUploadDestination: UploadDestination {
         self.receiverSerialNumber = receiverSerialNumber.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     }
 
-    /// Only numeric values 40...400: Share has no documented LOW/HIGH representation (S4;
+    /// Numbers 40...400, and LOW/HIGH as 39/401 (D30, unverified until §11 step 4a; see
     /// DexcomShareEGV.swift).
     public nonisolated func canRepresent(_ value: GlucoseValue) -> Bool {
-        if case .mgdl(let mgdl) = value { return GlucoseValue.sensorReportableRange.contains(mgdl) }
-        return false
+        DexcomShareEGV.value(for: value) != nil
     }
 
     public func upload(_ readings: [GlucoseReading]) async throws(UploadError) {
@@ -82,36 +81,44 @@ public actor DexcomShareUploadDestination: UploadDestination {
         case .accepted:
             return
         case .rejected(let code, let statusCode):
-            switch code {
-            case DexcomShareConstants.ErrorCode.sessionNotValid, DexcomShareConstants.ErrorCode.sessionIDNotFound:
+            switch ShareErrorCode(code: code) {
+            case .sessionNotValid?, .sessionIDNotFound?:
                 sessionID = nil
                 guard mayLogInAgain else { throw UploadError(.server, "Dexcom Share session rejected again after a new login") }
                 try await post(egvs, mayLogInAgain: false, mayStartSession: mayStartSession)
 
-            case DexcomShareConstants.ErrorCode.monitoringSessionNotActive:
+            case .monitoringSessionNotActive?:
                 guard mayStartSession else { throw UploadError(.server, "Dexcom Share monitoring session did not start") }
                 try await startMonitoringSession(session)
                 try await post(egvs, mayLogInAgain: mayLogInAgain, mayStartSession: false)
 
-            case DexcomShareConstants.ErrorCode.duplicateEgvPosted:
+            case .duplicateEgvPosted?:
                 if egvs.count == 1 { return }
                 for egv in egvs {
                     try await post([egv], mayLogInAgain: mayLogInAgain, mayStartSession: mayStartSession)
                 }
 
-            case DexcomShareConstants.ErrorCode.monitoredReceiverSerialNumberDoesNotMatch:
+            case .monitoredReceiverSerialNumberDoesNotMatch?:
                 throw UploadError(.configuration, "Dexcom Share: the receiver serial number does not match this account")
 
-            case DexcomShareConstants.ErrorCode.monitoredReceiverNotAssigned:
+            case .monitoredReceiverNotAssigned?:
                 throw UploadError(.configuration, "Dexcom Share: the receiver serial number is not assigned to this account")
 
-            case .some(let code):
-                throw UploadError(.server, "Dexcom Share rejected the upload: \(code) (HTTP \(statusCode))")
+            case .accountNotFound?, .passwordInvalid?, .maxAttemptsExceeded?:
+                sessionID = nil
+                throw DexcomShareClient.loginError(code: code, statusCode: statusCode)
 
-            case .none:
-                throw UploadError(.server, "Dexcom Share rejected the upload (HTTP \(statusCode))")
+            case nil:
+                throw Self.unrecognized(code: code, statusCode: statusCode, action: "rejected the upload")
             }
         }
+    }
+
+    /// An unknown or missing error code: HTTP 401/403 count as credentials failures (slow retry).
+    private static func unrecognized(code: String?, statusCode: Int, action: String) -> UploadError {
+        let detail = code.map { "\($0) (HTTP \(statusCode))" } ?? "HTTP \(statusCode)"
+        let kind: UploadError.Kind = (statusCode == 401 || statusCode == 403) ? .unauthorized : .server
+        return UploadError(kind, "Dexcom Share \(action): \(detail)")
     }
 
     /// StartRemoteMonitoringSession for our serial (DexcomShareUploadManager.swift:182-301).
@@ -120,18 +127,26 @@ public actor DexcomShareUploadDestination: UploadDestination {
         case .accepted:
             return
         case .rejected(let code, let statusCode):
-            switch code {
-            case DexcomShareConstants.ErrorCode.monitoredReceiverSerialNumberDoesNotMatch:
+            switch ShareErrorCode(code: code) {
+            case .monitoredReceiverSerialNumberDoesNotMatch?:
                 throw UploadError(.configuration, "Dexcom Share: the receiver serial number does not match this account")
-            case DexcomShareConstants.ErrorCode.monitoredReceiverNotAssigned:
+            case .monitoredReceiverNotAssigned?:
                 throw UploadError(.configuration, "Dexcom Share: the receiver serial number is not assigned to this account")
-            case DexcomShareConstants.ErrorCode.sessionNotValid, DexcomShareConstants.ErrorCode.sessionIDNotFound:
+            case .sessionNotValid?, .sessionIDNotFound?:
                 sessionID = nil
                 throw UploadError(.server, "Dexcom Share session expired while starting monitoring")
+            case .accountNotFound?, .passwordInvalid?, .maxAttemptsExceeded?:
+                sessionID = nil
+                throw DexcomShareClient.loginError(code: code, statusCode: statusCode)
             default:
-                throw UploadError(.server, "Dexcom Share could not start monitoring: \(code ?? "HTTP \(statusCode)")")
+                throw Self.unrecognized(code: code, statusCode: statusCode, action: "could not start monitoring")
             }
         }
+    }
+
+    /// New credentials were saved: the next upload logs in again (`ReadingUploader.credentialsChanged`).
+    public func resetSession() {
+        sessionID = nil
     }
 
     private func currentSession() async throws(UploadError) -> String {
@@ -154,8 +169,8 @@ extension ReadingUploader {
         retryPolicy: RetryPolicy = .default,
         clock: any WallClock = SystemWallClock(),
         log: any DiagnosticLog = NullDiagnosticLog()
-    ) -> ReadingUploader {
-        ReadingUploader(
+    ) throws(QueueFileInUse) -> ReadingUploader {
+        try ReadingUploader(
             destination: DexcomShareUploadDestination(
                 server: server, receiverSerialNumber: receiverSerialNumber, credentials: credentials, transport: transport
             ),
