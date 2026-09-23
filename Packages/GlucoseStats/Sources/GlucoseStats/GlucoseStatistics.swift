@@ -14,7 +14,8 @@ public enum GlucoseStatistics {
     }
 
     /// The Now screen's "Today so far": `compute` over [local midnight, now). "Lows" there is
-    /// `hypoEvents.level1.count`.
+    /// `level1EventCountOverlappingPeriod` — level 1 lows overlapping today, including one that began
+    /// before midnight. Pass readings from at least 24 h before midnight so such a low is seen.
     public static func todaySoFar(readings: [GlucoseReading], now: Date, options: StatisticsOptions) -> PeriodStatistics {
         compute(readings: readings, interval: CalendarDayPeriod.today.interval(endingAt: now, calendar: options.calendar), options: options)
     }

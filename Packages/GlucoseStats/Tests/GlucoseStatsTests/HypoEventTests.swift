@@ -4,8 +4,9 @@ import GlucoseCore
 
 /// Hypoglycaemia events (Battelino et al., Lancet Diabetes Endocrinol 2023;11:42, Table 4).
 /// Conventions used in the arithmetic below:
-/// - A reading covers from its timestamp to the earliest of (+5 min, the next reading, the end of the
-///   detection window = period end + 24 h). With no later readings that is simply +5 min.
+/// - A reading covers from its timestamp to the earliest of (+5 min, the next reading, a limit). The
+///   limit is the period end when no reading follows the period, else the detection window end
+///   (period end + 24 h).
 /// - A run's duration = coverage end of its last reading − its first reading.
 /// - A gap between consecutive readings of more than 15 min ends any run and any event.
 /// - Level 1 ends after 15 min ≥ 70; level 2 after 15 min ≥ 54.
@@ -175,11 +176,14 @@ final class HypoEventTests: XCTestCase {
         ])
     }
 
-    func testLastReadingCoversItsFiveMinutesEvenPastThePeriodEnd() {
-        // 65 at 00:00, 00:05, 00:10; period [0, 12). Hypo detection looks 24 h past the period end, so
-        // the last reading covers to 00:15 (no later reading) → 15 min → one event, ending after the period.
-        let result = events(Fixture.mg(65, 65, 65), periodMinutes: 12)
-        XCTAssertEqual(result.level1.events, [
+    func testCoverageStopsAtThePeriodEndWhenNoReadingFollows() {
+        // 65 at 00:00, 00:05, 00:10 and nothing after. With no reading after the period, its end (for
+        // today so far: now) caps coverage, so no event ends in the future and a count never drops when
+        // the next reading arrives.
+        //   period [0, 12): coverage end of 00:10 = 00:12 → 12 min → no event yet
+        //   period [0, 15): coverage end of 00:10 = 00:15 → 15 min → one event, end 00:15
+        XCTAssertEqual(events(Fixture.mg(65, 65, 65), periodMinutes: 12).level1.count, 0)
+        XCTAssertEqual(events(Fixture.mg(65, 65, 65), periodMinutes: 15).level1.events, [
             HypoEvent(level: .level1, start: Fixture.at(0), end: Fixture.at(15), endedBy: .noMoreReadings, startHourOfDay: 0),
         ])
     }
@@ -204,6 +208,20 @@ final class HypoEventTests: XCTestCase {
         ])
         XCTAssertEqual(a.level1.startHourHistogram[23], 1)
         XCTAssertEqual(events(readings, in: dayB).level1.count, 0)
+    }
+
+    func testEventsOverlappingAnInterval() {
+        // The 23:50–00:10 low from the test above, seen from day B: it starts in A (not in B's `events`)
+        // but overlaps B. Overlap means start < interval.end and end > interval.start.
+        let readings = Fixture.series(from: Fixture.at(1_430), Fixture.mg(65, 65, 65, 65, 100, 100, 100))
+        let b = events(readings, in: dayB).level1
+        let low = HypoEvent(level: .level1, start: Fixture.at(1_430), end: Fixture.at(1_450), endedBy: .recovery, startHourOfDay: 23)
+        XCTAssertEqual(b.events, [])
+        XCTAssertEqual(b.events(overlapping: dayB), [low])
+        XCTAssertEqual(b.events(overlapping: dayA), [low])
+        // Touching is not overlapping: an interval starting exactly at the event's end.
+        XCTAssertEqual(b.events(overlapping: DateInterval(start: Fixture.at(1_450), duration: Fixture.hour)), [])
+        XCTAssertEqual(b.events(overlapping: DateInterval(start: Fixture.at(1_449), duration: Fixture.hour)), [low])
     }
 
     func testOngoingLowAtPeriodStartIsNotANewEvent() {

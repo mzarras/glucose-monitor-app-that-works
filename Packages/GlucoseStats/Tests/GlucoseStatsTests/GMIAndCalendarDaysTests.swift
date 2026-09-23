@@ -73,6 +73,34 @@ final class GMIAndCalendarDaysTests: XCTestCase {
         XCTAssertEqual(CalendarDays.count(in: DateInterval(start: Fixture.santiagoSep5, end: Fixture.santiagoSep6), calendar: calendar), 1)
     }
 
+    func testLocalDateNotUTCDateDecidesTheDay() {
+        // Regression: Foundation's `ordinality(of: .day, in: .era)` numbers days by UTC regardless of the
+        // calendar's time zone (Swift 6.2.3 / macOS 26). Counting must follow local dates:
+        //   New York [Jan 5 00:00 EST, Jan 5 23:30 EST): 23:30 EST is Jan 6 04:30 UTC, still Jan 5 locally → 1
+        //   Tokyo    [Jan 5 00:00 JST, Jan 5 10:00 JST): 00:00 JST is Jan 4 15:00 UTC, already Jan 5 locally → 1
+        let newYorkJan5 = Fixture.day0.addingTimeInterval(5 * Fixture.hour) // 00:00 EST = 05:00 UTC
+        XCTAssertEqual(CalendarDays.count(in: DateInterval(start: newYorkJan5, duration: 23.5 * Fixture.hour), calendar: Fixture.newYork), 1)
+        let tokyo = Fixture.calendar("Asia/Tokyo")
+        let tokyoJan5 = Fixture.day0.addingTimeInterval(-9 * Fixture.hour) // 00:00 JST = Jan 4 15:00 UTC
+        XCTAssertEqual(CalendarDays.count(in: DateInterval(start: tokyoJan5, duration: 10 * Fixture.hour), calendar: tokyo), 1)
+        XCTAssertEqual(CalendarDays.count(in: DateInterval(start: tokyoJan5, duration: 14 * Fixture.day), calendar: tokyo), 14)
+    }
+
+    func testNonGregorianCalendarAcrossAnEraChange() {
+        // Japanese calendar, Asia/Tokyo: Heisei ended 2019-04-30 and Reiwa began 2019-05-01, so that
+        // calendar's day-of-era ordinal restarts (Apr 29 → 11 069, May 3 → 3). Dates are counted with a
+        // Gregorian calendar in the same time zone: [Apr 29, May 3) → Apr 29, 30, May 1, 2 = 4.
+        var japanese = Calendar(identifier: .japanese)
+        japanese.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let apr29 = Date(timeIntervalSince1970: 1_556_463_600) // 2019-04-29 00:00 JST
+        let may3 = Date(timeIntervalSince1970: 1_556_809_200)  // 2019-05-03 00:00 JST
+        XCTAssertEqual(CalendarDays.count(in: DateInterval(start: apr29, end: may3), calendar: japanese), 4)
+        // "14 D" on May 10 at noon spans Apr 27 … May 10: 14 dates across the era change → GMI shown.
+        let may10Noon = may3.addingTimeInterval(7 * Fixture.day + 12 * Fixture.hour)
+        let fortnight = CalendarDayPeriod.fourteenDays.interval(endingAt: may10Noon, calendar: japanese)
+        XCTAssertEqual(CalendarDays.count(in: fortnight, calendar: japanese), 14)
+    }
+
     func testDSTDaysAreStillOneDayEach() {
         // 23-hour and 25-hour days are one calendar day each.
         let spring = DateInterval(start: Fixture.springForwardDayStart, duration: 23 * Fixture.hour)

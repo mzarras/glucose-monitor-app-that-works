@@ -5,25 +5,33 @@ import Foundation
 public enum CalendarDays {
     /// The number of local calendar dates that the half-open interval `[start, end)` overlaps.
     ///
-    /// Counted by date (year/month/day), not by 24-hour steps between instants: where DST starts at
-    /// midnight (e.g. America/Santiago) a date begins at 01:00 and lasts 23 h, and stepping from
-    /// that 01:00 would miss it.
+    /// Counted by walking local days: start at the local start of the day containing `start`, step to
+    /// the next day's start (`startOfDay` of one calendar day later) while that start is before `end`.
+    /// - Not 24-hour steps between instants: where DST starts at midnight (America/Santiago) a date
+    ///   begins at 01:00 and lasts 23 h.
+    /// - Not `ordinality(of: .day, in: .era)`: on this toolchain (Swift 6.2.3, macOS 26) Foundation
+    ///   numbers those days by UTC whatever the calendar's time zone, so a New York evening or a Tokyo
+    ///   morning lands on the wrong date (regression test `testLocalDateNotUTCDateDecidesTheDay`).
+    /// - Only the calendar's time zone is used, with a Gregorian calendar: every calendar agrees on
+    ///   where local days begin and end, and it avoids calendars whose eras restart (Japanese,
+    ///   Heisei → Reiwa on 2019-05-01).
     ///
     /// Examples (see GMIAndCalendarDaysTests): `[Jan 5 00:00, Jan 19 00:00)` → 14;
     /// the Trends "14 D" period `[Jan 5 00:00, Jan 18 12:35)` → 14 (Jan 5 … Jan 18);
     /// a 23- or 25-hour DST day → 1; an empty interval → 0.
     public static func count(in interval: DateInterval, calendar: Calendar) -> Int {
         guard interval.duration > 0 else { return 0 }
-        let firstDate = dateNumber(of: interval.start, calendar: calendar)
-        var lastDate = dateNumber(of: interval.end, calendar: calendar)
-        // `end` is exclusive: if it is the first instant of its date, that date is not touched.
-        if calendar.startOfDay(for: interval.end) == interval.end { lastDate -= 1 }
-        return lastDate - firstDate + 1
-    }
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
 
-    /// Consecutive integer per local date (the date's ordinal within the calendar's era).
-    static func dateNumber(of date: Date, calendar: Calendar) -> Int {
-        // Only nil for calendars without eras or days; the Gregorian calendar always answers.
-        calendar.ordinality(of: .day, in: .era, for: date) ?? 0
+        var count = 0
+        var dayStart = gregorian.startOfDay(for: interval.start)
+        while dayStart < interval.end {
+            count += 1
+            // `date(byAdding:)` only fails outside the calendar's range; stop rather than loop forever.
+            guard let sameTimeNextDay = gregorian.date(byAdding: .day, value: 1, to: dayStart) else { break }
+            dayStart = gregorian.startOfDay(for: sameTimeNextDay)
+        }
+        return count
     }
 }

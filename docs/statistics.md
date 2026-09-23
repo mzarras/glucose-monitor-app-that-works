@@ -17,7 +17,7 @@ let stats: PeriodStatistics = GlucoseStatistics.compute(readings: readings, inte
 // Trends: N calendar days ending now, vs the N days before:
 let comparison: PeriodComparison = GlucoseStatistics.compare(readings: readings, period: .fourteenDays, now: now, options: options)
 
-// Now screen, "Today so far":
+// Now screen, "Today so far" ("lows" = today.level1EventCountOverlappingPeriod):
 let today: PeriodStatistics = GlucoseStatistics.todaySoFar(readings: readings, now: now, options: options)
 
 // AGP chart geometry (display only, never a metric):
@@ -79,9 +79,10 @@ readings, a 25-hour day 300). Tests: `PeriodReadingsTests.testSecondOfDay*`,
 
 - A reading **covers** from its timestamp until the earliest of: +5 minutes, the next counted
   reading, a limit. For the in-range streak the limit is the period end, so a streak never exceeds
-  the period. Hypo events are detected over the period ± 24 h, so their limit is the end of that
-  window: an event can continue past the period end, and the last reading before "now" covers its
-  full 5 minutes (three low readings = 15 min, even if the third was 2 minutes ago).
+  the period. Hypo events are detected over the period ± 24 h: when readings follow the period the
+  limit is the end of that window (an event can continue past the period end); when none do, the
+  limit is the period end itself — for "today so far" that is now — so no event ends in the future
+  and a count never drops when the next reading arrives (`testCoverageStopsAtThePeriodEndWhenNoReadingFollows`).
 - Consecutive readings **more than 15 minutes apart** are a gap. A gap ends every run and every
   hypo event. 15 minutes exactly is bridged (as the chart draws a line across it, §7.5).
 - A run's **duration** = coverage end of its last reading − timestamp of its first. With regular
@@ -134,9 +135,16 @@ For the UI: GMI is not suppressed for low data coverage (§7.3 shows it from 14 
 `PeriodStatistics` next to `dataSufficiency`; show the < 70 % warning
 (`dataSufficiency.isBelowWarningThreshold`) beside the GMI row, since GMI from sparse data is weak.
 
-`CalendarDays.count` counts **dates** (the day's ordinal in the calendar), not 24-hour steps from the
-day's first instant: where DST starts at midnight (America/Santiago, 2026-09-06) a date begins at
-01:00 and lasts 23 h, and stepping from 01:00 would miss it (`testDayThatStartsAt0100IsStillOneDay`).
+`CalendarDays.count` counts **local dates** by walking them: from the start of the day containing
+`start`, step to the next day's start while it is before `end`. Deliberately not:
+- 24-hour steps from a day's first instant: where DST starts at midnight (America/Santiago,
+  2026-09-06) a date begins at 01:00 and lasts 23 h (`testDayThatStartsAt0100IsStillOneDay`);
+- `Calendar.ordinality(of: .day, in: .era)`: on this toolchain (Swift 6.2.3, macOS 26) it numbers days
+  by UTC whatever the calendar's time zone, so a New York evening or a Tokyo morning falls on the
+  wrong date (`testLocalDateNotUTCDateDecidesTheDay`). The previous commit used it; this is fixed;
+- the user's own calendar: only its time zone is used, with a Gregorian calendar, so a calendar
+  whose eras restart (Japanese, Heisei → Reiwa on 2019-05-01) cannot disturb the count
+  (`testNonGregorianCalendarAcrossAnEraChange`).
 
 ### Data sufficiency (`DataSufficiency`)
 
@@ -210,18 +218,24 @@ one 20-minute event counted in the day it began and not in the next, instead of 
 fragments that would both be too short (`testLowCrossingMidnightIsCountedOnceInThePeriodWhereItStarts`).
 A low already under way at the period start is not counted again (`testOngoingLowAtPeriodStartIsNotANewEvent`);
 a low that starts in the look-ahead is left to the next period (`testEventStartingAfterThePeriodIsNotCounted`).
-An event's `end` may lie after the period end. An event older than the 24 h look-back that is still
-running at the period start would be seen from the look-back's first reading, which also lies before
-the period, so it is still not counted.
+An event's `end` may lie after the period end when readings follow it. An event older than the 24 h
+look-back that is still running at the period start would be seen from the look-back's first
+reading, which also lies before the period, so it is still not counted.
+
+`events(overlapping: interval)` returns the detected events with `start < interval.end` and
+`end > interval.start`, including ones that began before the period (`testEventsOverlappingAnInterval`).
 
 Tests: `HypoEventTests` (qualify/not, merge, split, gap exactly 15 min and 15 min + 1 s, level 2 exit
 at 54, the probe above, open at period end, sub-5-minute spacing, histogram, wrap past midnight,
 fall-back hour, the boundary cases), `test_S1_hypoEventsAreNotJoinedAcrossGaps`,
 `test_S4_lowFlagIsALevel2Low`.
 
-**"Today so far → lows"** is `hypoEvents.level1.count`: lows that started today. Every level 2 event
-starts or falls inside a level 1 event, so level 1 counts every distinct low episode (a level 2
-event today can sit inside a level 1 low that began, and is counted, yesterday).
+**"Today so far → lows"** is `PeriodStatistics.level1EventCountOverlappingPeriod`: level 1 lows that
+**overlap** today, including one that began before midnight and is still going. Reviewer probe:
+50 mg/dL from 23:40, read at 00:42 → start-attributed counts 0 but lows 1 (the event 23:40 → 00:42)
+(`testTodaySoFarLowsIncludeALowThatBeganBeforeMidnight`). Trends keeps `hypoEvents.level1.count`
+(lows that start in the period) so that adjacent periods never count one low twice. Every level 2
+event starts or falls inside a level 1 event, so level 1 counts every distinct low episode.
 
 ### Overnight vs day TIR (`OvernightAndDayTimeInRange`)
 
@@ -277,7 +291,9 @@ in `PerformanceTests`: < 50 ms on the host for 90 days (25 920 readings, New Yor
 < 100 ms for the 90 D comparison (two 90-day periods from 51 840 readings).
 
 **What is asserted: thread CPU time** (`clock_gettime(CLOCK_THREAD_CPUTIME_ID)`) of the timed call,
-best of 7 runs; wall-clock time is printed alongside. This project runs many builds and test suites
+best of 7 runs, on a dedicated thread with `.userInteractive` QoS (so the scheduler prefers a
+performance core; the test asserts the thread really ran at that QoS); wall-clock time is printed
+alongside. This project runs many builds and test suites
 in parallel on one machine, and wall-clock time also counts the time the thread waits for a core:
 one early run measured 77–95 ms wall for about 21 ms of work, which made the gate flaky. CPU time
 counts only the work. It is not completely immune to load — on Apple Silicon a busy machine can run
@@ -287,9 +303,9 @@ Measured on the host (Apple M4, Swift 6.2.3), thread CPU time, best / median of 
 
 | Build | 90-day `compute` | 90 D `compare` | Load average |
 |---|---|---|---|
-| Release (`swift test -c release`) | 5.4 / 5.4 ms | 10.8 / 11.3 ms | ~15 |
-| Debug + coverage (`scripts/check.sh` gate run) | 21.0 / 21.6 ms | 46.1 / 48.4 ms | ~15 |
-| Debug (`swift test`), heaviest load seen | 31.1 / 36.2 ms | 44.9 / 49.8 ms | ~15 |
+| Release (`swift test -c release`) | 5.8 / 6.0 ms | 11.3 / 11.8 ms | ~25 (5-min avg) |
+| Debug + coverage (`scripts/check.sh` gate run) | 24.4 / 24.9 ms | 48.0 / 49.9 ms | ~25 (5-min avg) |
+| Debug (`swift test`), main thread, before the QoS thread, heaviest load seen | 31.1 / 36.2 ms | 44.9 / 49.8 ms | ~15 |
 
 The app ships the Release build, so on a phone expect roughly 5–15 ms.
 

@@ -7,8 +7,9 @@
 //
 // Minutes are measured with the `Continuity` rules: a reading covers up to 5 minutes, and a gap of
 // more than 15 minutes ends runs and events. Detection runs over the period plus 24 hours of
-// context on each side (`PeriodReadings.contextDuration`); each event belongs to the period that
-// contains its start, so a low crossing midnight is counted once, in the day it began.
+// context on each side (`PeriodReadings.contextDuration`). Counts (`events`, `count`) take each
+// event in the period that contains its start, so a low crossing midnight is counted once, in the
+// day it began; `events(overlapping:)` also finds a low that began earlier and is still going.
 
 import Foundation
 import GlucoseCore
@@ -53,7 +54,8 @@ public struct HypoEvent: Sendable, Equatable {
     /// reported for.
     public let start: Date
     /// Coverage end of the event's last reading below the level's exit threshold (70 for level 1,
-    /// 54 for level 2). May lie after the period end: the event is followed into the look-ahead.
+    /// 54 for level 2). May lie after the period end when readings follow the period (the event is
+    /// followed into the look-ahead); never after the period end when none do, so never after "now".
     public let end: Date
     public let endedBy: HypoEventEnd
     /// Local wall-clock hour (0–23) of `start`.
@@ -80,8 +82,11 @@ public struct HypoEventSummary: Sendable, Equatable {
     public static let recoveryDuration: TimeInterval = 15 * 60
 
     public let level: HypoLevel
-    /// Events starting inside the period, ascending by start.
+    /// Events starting inside the period, ascending by start. Trends counts use these, so adjacent
+    /// periods never count one low twice.
     public let events: [HypoEvent]
+    /// Every event found in the look-back, the period and the look-ahead, ascending by start.
+    let detectedEvents: [HypoEvent]
     /// Mean of `duration`, seconds; `nil` without events.
     public let meanDuration: TimeInterval?
     /// 24 counts: events by local hour of their start.
@@ -91,7 +96,8 @@ public struct HypoEventSummary: Sendable, Equatable {
 
     init(level: HypoLevel, period: PeriodReadings) {
         let interval = period.interval
-        let events = Self.detect(level, in: period).filter { interval.start <= $0.start && $0.start < interval.end }
+        let detected = Self.detect(level, in: period)
+        let events = detected.filter { interval.start <= $0.start && $0.start < interval.end }
         var histogram = Array(repeating: 0, count: 24)
         var totalDuration: TimeInterval = 0
         for event in events {
@@ -100,8 +106,16 @@ public struct HypoEventSummary: Sendable, Equatable {
         }
         self.level = level
         self.events = events
+        self.detectedEvents = detected
         self.meanDuration = events.isEmpty ? nil : totalDuration / Double(events.count)
         self.startHourHistogram = histogram
+    }
+
+    /// Events that overlap `interval` (`start < interval.end` and `end > interval.start`), including
+    /// ones that began before it — for example a low that started at 23:40 and is still going at 00:42
+    /// overlaps "today". Only events within the 24 h context around the period can be found.
+    public func events(overlapping interval: DateInterval) -> [HypoEvent] {
+        detectedEvents.filter { $0.start < interval.end && $0.end > interval.start }
     }
 
     /// The `hourCount`-hour window of the day holding the most event starts, for a note such as
@@ -133,7 +147,12 @@ public struct HypoEventSummary: Sendable, Equatable {
     /// the event ends. A gap > 15 min ends the event and any run; so does running out of readings.
     static func detect(_ level: HypoLevel, in period: PeriodReadings) -> [HypoEvent] {
         let readings = period.lookBackReadings + period.readings + period.lookAheadReadings
-        let coverageLimit = period.interval.end.addingTimeInterval(PeriodReadings.contextDuration)
+        // Coverage limit: with readings after the period, the end of the look-ahead window; with none,
+        // the period end itself (for "today so far" that is now), so no event ends in the future and a
+        // count cannot drop when the next reading arrives.
+        let coverageLimit = period.lookAheadReadings.isEmpty
+            ? period.interval.end
+            : period.interval.end.addingTimeInterval(PeriodReadings.contextDuration)
         let entryThreshold = level.entryThresholdMgdl
         let exitThreshold = level.exitThresholdMgdl
 
@@ -203,10 +222,16 @@ public struct HypoEventSummary: Sendable, Equatable {
     }
 }
 
-/// Level 1 and level 2 events that start in a period. "Today so far → lows" on the Now screen is
-/// `level1.count`. Every run below 54 lasting 15 min also lies below 70, so every level 2 event
-/// starts or falls inside a level 1 event: one long level 1 low can hold several level 2 events,
-/// and a level 2 event today can sit inside a level 1 event that began (and is counted) yesterday.
+/// Level 1 and level 2 events of a period.
+///
+/// Two views: `levelN.count` / `levelN.events` hold events that **start** in the period (Trends
+/// counts; each low counted once across adjacent periods); `levelN.events(overlapping:)` also
+/// includes events that began earlier and continue into the period. The Now screen's "Today so far
+/// → lows" uses the overlapping view (`PeriodStatistics.level1EventCountOverlappingPeriod`), so a
+/// low that began at 23:40 and is still going after midnight shows as today's low.
+///
+/// Every run below 54 lasting 15 min also lies below 70, so every level 2 event starts or falls
+/// inside a level 1 event; one long level 1 low can hold several level 2 events.
 public struct HypoEvents: Sendable, Equatable {
     public let level1: HypoEventSummary
     public let level2: HypoEventSummary

@@ -49,13 +49,21 @@ public struct PeriodStatistics: Sendable, Equatable {
     public let dataSufficiency: DataSufficiency
     /// Raw percentile profile. For the chart, pass it to `AGPDisplaySmoothing`.
     public let agp: AGPProfile
-    /// Level 1 and level 2 events.
+    /// Level 1 and level 2 events (counts: events that start in the period).
     public let hypoEvents: HypoEvents
     public let overnightAndDay: OvernightAndDayTimeInRange
     /// `nil` without in-range readings.
     public let longestInRangeStreak: InRangeStreak?
     /// v1.1 stub.
     public let afterExerciseTimeInRange: AfterExerciseTimeInRange
+
+    /// Level 1 lows that overlap the period, including one that began before it and is still going.
+    /// This is the Now screen's "Today so far → lows" (HANDOFF §7.3 item 1). Trends uses
+    /// `hypoEvents.level1.count` instead (lows that start in the period), so a low is counted once
+    /// across adjacent Trends periods.
+    public var level1EventCountOverlappingPeriod: Int {
+        hypoEvents.level1.events(overlapping: interval).count
+    }
 
     init(_ period: PeriodReadings, options: StatisticsOptions) {
         interval = period.interval

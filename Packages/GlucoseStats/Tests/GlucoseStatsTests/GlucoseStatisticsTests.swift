@@ -148,9 +148,30 @@ final class GlucoseStatisticsTests: XCTestCase {
         XCTAssertEqual(stats.interval, DateInterval(start: Fixture.day0, end: now))
         XCTAssertEqual(stats.readingCount, 6)
         XCTAssertEqual(stats.hypoEvents.level1.count, 1)
+        XCTAssertEqual(stats.level1EventCountOverlappingPeriod, 1)
         // In range 3/6 = 50 %; mean (3 × 65 + 3 × 100) / 6 = 495 / 6 = 82.5.
         XCTAssertEqual(stats.ranges.inRange.percent, 50)
         XCTAssertEqual(stats.meanAndVariability.meanMgdl, 82.5)
+    }
+
+    func testTodaySoFarLowsIncludeALowThatBeganBeforeMidnight() {
+        // Reviewer probe: 50 mg/dL every 5 min from 23:40 (Jan 5) to 00:40 (Jan 6); now = Jan 6 00:42.
+        //   The low started yesterday, so today's start-attributed counts are 0 (Trends counts each low
+        //   once, in the period it began), but it overlaps today: "Today so far → lows" = 1.
+        //   Its end = coverage end of 00:40 capped at the period end (now, no later reading) = 00:42.
+        let readings = Fixture.series(from: Fixture.at(1_420), Array(repeating: GlucoseValue.mgdl(50), count: 13))
+        let now = Fixture.at(1_440 + 42)
+        let today = GlucoseStatistics.todaySoFar(readings: readings, now: now, options: Fixture.utcOptions)
+
+        XCTAssertEqual(today.readingCount, 9)
+        XCTAssertEqual(today.ranges.veryLow.percent, 100)
+        XCTAssertEqual(today.hypoEvents.level1.count, 0)
+        XCTAssertEqual(today.hypoEvents.level2.count, 0)
+        XCTAssertEqual(today.level1EventCountOverlappingPeriod, 1)
+        XCTAssertEqual(today.hypoEvents.level1.events(overlapping: today.interval), [
+            HypoEvent(level: .level1, start: Fixture.at(1_420), end: now, endedBy: .noMoreReadings, startHourOfDay: 23),
+        ])
+        XCTAssertEqual(today.hypoEvents.level2.events(overlapping: today.interval).count, 1)
     }
 
     func testAfterExerciseTimeInRangeIsAStub() {
