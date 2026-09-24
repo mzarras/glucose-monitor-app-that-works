@@ -94,8 +94,10 @@ except the lengths inside the J-PAKE hash (big-endian, §3.3).
     `previousSensorSkipLimit` = 10 min from the pairing start, two sensor wakes): if no sensor has
     authenticated by then, or if the previous sensor's refusal comes after that, the state becomes
     `.failed(previousSensorRejectedCode(sensorName:))` (kind `pairingRejected`), whose message names
-    the previous sensor and points to "Pair again" — the person may be re-pairing the sensor they
-    wear with a mistyped code. A refusal from any other sensor (including a different sensor with
+    the previous sensor and asks to enter its 4-digit code again if the person meant to keep using
+    it, or to check the new applicator's code — they may be re-pairing the sensor they wear with a
+    mistyped code. (No "Pair again" in the text: onboarding offers only "Try again", `pair(code:)`,
+    which does reach the worn sensor.) A refusal from any other sensor (including a different sensor with
     the same name) is shown as `.failed(pairingCodeRejected)` at once. Tests
     `test_S5_previousSensorRefusingANewCodeIsSilentlySkipped`,
     `test_S5_sameNameDifferentIdentifierRefusalSurfaces`, `test_S5_previousSensorSkipIsTimeLimited`.
