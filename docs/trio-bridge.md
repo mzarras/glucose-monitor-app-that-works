@@ -226,7 +226,11 @@ Both apps read the same phone clock, so by the time Trio reads, the lead is smal
    is nil only when no session is valid (D28), and removing the payload at the moment Trio polls would starve it.
    A payload of a sensor that failed or was stopped early therefore stays until the next sensor's first write
    or removal, its grace-period end, or `clear()`; it holds only readings that passed the gate when written,
-   and nothing is added to it.
+   and nothing is added to it. After a relaunch the new process does not know which session a leftover payload
+   belongs to, so the grace-period rule cannot fire for it: a leftover payload of an ended (or early-stopped)
+   session is replaced only by the next write, or removed by `clear()`
+   (`test_S2_sensorStoppedEarlyPayloadStaysUntilNextSensorGraceEndOrClear`,
+   `test_S2_firstCallWithNilSessionLeavesLeftoverPayloadInPlace`).
 7. A write is JSON-encoded (sorted keys, unescaped slashes) after `checkAccess()`, then read back. The
    read-back only sees this process's view of the suite, so it catches a store that drops the value but cannot
    prove Trio sees it; `checkAccess()` (group ID format and entitlement) is the real guard.
