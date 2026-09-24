@@ -85,16 +85,75 @@ final class MissedReadingsTests: XCTestCase {
         XCTAssertEqual(h.phase(.missedReadings), .firing(since: Fixtures.t0.addingTimeInterval(minutes(15))))
     }
 
-    func test_warmUpSuppressesMissedReadingsAndRestartsTheWindowAfterwards() {
+    func test_warmUpSuppressesMissedReadingsUntilItEndsAndKeepsThemPendingFromTheEnd() {
         let h = EngineHarness()
         h.tick()
-        let warm = h.send(.sensorState(.warmingUp(endsAt: h.now.addingTimeInterval(minutes(30)))))
-        XCTAssertEqual(warm.cancelled, [.missedReadings], "pending notifications removed")
-        XCTAssertEqual(h.advance(minutes: 30).due, [])
+        let end = h.now.addingTimeInterval(minutes(30))
+        let warm = h.send(.sensorState(.warmingUp(endsAt: end)))
+        XCTAssertEqual(h.pendingDates(.missedReadings).first, end.addingTimeInterval(minutes(15)),
+                       "pending from the end of warm-up, so a suspended app still gets them")
+        XCTAssertTrue(warm.contains { if case .cancelSlots(.missedReadings, _) = $0 { true } else { false } },
+                      "the ones due during warm-up are removed")
+        XCTAssertEqual(h.advance(minutes: 29).due, [])
         XCTAssertEqual(h.phase(.missedReadings), .armed)
         let active = h.send(.sensorState(.active(sessionStart: Fixtures.t0, expiresAt: Fixtures.t0.addingTimeInterval(10 * 86_400))))
-        XCTAssertEqual(active.scheduled(.missedReadings)?.first, h.now.addingTimeInterval(minutes(15)), "window starts at warm-up end")
+        XCTAssertEqual(active.scheduled(.missedReadings)?.first, h.now.addingTimeInterval(minutes(15)),
+                       "the sensor finished a minute early: the window starts now")
         XCTAssertEqual(h.advance(minutes: 15).due, [.missedReadings])
+    }
+
+    func test_S5_missedReadingsFiresAfterWarmUpEndsWithoutReadings() {
+        // The phone is out of range when warm-up ends: no further state, no reading, nothing at all.
+        let h = EngineHarness()
+        let end = h.now.addingTimeInterval(minutes(30))
+        h.send(.sensorState(.warmingUp(endsAt: end)))
+        XCTAssertEqual(h.pendingDates(.missedReadings).first, end.addingTimeInterval(minutes(15)), "pending during warm-up")
+        XCTAssertEqual(h.advance(minutes: 44).due, [])
+        XCTAssertEqual(h.advance(minutes: 1).due, [.missedReadings], "due at the end of warm-up + 15 min")
+        XCTAssertEqual(h.phase(.missedReadings), .firing(since: end.addingTimeInterval(minutes(15))))
+    }
+
+    func test_S5_transientFailureAfterWarmUpIsNotSilent() {
+        let transient = SensorFailure.Kind.allCases.filter { !SensorFailure(kind: $0, message: "").raisesSensorAlert }
+        XCTAssertEqual(transient.count, 8)
+        for kind in transient {
+            let h = EngineHarness()
+            let end = h.now.addingTimeInterval(minutes(30))
+            h.send(.sensorState(.warmingUp(endsAt: end)))
+            h.clock.advance(minutes: 30)
+            // From the end of warm-up the source reports only this transient failure, every 5 minutes.
+            var due: [AlertKind] = []
+            for _ in 0..<4 {
+                due += h.send(.sensorState(.failed(SensorFailure(kind: kind, message: "transient")))).due
+                h.clock.advance(minutes: 5)
+            }
+            XCTAssertEqual(due, [.missedReadings], "\(kind): missed readings fires at the end of warm-up + 15 min")
+            XCTAssertEqual(h.phase(.missedReadings), .firing(since: end.addingTimeInterval(minutes(15))), "\(kind)")
+        }
+    }
+
+    func test_S5_failureBeforeFirstStateStartsMissedReadings() {
+        // Not paired, then the source reports only a transient failure: a pairing exists after all.
+        let h = EngineHarness()
+        h.send(.sensorState(.notPaired))
+        h.clock.advance(minutes: 60)
+        let start = h.now
+        var due: [AlertKind] = []
+        for _ in 0..<5 {
+            due += h.send(.sensorState(.failed(SensorFailure(kind: .authenticationFailed, message: "")))).due
+            h.clock.advance(minutes: 5)
+        }
+        XCTAssertEqual(due, [.missedReadings], "repeated failures do not keep restarting the window")
+        XCTAssertEqual(h.phase(.missedReadings), .firing(since: start.addingTimeInterval(minutes(15))))
+    }
+
+    func test_missedReadingsFiresDuringCalibrationStates() {
+        for state: SensorState in [.calibrationNeeded(code: 1), .calibrationError(code: 2)] {
+            let h = EngineHarness()
+            h.mgdl(120)
+            h.send(.sensorState(state))
+            XCTAssertEqual(h.advance(minutes: 15).due, [.missedReadings], "\(state): readings withheld still count as missed")
+        }
     }
 
     func test_noSensorPairedMeansNothingToMiss() {
