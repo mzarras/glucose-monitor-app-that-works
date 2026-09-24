@@ -44,8 +44,8 @@ import GlucoseCore
 ///
 /// Session end (D28, safety review N1). The sensor's own "expired", "failed" or "stopped after
 /// warm-up" state ends the session only when two status-0 `0x4E` report it and the second one's
-/// sensor clock is at least `endConfirmationInterval` after the first one's, with no status-0 report
-/// of a continuing session in between. The sensor clock, not a connection count, tells two reports
+/// sensor clock is at least `endConfirmationInterval` and at most `endConfirmationWindow` after the
+/// first one's, with no status-0 report of a continuing session in between. The sensor clock, not a connection count, tells two reports
 /// apart, and the first report is persisted (`G7UnconfirmedSessionEnd`), so iOS terminating the app
 /// between two wakes cannot prevent the latch. A non-zero-status reply never counts (it may carry a
 /// cached state). Until then the reported state is shown for that connection only and a later OK
@@ -70,6 +70,13 @@ final class G7ReadingPipeline {
     /// sensor clock is at least 60 s later. The G7 wakes about every 300 s, so this means a later
     /// wake, never a repeat within the same few-second connection or a re-delivered packet.
     static let endConfirmationInterval: UInt32 = 60
+
+    /// Sensor policy (safety review, last minor): a first end report older than this much sensor time
+    /// is stale and is replaced by the new report instead of confirming with it. Otherwise a report
+    /// restored after a failed clearing save (a running report in between was never persisted) and a
+    /// relaunch could let one later report latch the end. One hour is about 12 wakes; a real end is
+    /// reported at every wake, so this delays a latch by at most one wake after a long outage.
+    static let endConfirmationWindow: UInt32 = 3_600
 
     let serial: String
     /// Reported by the sensor in `0x52`; nil until then (no reading is published without it).
@@ -144,7 +151,7 @@ final class G7ReadingPipeline {
     func handleGlucose(_ message: G7GlucoseMessage, receivedAt: Date) -> Output {
         var output = Output()
         if isUnsupportedSensor {
-            output.state = .failed(reason: G7FailureReason.unsupportedSensor)
+            output.state = .failed(G7FailureReason.unsupportedSensor)
             return output
         }
         if let sessionEnd {
@@ -155,7 +162,7 @@ final class G7ReadingPipeline {
         }
         guard let parameters else {
             log("glucose: the sensor has not reported its session length; nothing used")
-            output.state = .failed(reason: G7FailureReason.sessionLengthUnknown)
+            output.state = .failed(G7FailureReason.sessionLengthUnknown)
             return output
         }
         let anchor = G7SessionClock(sensorClockAtReceipt: message.sensorClock, receivedAt: receivedAt)
@@ -169,7 +176,7 @@ final class G7ReadingPipeline {
             return output
         }
         guard acceptAnchor(anchor.sessionStart), let start = sessionStart else {
-            output.state = .failed(reason: G7FailureReason.sensorClockMismatch)
+            output.state = .failed(G7FailureReason.sensorClockMismatch)
             return output
         }
         clock = anchor
@@ -192,7 +199,7 @@ final class G7ReadingPipeline {
             record(G7ReadingMark(sensorTimestamp: timestamp, date: reading.date))
             output.readings.append(reading)
         case .withheld(let surfacedReason):
-            if let surfacedReason { output.state = .failed(reason: surfacedReason) }
+            if let surfacedReason { output.state = .failed(surfacedReason) }
         }
         let frames = pendingBackfillFrames
         pendingBackfillFrames.removeAll()
@@ -228,7 +235,7 @@ final class G7ReadingPipeline {
         backfillBatch.removeAll()
         if outOfOrder > 0 {
             log("backfill: \(outOfOrder) record(s) would be dated out of sensor-time order (phone clock changed); not published")
-            output.state = .failed(reason: G7FailureReason.sensorClockMismatch)
+            output.state = .failed(G7FailureReason.sensorClockMismatch)
         }
         return output
     }
@@ -251,7 +258,7 @@ final class G7ReadingPipeline {
             backfillBatch.removeAll()
             pendingBackfillFrames.removeAll()
             log("extended version: unsupported session length \(message.sessionLength) s / warm-up \(message.warmUpDuration) s")
-            return Output(readings: [], state: .failed(reason: G7FailureReason.unsupportedSensor))
+            return Output(readings: [], state: .failed(G7FailureReason.unsupportedSensor))
         }
         parameters = reported
         return Output()
@@ -261,8 +268,8 @@ final class G7ReadingPipeline {
 
     private enum LiveOutcome {
         case published(timestamp: UInt32, reading: GlucoseReading)
-        /// `surfacedReason` is reported as `.failed(reason:)` (S5); nil for normal non-publication.
-        case withheld(surfacedReason: String?)
+        /// `surfacedReason` is reported as `.failed(_:)` (S5); nil for normal non-publication.
+        case withheld(surfacedReason: SensorFailure?)
     }
 
     /// Establishes the session start, confirms it, or (after two agreeing anchors) replaces it.
@@ -300,8 +307,14 @@ final class G7ReadingPipeline {
     /// second one arrives at least `endConfirmationInterval` of sensor time after the first (any
     /// status-0 report of a continuing session in between clears the first one, in `handleGlucose`).
     /// A second report sooner than that (same connection, re-delivered packet) or with an earlier
-    /// sensor clock neither confirms nor replaces the first.
+    /// sensor clock neither confirms nor replaces the first; a first report more than
+    /// `endConfirmationWindow` older is discarded and the new report becomes the first.
     private func noteReportedEnd(_ end: G7SessionEnd, sensorClock: UInt32) {
+        if let stale = unconfirmedEnd, sensorClock >= stale.sensorClock,
+           sensorClock - stale.sensorClock > Self.endConfirmationWindow {
+            log("first end report at sensor time \(stale.sensorClock) is older than \(Self.endConfirmationWindow) s; discarded")
+            unconfirmedEnd = nil
+        }
         guard let first = unconfirmedEnd else {
             unconfirmedEnd = G7UnconfirmedSessionEnd(end: end, sensorClock: sensorClock)
             log("sensor reported the session over (\(end.rawValue)) at sensor time \(sensorClock); it ends if a later wake reports it again")

@@ -382,7 +382,7 @@ session length (`0x52`); `0x4E` status `00`; algorithm state `06` (G7SensorKit
 monotonic; and `LiveReadingGate.validate` passes against the session (start ≤ date, warm-up ended,
 ≤ grace end, ≤ now + 60 s, value in range, serial). Anything refused is dropped and logged to
 `DiagnosticLog`; "no value", clock disagreement and an unknown session length are also surfaced as
-`.failed(reason:)` (S5).
+`.failed(_:)` (S5, §7.1).
 
 ### 5.3 LOW / HIGH (S4)
 
@@ -445,14 +445,18 @@ it stays non-nil across the ~5-minute disconnects and app relaunches. It is `nil
 - after `gracePeriodEndsAt` (a time check when read — no connection needed);
 - once the sensor itself has reported the session over — expired states, failed states, or
   "stopped" after warm-up (`G7SensorStatus.sessionEnd`) — **in two status-0 `0x4E`, the second one's
-  sensor clock at least 60 s after the first one's** (safety review N1; Sensor policy: the sensor wakes
-  about every 300 s, so this means a later wake, never a repeat within one connection or a
-  re-delivered packet). The sensor clock, not a connection count, tells the reports apart, and the
-  first report is persisted in the pairing record (`G7UnconfirmedSessionEnd`), so iOS terminating the
-  app between wakes cannot prevent the latch. A non-zero-status reply never counts (it may carry a
-  cached state, §4.1); a second report with an earlier or too-close sensor clock neither confirms nor
-  replaces the first; any status-0 report of a running session in between (OK, warm-up, calibration,
-  temporary issue) clears it. A single report is shown for that connection (`.expired` or
+  sensor clock at least 60 s and at most 1 h after the first one's** (safety review N1; Sensor
+  policy: the sensor wakes about every 300 s, so 60 s means a later wake, never a repeat within one
+  connection or a re-delivered packet). The sensor clock, not a connection count, tells the reports
+  apart, and the first report is persisted in the pairing record (`G7UnconfirmedSessionEnd`), so iOS
+  terminating the app between wakes cannot prevent the latch. A non-zero-status reply never counts
+  (it may carry a cached state, §4.1); a second report with an earlier or too-close sensor clock
+  neither confirms nor replaces the first; any status-0 report of a running session in between (OK,
+  warm-up, calibration, temporary issue) clears it. A first report more than 1 h of sensor time
+  older than a new report is discarded and the new report becomes the first (Sensor policy, last
+  safety-review minor): if the save that cleared it failed and the app was relaunched, the restored
+  stale report cannot let a single later report latch; a real end is reported at every wake, so this
+  costs at most one wake after a long outage. A single report is shown for that connection (`.expired` or
   `.error(code:)`) and a later OK reading is used as usual, so one bad byte cannot end a session.
   Once latched, the end (`G7SessionEnd`) is persisted in the pairing record; every later `0x4E`, OK
   or not, shows it — `.expired`, `.failed(sensorFailed)` or `.failed(sessionStopped)`, never
@@ -474,8 +478,8 @@ A `0x52` session length ≠ 907 200 s (e.g. 15-day `5200406f1400880e…` = 1 339
 | `06` | OK | ok | `.active` / `.gracePeriod` / `.expired` by the derived session |
 | `02` | warm-up | warmUp | `.warmingUp(endsAt:)` |
 | `01` | session stopped | stopped | `.warmingUp` before warm-up end (first message after activation reports it, G7SensorKit `:40-66`), else `.error(1, …)`; after two connections (§6.1a) `.failed(sessionStopped)` |
-| `04 05 07 0E` | BG(s) needed / calibration needed / outlier request | calibrationNeeded | `.error(code: byte, …)` |
-| `08 09 0A 0D` | calibration errors / out of calibration | calibrationError | `.error(code: byte, …)` |
+| `04 05 07 0E` | BG(s) needed / calibration needed / outlier request | calibrationNeeded | `.calibrationNeeded(code: byte)` (D36) |
+| `08 09 0A 0D` | calibration errors / out of calibration | calibrationError | `.calibrationError(code: byte)` (D36) |
 | `03 12` | excess noise / temporary issue | temporaryIssue | `.error(code: byte, …)` |
 | `0B 0C 10 11 13-16 19 1B 25` | failed | sensorFailed | `.error(code: byte, …)`; after two connections (§6.1a) `.failed(sensorFailed)` |
 | `0F 18 1A 24` | expired / session ended | expired | `.expired` (latched after two connections, §6.1a) |
@@ -484,7 +488,30 @@ A `0x52` session length ≠ 907 200 s (e.g. 15-day `5200406f1400880e…` = 1 339
 Names: `Generic/DexcomAlgorithmState.swift:19-81`. `0x18`: xDrip4iOS calls it `questionMarks`,
 G7SensorKit `expired` (`AlgorithmState.swift:38`) and its capture 7 h after expiry carries it; G7Kit
 follows the capture. Only `06` ever publishes a reading, so these naming differences cannot leak
-values. `SensorState` has no calibration case; the proposed contract refinement is in the WS1 report.
+values. The categories come from `G7AlgorithmState.category`.
+
+### 7.1 Failures → `SensorFailure.kind` (contract D36)
+
+Every `.failed(_:)` carries a `SensorFailure`: consumers decide from `kind`, never from the text;
+`message` is G7Kit's wording for the person wearing the sensor (`G7FailureReason`).
+
+| `G7FailureReason` | `kind` | Raises the sensor alert | Where |
+|---|---|---|---|
+| `sensorFailed`, `sessionStopped` | same | yes (replace sensor) | latched end, §6.1a |
+| `unsupportedSensor` | same | yes (replace sensor) | §6.2 |
+| `pairingCodeRejected`, `savedKeyRejected` | `pairingRejected` | yes (pair again) | §3.1 |
+| `pairingCodeNeeded` | same | yes (pair again) | §3.2 |
+| `bondRemovedBySensor` | `bondRemoved` | yes (pair again) | §2.4 |
+| `bluetoothPairingNotCompleted` | `bluetoothPairingIncomplete` | no (banner) | §2.4 |
+| `authenticationFailed` | same | no | §3 |
+| `rejectedAfterAuthentication`, `otherAppRejected` | same | no | §3.1 |
+| `sensorClockMismatch` | `clockMismatch` | no | §5.1 |
+| `noGlucoseValue` | same | no | §5.3 |
+| `sessionLengthUnknown` | same | no | §2.3, §6.1 |
+| `credentialsUnavailable` | same | no | §2.2 |
+
+Transient kinds surface as banners; if they stop readings for long, the missed-readings alert covers
+them (D36). Pinned by `test_S5_failureKindsMatchTheContract`.
 
 ## 8. Calibration
 
@@ -511,10 +538,12 @@ values. `SensorState` has no calibration case; the proposed contract refinement 
 
 `submitCalibration` → **refused** (typed `CalibrationRefusal`, nothing queued) unless paired,
 authenticated (confirmed key, not rejected, supported sensor, a sensor-reported state exists), and
-the sensor is running (`.active`, `.gracePeriod`, or `.error` in the calibration-needed /
-calibration-error / temporary-issue categories); value in **40…400 mg/dL**
-(`CGMG7Transmitter.swift:1967-1974`); one calibration at a time (queued, sent or awaiting the
-record). Then:
+the sensor is running (`.active`, `.gracePeriod`, `.calibrationNeeded`, `.calibrationError`, or
+`.error` in the temporary-issue category); value in **40…400 mg/dL**
+(`CGMG7Transmitter.swift:1967-1974`); fingerstick time not in the future and at most 5 min old,
+else `.invalidTime` (D36; xDrip4iOS `calibrationIsValid`, `CGMG7Transmitter.swift:1970-1972`,
+`ConstantsDexcomG5.swift:23-24`); one calibration at a time (queued, sent or awaiting the record).
+Then:
 
 1. `.queued` until the next wake.
 2. After that wake's `0x4E`: re-check age (0 ≤ age ≤ 5 min, `ConstantsDexcomG5.swift:23-24` applied
@@ -531,9 +560,8 @@ record). Then:
 Deviations: xDrip4iOS paired the clock field with `receivedAt − age`, shifting calibration times
 `age` s into the future; G7Kit pairs it with the receipt time it describes. Sensor policy (not in
 xDrip4iOS): a sensor record that never arrives ends the wait after 60 min as `.unknown`, and a newer
-record from another display ends it as `.unknown`. A fingerstick in the future or older than 5 min at
-submission is reported at once as `.unknown("Not sent: …")` because `CalibrationRefusal` has no time
-case (proposed in the report).
+record from another display ends it as `.unknown`. A queued fingerstick that is older than 5 min by
+the next wake (it was valid at submission) ends as `.unknown("Not sent: …")`.
 
 S1: nothing in the calibration path creates a `GlucoseReading`; test
 `test_S1_calibrationIsNeverEmittedAsReading` runs a full accept cycle plus the display-only echo.

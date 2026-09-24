@@ -13,8 +13,10 @@
 /// The sensor's algorithm state byte (byte 14 of `0x4E`, byte 6 of a backfill record).
 ///
 /// Only `.ok` (0x06) carries a reading that may be published (S2). Every other state withholds the
-/// reading and is surfaced through `SensorState` (S5). The raw byte is the `code` of
-/// `SensorState.error(code:description:)`.
+/// reading and is surfaced through `SensorState` (S5, G7SensorStatus). The raw byte is the `code` of
+/// `SensorState.calibrationNeeded(code:)` (category calibrationNeeded: 0x04, 0x05, 0x07, 0x0E),
+/// `SensorState.calibrationError(code:)` (category calibrationError: 0x08, 0x09, 0x0A, 0x0D) and
+/// `SensorState.error(code:description:)` (the remaining non-OK, non-warm-up, non-expired states).
 ///
 ///     raw   name (xDrip4iOS DexcomAlgorithmState.swift:19-49)      category
 ///     0x00  None                                                    unknown

@@ -97,13 +97,13 @@ final class G7Controller: G7ConnectionCycleDelegate {
     func emitInitialState() {
         switch loadRecord() {
         case .failure:
-            emit(.failed(reason: G7FailureReason.credentialsUnavailable))
+            emit(.failed(G7FailureReason.credentialsUnavailable))
         case .success(nil):
             emit(.notPaired)
         case .success(let stored?):
             record = stored
             if stored.requiresNewPairing {
-                emit(.failed(reason: G7FailureReason.savedKeyRejected))
+                emit(.failed(G7FailureReason.savedKeyRejected))
             } else if let end = stored.sessionEnd {
                 // Safety review N1: a latched end stays visible after a relaunch.
                 lastSensorState = end.state
@@ -146,7 +146,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
             calibration.cancelAll(reason: "A new sensor is being paired")
             let newRecord = G7PairingRecord(pairingCode: pairingCode, slot: slot)
             do { try store.save(newRecord) } catch {
-                emit(.failed(reason: G7FailureReason.credentialsUnavailable))
+                emit(.failed(G7FailureReason.credentialsUnavailable))
                 throw .credentialStoreFailed("\(error)")
             }
             record = newRecord
@@ -159,7 +159,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
         } else {
             switch loadRecord() {
             case .failure(let error):
-                emit(.failed(reason: G7FailureReason.credentialsUnavailable))
+                emit(.failed(G7FailureReason.credentialsUnavailable))
                 throw .credentialStoreFailed("\(error)")
             case .success(let stored):
                 record = stored
@@ -171,7 +171,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
             return
         }
         if record.requiresNewPairing {
-            emit(.failed(reason: G7FailureReason.savedKeyRejected))
+            emit(.failed(G7FailureReason.savedKeyRejected))
             return
         }
         if let end = record.sessionEnd { lastSensorState = end.state }
@@ -307,7 +307,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
         if sessionLengthUnanswered {
             // Safety review P7: `52` was never answered, so no GetData was sent; say why nothing came.
             log(.sensor, "the sensor did not answer the session-length request before disconnecting")
-            emit(.failed(reason: G7FailureReason.sessionLengthUnknown))
+            emit(.failed(G7FailureReason.sessionLengthUnknown))
         }
         guard isRunning, let record, !record.requiresNewPairing else { return }
         if let known = record.peripheralIdentifier {
@@ -374,7 +374,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
         current.requiresNewPairing = true
         saveRecord(current)
         log(.sensor, "saved key rejected; automatic reconnection stopped")
-        emit(.failed(reason: G7FailureReason.savedKeyRejected))
+        emit(.failed(G7FailureReason.savedKeyRejected))
         cycle?.link.disconnect()
     }
 
@@ -394,7 +394,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
         log(.sensor, "authentication rejection after authenticating (\(rejectionAfterAuthenticationStreak) in a row); connection ended, key re-checked next time")
         pipeline?.discardConnection()
         finishCycle()
-        emit(.failed(reason: reason))
+        emit(.failed(reason))
         ending.link.disconnect()
     }
 
@@ -416,11 +416,11 @@ final class G7Controller: G7ConnectionCycleDelegate {
                 current.requiresNewPairing = true
                 saveRecord(current)
             }
-            emit(.failed(reason: G7FailureReason.pairingCodeRejected))
+            emit(.failed(G7FailureReason.pairingCodeRejected))
         case .missingPairingCode:
-            emit(.failed(reason: G7FailureReason.pairingCodeNeeded))
+            emit(.failed(G7FailureReason.pairingCodeNeeded))
         case .pakeRejectedBySensor, .pake, .certificateExchangeRejected, .proofRejected, .protocolError:
-            emit(.failed(reason: G7FailureReason.authenticationFailed))
+            emit(.failed(G7FailureReason.authenticationFailed))
         }
         cycle?.link.disconnect()
     }
@@ -428,9 +428,9 @@ final class G7Controller: G7ConnectionCycleDelegate {
     func cycleLinkFailed(_ error: G7LinkError) {
         switch error {
         case .pairingNotCompleted:
-            emit(.failed(reason: G7FailureReason.bluetoothPairingNotCompleted))
+            emit(.failed(G7FailureReason.bluetoothPairingNotCompleted))
         case .bondRemovedBySensor:
-            emit(.failed(reason: G7FailureReason.bondRemovedBySensor))
+            emit(.failed(G7FailureReason.bondRemovedBySensor))
         case .other:
             return
         }
@@ -604,7 +604,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
             consecutiveSaveFailures += 1
             log(.sensor, "could not save the pairing record (\(consecutiveSaveFailures) in a row): \(error)")
             if consecutiveSaveFailures >= Self.saveFailuresBeforeSurfacing {
-                emit(.failed(reason: G7FailureReason.credentialsUnavailable))
+                emit(.failed(G7FailureReason.credentialsUnavailable))
             }
         }
     }

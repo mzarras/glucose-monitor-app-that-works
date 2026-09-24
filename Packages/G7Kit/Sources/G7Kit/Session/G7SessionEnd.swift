@@ -20,8 +20,8 @@ public enum G7SessionEnd: String, Sendable, Equatable, Codable {
     public var state: SensorState {
         switch self {
         case .expired: return .expired
-        case .sensorFailed: return .failed(reason: G7FailureReason.sensorFailed)
-        case .stopped: return .failed(reason: G7FailureReason.sessionStopped)
+        case .sensorFailed: return .failed(G7FailureReason.sensorFailed)
+        case .stopped: return .failed(G7FailureReason.sessionStopped)
         }
     }
 }
