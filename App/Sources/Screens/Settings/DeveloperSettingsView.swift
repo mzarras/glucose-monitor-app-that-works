@@ -36,7 +36,7 @@ struct DeveloperSettingsView: View {
                         Text(verbatim: "Speed")
                     }
                     .pickerStyle(.segmented)
-                    Text(verbatim: "Scenario seconds per real second. Above 1× the scenario runs ahead of the phone clock.")
+                    Text(verbatim: "Scenario seconds per real second. Above 1× the scenario runs ahead of the phone clock: alerts follow the replay clock, but the Now screen (on the phone clock) shows \"Phone clock doesn't match\".")
                         .font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                     Button("Start replay") { actions.startReplay(scenario, speed) }
