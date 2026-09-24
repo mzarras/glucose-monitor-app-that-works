@@ -132,6 +132,14 @@ it on device (widget keeps updating while the phone stays locked for hours).
 To be filled in by Michael during HANDOFF §11 step 3a (24-hour soak with the medium widget on the
 Home Screen).
 
+Also check once, on device:
+
+- [ ] **Clock moved back.** With a widget timeline already queued (medium widget showing a current
+  reading), set the phone clock back 1 h (Settings › General › Date & Time, Set Automatically off).
+  Confirm WidgetKit reloads and the widget shows the clock-mismatch state ("Check phone clock"),
+  not an old number as current. Then turn Set Automatically back on and confirm the widget returns
+  to normal after the next reading.
+
 | Date | iOS | Condition (unlocked / locked / Low Power) | Typical lag app → widget | Worst lag | Stale / no-data states seen correctly? | Notes |
 |---|---|---|---|---|---|---|
 | | | | | | | |

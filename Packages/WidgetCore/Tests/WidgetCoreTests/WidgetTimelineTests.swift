@@ -107,6 +107,21 @@ final class WidgetTimelineTests: XCTestCase {
         XCTAssertEqual(WidgetTimeline.entries(snapshot: snap, now: Fixture.now.addingTimeInterval(-30)).first?.display, .current(reading))
     }
 
+    /// A newer reading that is itself dated ahead of the phone's clock re-latches the mismatch for
+    /// that reading; no entry shows it as current, before or after the clock passes its date.
+    func test_S5_newerFutureDatedReadingReLatchesTheMismatch() {
+        let first = Fixture.latest(.mgdl(105), minutesAgo: -600)
+        let newer = Fixture.latest(.mgdl(120), minutesAgo: -590)
+        let newSnapshot = snapshot(newer)
+        let latch = WidgetTimeline.clockMismatchLatch(snapshot: newSnapshot, now: Fixture.now, previous: first.date)
+        XCTAssertEqual(latch, newer.date, "re-latched for the newer reading")
+        for now in [Fixture.now, newer.date, newer.date.addingTimeInterval(5 * 60)] {
+            for entry in WidgetTimeline.entries(snapshot: newSnapshot, now: now, latchedFor: latch) {
+                XCTAssertEqual(entry.display, .clockMismatch(latest: newer), "at \(now), entry \(entry.date)")
+            }
+        }
+    }
+
     /// Review N1: a newer reading clears the latch.
     func test_newerReadingClearsTheMismatchLatch() {
         let old = Fixture.latest(.mgdl(105), minutesAgo: -600)
