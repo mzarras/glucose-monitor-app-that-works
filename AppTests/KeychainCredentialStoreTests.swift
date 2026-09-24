@@ -11,10 +11,9 @@ import Security
 import XCTest
 
 final class KeychainCredentialStoreTests: XCTestCase {
-    /// The simulator's Keychain needs a signed host (Xcode's "Sign to Run Locally" embeds the
-    /// entitlements). A host built with `CODE_SIGNING_ALLOWED=NO` gets errSecMissingEntitlement
-    /// (-34018) for every call: then these tests cannot run, and say so rather than fail on the
-    /// build configuration. Run them with simulator signing (see the P2A report).
+    /// The simulator's Keychain needs a signed host: `scripts/check.sh` signs simulator test runs
+    /// ad hoc (PROGRESS D40). An unsigned host gets errSecMissingEntitlement (-34018) for every call;
+    /// that is a failure of the run, reported as such (these tests must run, never skip).
     override func setUpWithError() throws {
         let probe: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -23,7 +22,7 @@ final class KeychainCredentialStoreTests: XCTestCase {
         ]
         let status = SecItemCopyMatching(probe as CFDictionary, nil)
         if status == errSecMissingEntitlement {
-            throw XCTSkip("UNSIGNED TEST HOST: the simulator Keychain refuses every call (errSecMissingEntitlement, -34018). Build the tests with simulator signing to run these.")
+            XCTFail("UNSIGNED TEST HOST: the simulator Keychain refuses every call (errSecMissingEntitlement, -34018). Sign the simulator test run (D40).")
         }
     }
 
