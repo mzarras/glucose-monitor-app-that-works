@@ -34,9 +34,11 @@ enum G7SensorStatus {
     /// - warm-up, and "stopped" before warm-up has ended (the first message after activation reports
     ///   0x01, G7SensorKit G7GlucoseMessageTests.swift:40-66): warming up.
     /// - expired states: expired.
-    /// - everything else (calibration needed/error, temporary issue, failed, unknown, "stopped" after
-    ///   warm-up): `.error(code: raw state byte, description:)` so the reason is visible (S5).
-    ///   Proposed contract refinement for calibration states: OPEN QUESTIONS in the WS1 report.
+    /// - calibration needed (0x04, 0x05, 0x07, 0x0E) / calibration error (0x08, 0x09, 0x0A, 0x0D),
+    ///   categories from G7AlgorithmState (xDrip4iOS DexcomAlgorithmState.swift:19-49):
+    ///   `.calibrationNeeded(code:)` / `.calibrationError(code:)` with the raw state byte (contract D36).
+    /// - everything else (temporary issue, failed, unknown, "stopped" after warm-up):
+    ///   `.error(code: raw state byte, description:)` so the reason is visible (S5).
     static func state(for algorithmState: G7AlgorithmState, session: SensorSession, now: Date) -> SensorState {
         switch algorithmState.category {
         case .ok:
@@ -49,7 +51,11 @@ enum G7SensorStatus {
             return .warmingUp(endsAt: session.warmUpEndsAt)
         case .expired:
             return .expired
-        case .stopped, .calibrationNeeded, .calibrationError, .temporaryIssue, .sensorFailed, .unknown:
+        case .calibrationNeeded:
+            return .calibrationNeeded(code: Int(algorithmState.rawValue))
+        case .calibrationError:
+            return .calibrationError(code: Int(algorithmState.rawValue))
+        case .stopped, .temporaryIssue, .sensorFailed, .unknown:
             return .error(code: Int(algorithmState.rawValue), description: algorithmState.name)
         }
     }

@@ -37,11 +37,34 @@ final class G7CalibrationQueueTests: XCTestCase {
         XCTAssertEqual(refusal(context(state: nil)), .notAuthenticated, "no sensor-reported state yet")
         XCTAssertEqual(refusal(context(state: .warmingUp(endsAt: now))), .warmingUp)
         XCTAssertEqual(refusal(context(state: .expired)), .sessionEnded)
-        XCTAssertEqual(refusal(context(state: .failed(reason: "x"))), .sessionEnded)
+        XCTAssertEqual(refusal(context(state: .failed(SensorFailure(kind: .other, message: "x")))), .sessionEnded)
         XCTAssertEqual(refusal(context(state: .error(code: 0x0B, description: "failed"))), .sessionEnded)
         XCTAssertEqual(refusal(context(state: .error(code: 0x01, description: "stopped"))), .sessionEnded)
         XCTAssertEqual(refusal(context(state: .bluetoothUnavailable(.poweredOff))), .sessionEnded)
         XCTAssertTrue(updates.isEmpty, "nothing was queued")
+    }
+
+    /// D36: a fingerstick time in the future or more than 5 minutes old is refused at submission with
+    /// `invalidTime` (xDrip4iOS `calibrationIsValid`, CGMG7Transmitter.swift:1970-1972); nothing is queued.
+    func test_S3_calibrationWithInvalidFingerstickTimeIsRefused() throws {
+        func refusal(takenAt: Date) -> CalibrationRefusal? {
+            do { try queue.submit(CalibrationRequest(mgdl: 120, takenAt: takenAt), context: context(state: active), now: now); return nil } catch { return error }
+        }
+        XCTAssertEqual(refusal(takenAt: now.addingTimeInterval(1)), .invalidTime, "in the future")
+        XCTAssertEqual(refusal(takenAt: now.addingTimeInterval(-301)), .invalidTime, "older than 5 minutes")
+        XCTAssertTrue(updates.isEmpty)
+        XCTAssertFalse(queue.hasCalibrationInProgress)
+        XCTAssertNil(refusal(takenAt: now.addingTimeInterval(-300)), "exactly 5 minutes is accepted")
+        XCTAssertEqual(statuses, [.queued])
+    }
+
+    /// D36: the calibration states let a running sensor calibrate; a temporary issue does too.
+    func test_calibrationStatesMayCalibrate() throws {
+        for state: SensorState in [.calibrationNeeded(code: 0x07), .calibrationError(code: 0x08), .error(code: 0x12, description: "Temporary sensor issue")] {
+            setUp()
+            XCTAssertNoThrow(try queue.submit(CalibrationRequest(mgdl: 120, takenAt: now), context: context(state: state), now: now), "\(state)")
+            XCTAssertEqual(statuses, [.queued])
+        }
     }
 
     /// 40...400 mg/dL (CGMG7Transmitter.swift:1967-1974); a running sensor asking for a calibration
@@ -51,7 +74,7 @@ final class G7CalibrationQueueTests: XCTestCase {
             XCTAssertEqual($0 as? CalibrationRefusal, .valueOutOfRange(accepted: 40...400))
         }
         XCTAssertThrowsError(try queue.submit(CalibrationRequest(mgdl: 401, takenAt: now), context: context(state: active), now: now))
-        try queue.submit(CalibrationRequest(mgdl: 40, takenAt: now), context: context(state: .error(code: 0x07, description: "Calibration needed")), now: now)
+        try queue.submit(CalibrationRequest(mgdl: 40, takenAt: now), context: context(state: .calibrationNeeded(code: 0x07)), now: now)
         XCTAssertThrowsError(try queue.submit(CalibrationRequest(mgdl: 400, takenAt: now), context: context(state: .gracePeriod(endsAt: now)), now: now)) {
             XCTAssertEqual($0 as? CalibrationRefusal, .anotherCalibrationInProgress)
         }
@@ -167,12 +190,7 @@ final class G7CalibrationQueueTests: XCTestCase {
         queue.beginConnection()
         XCTAssertNil(queue.nextCommand(clock: clock(), now: now.addingTimeInterval(301)))
         guard case .unknown(let description) = statuses.last else { return XCTFail("\(statuses)") }
-        XCTAssertTrue(description.contains("older than 5 minutes"))
-
-        setUp()
-        try queue.submit(CalibrationRequest(mgdl: 100, takenAt: now.addingTimeInterval(1)), context: context(state: active), now: now)
-        guard case .unknown(let future) = statuses.last else { return XCTFail("\(statuses)") }
-        XCTAssertTrue(future.contains("future"))
+        XCTAssertTrue(description.contains("older than 5 minutes"), "a queued request that went stale is not sent")
         XCTAssertFalse(queue.hasCalibrationInProgress)
     }
 

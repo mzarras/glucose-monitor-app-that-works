@@ -52,7 +52,7 @@ final class G7ControllerTests: XCTestCase {
         harness.clock.advance(300)
         harness.connection(glucose: harness.currentGlucose(150), backfill: [Fixture.backfill(timestamp: harness.sensorClock - 600, glucose: 140)])
         XCTAssertEqual(harness.readings.count, before)
-        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.savedKeyRejected))
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.savedKeyRejected))
         XCTAssertEqual(harness.record?.requiresNewPairing, true)
         XCTAssertNil(harness.controller.currentSession)
 
@@ -77,7 +77,7 @@ final class G7ControllerTests: XCTestCase {
         try harness.controller.start(pairingCode: "1234")
         harness.controller.didDiscover(name: harness.sensorName, identifier: harness.identifier)
         let cancelled = harness.connection(glucose: harness.currentGlucose(123), failingNotify: [.writeControl: .pairingNotCompleted])
-        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.bluetoothPairingNotCompleted))
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.bluetoothPairingNotCompleted))
         XCTAssertEqual(cancelled.disconnectCount, 1)
         XCTAssertTrue(harness.readings.isEmpty)
         XCTAssertNotNil(harness.record?.sharedKey, "ownership was confirmed before the prompt")
@@ -91,14 +91,14 @@ final class G7ControllerTests: XCTestCase {
         try removed.pair(glucose: removed.currentGlucose(100))
         removed.clock.advance(300)
         removed.connection(glucose: removed.currentGlucose(101), failingNotify: [.writeControl: .bondRemovedBySensor])
-        XCTAssertEqual(removed.states.last, .failed(reason: G7FailureReason.bondRemovedBySensor))
+        XCTAssertEqual(removed.states.last, .failed(G7FailureReason.bondRemovedBySensor))
     }
 
     /// Wrong code: that sensor is excluded and scanning continues; the old sensor is skipped too.
     func test_wrongPairingCodeExcludesTheSensorAndKeepsScanning() throws {
         let harness = ControllerHarness(sensorCode: "9999")
         try harness.pair(code: "1234", glucose: harness.currentGlucose(123))
-        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.pairingCodeRejected))
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.pairingCodeRejected))
         XCTAssertNil(harness.record?.sharedKey)
         XCTAssertEqual(harness.central.scanCount, 2, "scans again after the failed candidate")
         let connectsBefore = harness.central.connectRequests.count

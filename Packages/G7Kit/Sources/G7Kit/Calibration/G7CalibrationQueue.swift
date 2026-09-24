@@ -64,36 +64,37 @@ final class G7CalibrationQueue {
 
     var hasCalibrationInProgress: Bool { tracked != nil }
 
-    /// Refuses (S2) unless paired, authenticated and the sensor is running; validates the value.
+    /// Refuses (S2) unless paired, authenticated and the sensor is running; validates the value and
+    /// the fingerstick time.
     func submit(_ request: CalibrationRequest, context: Context, now: Date) throws(CalibrationRefusal) {
         guard context.isPaired else { throw .notPaired }
         guard context.isAuthenticated, let sensorState = context.sensorState else { throw .notAuthenticated }
         switch sensorState {
         case .warmingUp:
             throw .warmingUp
-        case .active, .gracePeriod:
+        case .active, .gracePeriod, .calibrationNeeded, .calibrationError:
+            // A running sensor that asks for a calibration or rejected one may calibrate.
             break
         case .error(let code, _):
-            // A running sensor that reports a calibration request, calibration error or temporary
-            // issue may calibrate; a failed or stopped one may not.
+            // A temporary issue may calibrate; a failed or stopped sensor may not.
             switch G7AlgorithmState(rawValue: UInt8(clamping: code)).category {
-            case .calibrationNeeded, .calibrationError, .temporaryIssue: break
+            case .temporaryIssue: break
             default: throw .sessionEnded
             }
         case .expired, .failed, .notPaired, .searching, .connecting, .authenticating, .bluetoothUnavailable:
             throw .sessionEnded
         }
         guard Self.acceptedRange.contains(request.mgdl) else { throw .valueOutOfRange(accepted: Self.acceptedRange) }
+        // xDrip4iOS's `calibrationIsValid` time rule (:1970-1972): not in the future, at most 5 min old.
+        if let problem = Self.timeProblem(takenAt: request.takenAt, now: now) {
+            log("calibration \(request.id): refused, \(problem)")
+            throw .invalidTime
+        }
         guard tracked == nil else { throw .anotherCalibrationInProgress }
 
         log("calibration \(request.id): submitted \(request.mgdl) mg/dL taken \(request.takenAt)")
         tracked = Tracked(request: request, phase: .queued, sensorTime: nil)
         emit(CalibrationUpdate(requestID: request.id, status: .queued))
-        // Time checks mirror xDrip4iOS's `calibrationIsValid` (:1970-1972). CalibrationRefusal has no
-        // case for a bad time, so the request finishes at once as `.unknown` (see OPEN QUESTIONS).
-        if let problem = Self.timeProblem(takenAt: request.takenAt, now: now) {
-            finish(.unknown(description: "Not sent: \(problem)"))
-        }
     }
 
     func beginConnection() {
