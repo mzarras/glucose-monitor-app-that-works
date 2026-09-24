@@ -66,6 +66,10 @@ protocol AppServices: AnyObject {
     /// Pairs a new sensor with its 4-digit code. Failures after the code is accepted arrive as
     /// `sensorState` `.failed(_:)` (D36).
     func pair(code: String) async throws(PairingError)
+    /// Pairs the sensor being worn again with its 4-digit code (e.g. after "pair again" failures:
+    /// `pairingRejected`, `pairingCodeNeeded`, `bondRemoved`), keeping its session. `pair(code:)`
+    /// is the new-sensor flow.
+    func pairAgain(code: String) async throws(PairingError)
     /// Deletes the pairing (key and code), reports `.notPaired`, and removes Trio's heartbeat keys.
     func forgetSensor() async
 

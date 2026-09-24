@@ -80,6 +80,13 @@ final class PreviewAppServices: AppServices {
         send(.sensor)
     }
 
+    func pairAgain(code: String) async throws(PairingError) {
+        calls.append("pairAgain(\(code))")
+        if let pairingError { throw pairingError }
+        sensorState = .searching
+        send(.sensor)
+    }
+
     func forgetSensor() async {
         calls.append("forgetSensor")
         sensorState = .notPaired
