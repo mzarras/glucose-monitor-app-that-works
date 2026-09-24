@@ -229,15 +229,29 @@ final class G7CGMSourceTests: XCTestCase {
         XCTAssertNil(session)
     }
 
-    /// D37: `pairAgain(code:)` is public and refuses when no sensor was ever connected.
-    func test_pairAgainNeedsAStoredSensor() async {
-        let source = makeSource(store: G7InMemoryCredentialStore(), clock: TestClock(), central: FakeCentral())
+    /// D37: `pairAgain(code:)` is public and refuses when no sensor was ever connected;
+    /// `hasStoredSensor` / `storedSensorSerial` tell the app which pairing call to use (re-review N1).
+    func test_pairAgainNeedsAStoredSensor() async throws {
+        let clock = TestClock()
+        let source = makeSource(store: G7InMemoryCredentialStore(), clock: clock, central: FakeCentral())
+        let noSensor = await source.hasStoredSensor
+        XCTAssertFalse(noSensor)
         do {
             try await source.pairAgain(code: "1234")
             XCTFail("expected noSensorToPairAgain")
         } catch {
             XCTAssertEqual(error as? G7StartError, .noSensorToPairAgain)
         }
+        let sensor = G7SensorSimulator(pairingCode: "1234")
+        let identifier = UUID(uuidString: "1A2B3C4D-0000-4000-8000-000000000001")!
+        try await source.pair(code: "1234")
+        source.withController { $0.didDiscover(name: "DXCM4F", identifier: identifier) }
+        connection(source, sensor: sensor, identifier: identifier, glucose: Fixture.glucose(sensorClock: 86_400, age: 5, glucose: 120, state: 0x06))
+        let stored = await source.hasStoredSensor
+        let serial = await source.storedSensorSerial
+        XCTAssertTrue(stored)
+        XCTAssertEqual(serial, "DXCM4F-1A2B3C4D")
+        try await source.pairAgain(code: "1234")
     }
 
     /// CGMSource rule: a 288-reading backfill burst (24 h) arrives complete.
