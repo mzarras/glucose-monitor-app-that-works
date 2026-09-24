@@ -140,7 +140,9 @@ schemes:
       config: Debug
     test:
       config: Debug
-      gatherCoverageData: true
+      # Off: package coverage is measured by `swift test` in scripts/check.sh; enabling it here made
+      # xcodebuild instrument Release builds of the scheme too (Phase 2 review m7).
+      gatherCoverageData: false
       targets:
         - SensorTests
         - SensorUITests
