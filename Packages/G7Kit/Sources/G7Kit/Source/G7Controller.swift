@@ -17,6 +17,8 @@ public enum G7StartError: Error, Equatable, Sendable {
     /// The credential store failed; nothing was started. The state stream reports
     /// `.failed(credentialsUnavailable)`; call `start` again later (e.g. after the first unlock).
     case credentialStoreFailed(String)
+    /// `pairAgain(code:)` needs a sensor this phone has connected to before; use `pair(code:)`.
+    case noSensorToPairAgain
 }
 
 /// Everything G7 primary mode decides across connections: pairing, reconnection, the reading
@@ -59,6 +61,9 @@ final class G7Controller: G7ConnectionCycleDelegate {
     private var lastEmittedState: SensorState?
     /// During a new pairing: the previous sensor and any sensor that rejected the code or timed out.
     private var excludedSensorNames: Set<String> = []
+    /// During a new pairing: the stored sensor it replaces. Its refusal of the new code is expected
+    /// and is skipped silently (coordinator decision after D37).
+    private var previousSensorName: String?
     /// The advertised sensor being connected to: a new-pairing candidate, or the paired sensor found
     /// again under a new iOS identifier.
     private var candidate: (name: String, identifier: UUID)?
@@ -69,6 +74,10 @@ final class G7Controller: G7ConnectionCycleDelegate {
     private var connectionAuthenticated = false
     private var connectionRejectedAfterAuthentication = false
     private var consecutiveSaveFailures = 0
+    /// The last failure the reading pipeline surfaced, until a later sensor report clears it. While
+    /// it is a clock mismatch the phone ↔ sensor time relation is not trusted, so a fingerstick
+    /// cannot be converted to sensor time and calibration is refused (D37).
+    private var lastPipelineFailure: SensorFailure.Kind?
 
     init(
         store: G7CredentialStore,
@@ -137,6 +146,11 @@ final class G7Controller: G7ConnectionCycleDelegate {
     // MARK: - Lifecycle
 
     /// Pairs a new sensor when `pairingCode` is given, otherwise resumes the stored pairing.
+    ///
+    /// A new pairing takes any G7 10-day sensor it finds, except sensors that refuse the code or do
+    /// not connect, and except the previous sensor when its session has ended or it was unsupported
+    /// (safety review M1, D37: a previous sensor that is still running may be the one being paired;
+    /// `pairAgain(code:)` targets it explicitly).
     func start(pairingCode: String?) throws(G7StartError) {
         if let pairingCode {
             guard G7PairingCode.isValid(pairingCode) else { throw .invalidPairingCode }
@@ -149,12 +163,13 @@ final class G7Controller: G7ConnectionCycleDelegate {
                 emit(.failed(G7FailureReason.credentialsUnavailable))
                 throw .credentialStoreFailed("\(error)")
             }
+            let previousIsFinished = previous.map { $0.sessionEnded || $0.isUnsupportedSensor } ?? false
             record = newRecord
             pipeline = nil
             lastSensorState = nil
-            rejectionAfterAuthenticationStreak = 0
-            excludedSensorNames = Set([previous?.sensorName].compactMap { $0 })
-            candidate = nil
+            resetConnectionHistory()
+            excludedSensorNames = previousIsFinished ? Set([previous?.sensorName].compactMap { $0 }) : []
+            previousSensorName = previous?.sensorName
             log(.sensor, "pairing a new sensor in slot \(slot.rawValue)")
         } else {
             switch loadRecord() {
@@ -165,6 +180,55 @@ final class G7Controller: G7ConnectionCycleDelegate {
                 record = stored
             }
         }
+        resume()
+    }
+
+    /// "Pair again" (D37): a full J-PAKE with `pairingCode` against the stored sensor, for when the
+    /// sensor refused this phone (`pairingRejected`) or the key must be replaced. The sensor's
+    /// identity, serial, session start, published-reading history and any session end are kept;
+    /// only the code and key change (the new key is saved once the sensor confirms ownership). It
+    /// claims the phone's slot again, so another collector in the same slot loses it (the user's
+    /// explicit choice; automatic reconnection never does this, §3.1).
+    func pairAgain(pairingCode: String) throws(G7StartError) {
+        guard G7PairingCode.isValid(pairingCode) else { throw .invalidPairingCode }
+        let stored: G7PairingRecord?
+        switch loadRecord() {
+        case .failure(let error):
+            emit(.failed(G7FailureReason.credentialsUnavailable))
+            throw .credentialStoreFailed("\(error)")
+        case .success(let loaded):
+            stored = loaded
+        }
+        guard var updated = stored, updated.serial != nil, updated.peripheralIdentifier != nil else {
+            throw .noSensorToPairAgain
+        }
+        finishCycle()
+        calibration.cancelAll(reason: "The sensor is being paired again")
+        updated.pairingCode = pairingCode
+        updated.sharedKey = nil // no saved key: the next connection runs the full J-PAKE (§3.2)
+        updated.requiresNewPairing = false
+        do { try store.save(updated) } catch {
+            emit(.failed(G7FailureReason.credentialsUnavailable))
+            throw .credentialStoreFailed("\(error)")
+        }
+        record = updated
+        lastSensorState = updated.sessionEnd?.state // show progress (searching, authenticating) again
+        resetConnectionHistory()
+        excludedSensorNames = []
+        log(.sensor, "pairing \(updated.sensorName ?? "the sensor") again in slot \(updated.slot.rawValue)")
+        resume()
+    }
+
+    /// A new or repeated pairing starts without the previous connections' history.
+    private func resetConnectionHistory() {
+        rejectionAfterAuthenticationStreak = 0
+        lastPipelineFailure = nil
+        candidate = nil
+        previousSensorName = nil
+    }
+
+    /// The common tail of `start` and `pairAgain`: run with the current record.
+    private func resume() {
         isRunning = true
         guard let record else {
             emit(.notPaired)
@@ -201,8 +265,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
         record = nil
         pipeline = nil
         lastSensorState = nil
-        rejectionAfterAuthenticationStreak = 0
-        candidate = nil
+        resetConnectionHistory()
         excludedSensorNames = []
         log(.sensor, "sensor forgotten")
         emit(.notPaired)
@@ -214,7 +277,8 @@ final class G7Controller: G7ConnectionCycleDelegate {
         let context = G7CalibrationQueue.Context(
             isPaired: record != nil,
             isAuthenticated: record?.sharedKey != nil && record?.requiresNewPairing == false && pipeline?.isUnsupportedSensor == false,
-            sensorState: lastSensorState
+            sensorState: lastSensorState,
+            clockMismatch: lastPipelineFailure == .clockMismatch
         )
         try calibration.submit(request, context: context, now: now())
     }
@@ -340,6 +404,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
             current.sensorName = name
             current.serial = G7SensorSerial.make(sensorName: name, peripheralIdentifier: link.peripheralIdentifier)
             excludedSensorNames = []
+            previousSensorName = nil
             log(.sensor, "paired with \(name), serial \(current.serial ?? "?")")
         }
         candidate = nil
@@ -412,6 +477,14 @@ final class G7Controller: G7ConnectionCycleDelegate {
         case .pairingCodeRejected:
             if let candidate, record?.peripheralIdentifier == nil {
                 excludedSensorNames.insert(candidate.name)
+                if candidate.name == previousSensorName {
+                    // The user is pairing a new sensor and the previous, still running one answered
+                    // first: its refusal of the new code is expected. `.failed(pairingCodeRejected)`
+                    // would raise the sensor alert (kind pairingRejected), a false alarm here.
+                    log(.sensor, "the previous sensor \(candidate.name) did not accept the new code; skipped, still looking for the new sensor")
+                    cycle?.link.disconnect()
+                    return
+                }
             } else if var current = record {
                 current.requiresNewPairing = true
                 saveRecord(current)
@@ -470,7 +543,13 @@ final class G7Controller: G7ConnectionCycleDelegate {
             lastSensorState = state
             emit(state)
         }
-        if !pipeline.isUnsupportedSensor {
+        if pipeline.isUnsupportedSensor {
+            // Remembered so a later new-sensor pairing ignores this sensor (M1).
+            if !current.isUnsupportedSensor {
+                current.isUnsupportedSensor = true
+                saveRecord(current)
+            }
+        } else {
             current.reportedSessionLength = message.sessionLength
             current.reportedWarmUp = message.warmUpDuration
             saveRecord(current)
@@ -537,7 +616,10 @@ final class G7Controller: G7ConnectionCycleDelegate {
 
     /// Emits the pipeline's state, publishes its readings, then persists the session.
     private func apply(_ result: G7ReadingPipeline.Output) {
-        if let state = result.state { emit(state) }
+        if let state = result.state {
+            if case .failed(let failure) = state { lastPipelineFailure = failure.kind } else { lastPipelineFailure = nil }
+            emit(state)
+        }
         result.readings.forEach(publish)
         syncSession()
     }

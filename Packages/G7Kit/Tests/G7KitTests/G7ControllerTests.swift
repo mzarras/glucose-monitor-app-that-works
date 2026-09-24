@@ -229,6 +229,17 @@ final class G7CGMSourceTests: XCTestCase {
         XCTAssertNil(session)
     }
 
+    /// D37: `pairAgain(code:)` is public and refuses when no sensor was ever connected.
+    func test_pairAgainNeedsAStoredSensor() async {
+        let source = makeSource(store: G7InMemoryCredentialStore(), clock: TestClock(), central: FakeCentral())
+        do {
+            try await source.pairAgain(code: "1234")
+            XCTFail("expected noSensorToPairAgain")
+        } catch {
+            XCTAssertEqual(error as? G7StartError, .noSensorToPairAgain)
+        }
+    }
+
     /// CGMSource rule: a 288-reading backfill burst (24 h) arrives complete.
     func test_backfillBurstOf288ReadingsArrivesComplete() async throws {
         let clock = TestClock()

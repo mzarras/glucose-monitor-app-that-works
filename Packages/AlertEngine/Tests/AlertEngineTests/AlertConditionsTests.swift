@@ -83,10 +83,11 @@ final class AlertConditionsTests: XCTestCase {
     func test_settledStates() {
         let settled: [SensorState] = [.notPaired, .warmingUp(endsAt: Fixtures.t0), .active(sessionStart: Fixtures.t0, expiresAt: Fixtures.t0),
                                       .gracePeriod(endsAt: Fixtures.t0), .expired, .failed(SensorFailure(kind: .sensorFailed, message: "x")),
-                                      .failed(SensorFailure(kind: .bondRemoved, message: "x")), .error(code: 1, description: "x"),
+                                      .failed(SensorFailure(kind: .bondRemoved, message: "x")), .failed(SensorFailure(kind: .other, message: "x")),
+                                      .error(code: 1, description: "x"),
                                       .calibrationNeeded(code: 1), .calibrationError(code: 2)]
         let transient: [SensorState] = [.searching, .connecting, .authenticating, .bluetoothUnavailable(.poweredOff),
-                                        .failed(SensorFailure(kind: .clockMismatch, message: "x")), .failed(SensorFailure(kind: .other, message: "x"))]
+                                        .failed(SensorFailure(kind: .clockMismatch, message: "x")), .failed(SensorFailure(kind: .noGlucoseValue, message: "x"))]
         for s in settled { XCTAssertTrue(StatusConditions.isSettled(s), "\(s)") }
         for s in transient { XCTAssertFalse(StatusConditions.isSettled(s), "\(s)") }
     }
@@ -111,10 +112,13 @@ final class AlertConditionsTests: XCTestCase {
         XCTAssertEqual(StatusConditions.bluetoothUnavailable(.bluetoothUnavailable(.unauthorized)), .met)
         XCTAssertEqual(StatusConditions.bluetoothUnavailable(.bluetoothUnavailable(.resetting)), .holding)
         XCTAssertEqual(StatusConditions.bluetoothUnavailable(.searching), .clear)
-        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.notPaired))
-        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.warmingUp(endsAt: Fixtures.t0)))
-        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.expired))
-        XCTAssertFalse(StatusConditions.suppressesMissedReadings(nil))
+        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.notPaired, now: Fixtures.t0))
+        let warmUpEnd = Fixtures.t0.addingTimeInterval(600)
+        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.warmingUp(endsAt: warmUpEnd), now: Fixtures.t0))
+        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.warmingUp(endsAt: warmUpEnd), now: warmUpEnd),
+                       "warm-up suppresses only until it ends by the clock")
+        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.expired, now: Fixtures.t0))
+        XCTAssertFalse(StatusConditions.suppressesMissedReadings(nil, now: Fixtures.t0))
     }
 
     func test_bridgeConditions() {

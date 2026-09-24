@@ -126,11 +126,14 @@ enum StatusConditions {
         }
     }
 
-    /// No readings are expected: missed readings would only be noise. Warm-up has its own
-    /// countdown in the UI; with no sensor paired there is nothing to miss.
-    static func suppressesMissedReadings(_ settled: SensorState?) -> Bool {
+    /// No readings are expected: missed readings would only be noise. With no sensor paired there
+    /// is nothing to miss; during warm-up the UI shows a countdown — but only until `endsAt`: after
+    /// that, readings are expected whether or not the source ever reports another state (the phone
+    /// may be out of range when warm-up ends, or the source may report only a transient failure).
+    static func suppressesMissedReadings(_ settled: SensorState?, now: Date) -> Bool {
         switch settled {
-        case .notPaired, .warmingUp: return true
+        case .notPaired: return true
+        case .warmingUp(let endsAt): return now < endsAt
         default: return false
         }
     }

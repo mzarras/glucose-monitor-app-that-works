@@ -70,6 +70,7 @@ struct RootView: View {
             openCalibration: { model.isCalibrationPresented = true },
             exportDiagnostics: {},
             pairSensor: { model.onboarding = OnboardingState.initial },
+            pairAgain: { model.perform(.pairAgain) },
             performBannerAction: model.perform
         )
     }
@@ -85,6 +86,7 @@ struct RootView: View {
     private var settingsActions: SettingsActions {
         SettingsActions(
             pair: { _ in model.onboarding = OnboardingState.initial },
+            pairAgain: { _ in }, // Phase 2: G7Kit pairAgain(code:)
             stopSession: {},
             openCalibration: { model.isCalibrationPresented = true },
             setTrioEnabled: { model.settings.trio.isEnabled = $0 },
@@ -116,6 +118,7 @@ struct RootView: View {
                 model.onboarding?.shareRegion = region
             },
             submitPairingCode: { _ in model.onboarding?.pairing = .inProgress },
+            pairAgain: { _ in model.onboarding?.pairing = .inProgress }, // Phase 2: G7Kit pairAgain(code:)
             finish: { model.onboarding = nil }
         )
     }

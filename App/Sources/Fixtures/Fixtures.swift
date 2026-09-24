@@ -61,7 +61,8 @@ enum Fixtures {
 
     enum NowScenario: String, CaseIterable, Identifiable {
         case normal, low, high, lowFlag, highFlag, stale, noData, warmUp, expired, bluetoothOff, trioFailing, sensorError,
-             transientFailure, pairingRejected, sensorEnded, calibrationNeeded, notPaired, clockMismatch, manyProblems
+             transientFailure, pairingRejected, sensorEnded, sensorProblem, calibrationNeeded, calibrationThenClockMismatch,
+             notPaired, clockMismatch, manyProblems
         var id: String { rawValue }
     }
 
@@ -149,9 +150,16 @@ enum Fixtures {
         case .sensorEnded:
             points = dayOfPoints(now: now, lastReadingAge: 8)
             sensor = .failed(SensorFailure(kind: .sensorFailed, message: "The sensor has failed and won't send more readings. Replace it."))
+        case .sensorProblem:
+            points = dayOfPoints(now: now, lastReadingAge: 4)
+            sensor = .failed(SensorFailure(kind: .other, message: "The sensor reported a status this app doesn't recognise (0x2A)."))
         case .calibrationNeeded:
             points = dayOfPoints(now: now, lastReadingAge: 7)
             sensor = .calibrationNeeded(code: 4)
+        case .calibrationThenClockMismatch:
+            // Review minor 4: the sensor asked for a calibration, then the phone clock went wrong.
+            points = dayOfPoints(now: now, lastReadingAge: 25)
+            sensor = .failed(SensorFailure(kind: .clockMismatch, message: "This phone's clock doesn't match the sensor's. Check Date & Time."))
         case .notPaired:
             points = []
             fingersticks = []
@@ -167,7 +175,7 @@ enum Fixtures {
             health.forceQuitGap = ForceQuitGap(from: now.addingTimeInterval(-5 * 3_600), to: now.addingTimeInterval(-3.5 * 3_600))
         }
 
-        return NowViewState(
+        var state = NowViewState(
             latestLiveReading: latest(from: points, trend: trend),
             sensorState: sensor,
             chartPoints: points,
@@ -177,6 +185,8 @@ enum Fixtures {
             health: health,
             replayScenario: nil
         )
+        state.sensorNeedsCalibration = scenario == .calibrationNeeded || scenario == .calibrationThenClockMismatch
+        return state
     }
 
     /// The kinds of messages a source gives for pairing problems (D36). Wording is sample text.
@@ -190,6 +200,10 @@ enum Fixtures {
             return SensorFailure(kind: kind, message: "This sensor needs its 4-digit pairing code.")
         case .bondRemoved:
             return SensorFailure(kind: kind, message: "The sensor no longer recognises this phone. Pair it again with the code on the applicator.")
+        case .unsupportedSensor:
+            return SensorFailure(kind: kind, message: "This sensor type isn't supported (only G7 10-day sensors are).")
+        case .credentialsUnavailable:
+            return SensorFailure(kind: kind, message: "The sensor's saved pairing keys can't be read. They become available after you unlock the phone.")
         default:
             return SensorFailure(kind: kind, message: "Pairing failed.")
         }

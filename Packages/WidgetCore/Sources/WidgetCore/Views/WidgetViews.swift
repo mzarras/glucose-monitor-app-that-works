@@ -268,7 +268,10 @@ public enum WidgetStyle {
         case .warmingUp: return "Warming up"
         case .sensorExpired: return "Sensor expired"
         case .sensorError: return "Sensor error"
-        case .sensorFailed(let failure, _): return failure.requiresPairing ? "Pair again" : "Replace sensor"
+        case .sensorFailed(let failure, _):
+            if failure.requiresPairing { return "Pair again" }
+            if failure.requiresSensorReplacement { return "Replace sensor" }
+            return "Sensor problem"
         case .calibrationNeeded: return "Calibrate sensor"
         case .calibrationRejected: return "Calibration not accepted"
         case .notPaired: return "No sensor"

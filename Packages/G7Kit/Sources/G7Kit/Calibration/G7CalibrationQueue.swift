@@ -49,6 +49,9 @@ final class G7CalibrationQueue {
         let isAuthenticated: Bool
         /// The latest sensor-reported state (not Bluetooth states), or nil if none yet.
         let sensorState: SensorState?
+        /// The last surfaced failure is a sensor/phone clock mismatch (D37): the fingerstick time
+        /// cannot be converted to sensor time reliably until the clocks agree again.
+        var clockMismatch = false
     }
 
     private var tracked: Tracked?
@@ -88,6 +91,10 @@ final class G7CalibrationQueue {
         // xDrip4iOS's `calibrationIsValid` time rule (:1970-1972): not in the future, at most 5 min old.
         if let problem = Self.timeProblem(takenAt: request.takenAt, now: now) {
             log("calibration \(request.id): refused, \(problem)")
+            throw .invalidTime
+        }
+        guard !context.clockMismatch else {
+            log("calibration \(request.id): refused, the sensor and phone clocks disagree")
             throw .invalidTime
         }
         guard tracked == nil else { throw .anotherCalibrationInProgress }
