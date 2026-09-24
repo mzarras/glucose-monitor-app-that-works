@@ -81,9 +81,13 @@ except the lengths inside the J-PAKE hash (big-endian, §3.3).
   advertising G7 (`DXCM…`) that connects and accepts the code is paired. Sensors that refused the
   code or did not connect in time are not tried again during that pairing. The **previous sensor is
   ignored only when its session has ended or it was unsupported** (safety review M1, D37); a
-  previous sensor that is still running may be the one being paired. (If the previous, still running
-  sensor answers first and the new code is not its code, it refuses the code, is excluded, and
-  `.failed(pairingCodeRejected)` is shown until the new sensor pairs.)
+  previous sensor that is still running may be the one being paired. If that previous sensor
+  answers first and refuses the new code, the refusal is expected: it is logged to `DiagnosticLog`,
+  the sensor is excluded for the rest of this pairing and scanning continues, **without**
+  `.failed(pairingCodeRejected)` (that kind raises the sensor alert; it would be a false alarm while
+  the user is deliberately pairing a new sensor). The previous sensor's own pairing is untouched and
+  nothing is published from it. A refusal from any other sensor is still shown as
+  `.failed(pairingCodeRejected)`. Test `test_S5_previousSensorRefusingANewCodeIsSilentlySkipped`.
 - **Pairing the same sensor again (`pairAgain(code:)`, D37):** for the sensor being worn after it
   refused this phone (`.failed` kind `pairingRejected`, e.g. another device took the slot, or a wrong
   code) or asked for the code (`pairingCodeNeeded`). It keeps the stored sensor's name, iOS identifier,

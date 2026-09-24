@@ -61,6 +61,9 @@ final class G7Controller: G7ConnectionCycleDelegate {
     private var lastEmittedState: SensorState?
     /// During a new pairing: the previous sensor and any sensor that rejected the code or timed out.
     private var excludedSensorNames: Set<String> = []
+    /// During a new pairing: the stored sensor it replaces. Its refusal of the new code is expected
+    /// and is skipped silently (coordinator decision after D37).
+    private var previousSensorName: String?
     /// The advertised sensor being connected to: a new-pairing candidate, or the paired sensor found
     /// again under a new iOS identifier.
     private var candidate: (name: String, identifier: UUID)?
@@ -166,6 +169,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
             lastSensorState = nil
             resetConnectionHistory()
             excludedSensorNames = previousIsFinished ? Set([previous?.sensorName].compactMap { $0 }) : []
+            previousSensorName = previous?.sensorName
             log(.sensor, "pairing a new sensor in slot \(slot.rawValue)")
         } else {
             switch loadRecord() {
@@ -220,6 +224,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
         rejectionAfterAuthenticationStreak = 0
         lastPipelineFailure = nil
         candidate = nil
+        previousSensorName = nil
     }
 
     /// The common tail of `start` and `pairAgain`: run with the current record.
@@ -399,6 +404,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
             current.sensorName = name
             current.serial = G7SensorSerial.make(sensorName: name, peripheralIdentifier: link.peripheralIdentifier)
             excludedSensorNames = []
+            previousSensorName = nil
             log(.sensor, "paired with \(name), serial \(current.serial ?? "?")")
         }
         candidate = nil
@@ -471,6 +477,14 @@ final class G7Controller: G7ConnectionCycleDelegate {
         case .pairingCodeRejected:
             if let candidate, record?.peripheralIdentifier == nil {
                 excludedSensorNames.insert(candidate.name)
+                if candidate.name == previousSensorName {
+                    // The user is pairing a new sensor and the previous, still running one answered
+                    // first: its refusal of the new code is expected. `.failed(pairingCodeRejected)`
+                    // would raise the sensor alert (kind pairingRejected), a false alarm here.
+                    log(.sensor, "the previous sensor \(candidate.name) did not accept the new code; skipped, still looking for the new sensor")
+                    cycle?.link.disconnect()
+                    return
+                }
             } else if var current = record {
                 current.requiresNewPairing = true
                 saveRecord(current)
