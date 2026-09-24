@@ -277,6 +277,55 @@ final class TrioBridgeSafetyTests: XCTestCase {
         XCTAssertEqual(status.lastGateRefusal?.reason, .sessionEnded)
     }
 
+    func test_S2_sensorStoppedEarlyPayloadStaysUntilNextSensorGraceEndOrClear() async throws {
+        // The first sensor is stopped (or fails) on day 2, long before its grace end (day 10.5). From then on
+        // the source reports no session (D28). A nil session is not evidence, so the payload stays; it goes
+        // only on the next sensor's first write/removal, the stopped session's grace end, or clear().
+        let stoppedAt: UInt32 = 2 * 86_400
+        func payloadWrittenThenSensorStopped() async -> TrioBridge {
+            store = InMemoryTrioStore()
+            clock.set(Fixture.time(stoppedAt))
+            let bridge = makeBridge()
+            await bridge.publish([Fixture.reading(at: stoppedAt)], session: Fixture.session)
+            clock.set(Fixture.time(stoppedAt + 86_400)) // a day later, still no session
+            let idle = await bridge.publish([], session: nil)
+            XCTAssertFalse(idle.didWrite || idle.didRemovePayload)
+            XCTAssertNotNil(store.payload, "stays while there is no session")
+            return bridge
+        }
+
+        // (a) The next sensor's first valid reading replaces it.
+        var bridge = await payloadWrittenThenSensorStopped()
+        let next = secondSession(startingAfterDays: 3)
+        let first = Fixture.reading(at: 1_800, value: .mgdl(150), serial: "3MTEST0002", sessionStart: next.start)
+        clock.set(first.date)
+        let replaced = await bridge.publish([first], session: next)
+        XCTAssertTrue(replaced.didWrite)
+        XCTAssertEqual(try trioReads().map(\.mgdl), [150])
+
+        // (a') Before that reading, the next sensor's session alone (warming up) removes it.
+        bridge = await payloadWrittenThenSensorStopped()
+        clock.set(next.start.addingTimeInterval(600))
+        let removedForNewSession = await bridge.publish([], session: next)
+        XCTAssertTrue(removedForNewSession.didRemovePayload)
+        XCTAssertNil(store.payload)
+
+        // (b) With no new sensor, the stopped session's grace end removes it.
+        bridge = await payloadWrittenThenSensorStopped()
+        clock.set(Fixture.session.gracePeriodEndsAt)
+        let atGraceEnd = await bridge.publish([], session: nil)
+        XCTAssertFalse(atGraceEnd.didRemovePayload, "not before the grace period is over")
+        clock.set(Fixture.session.gracePeriodEndsAt.addingTimeInterval(1))
+        let afterGraceEnd = await bridge.publish([], session: nil)
+        XCTAssertTrue(afterGraceEnd.didRemovePayload)
+        XCTAssertNil(store.payload)
+
+        // (c) clear() removes it at any time.
+        bridge = await payloadWrittenThenSensorStopped()
+        try await bridge.clear()
+        XCTAssertNil(store.payload)
+    }
+
     func test_S2_failedRemovalIsReportedAndRetriedEvenWithNilSession() async throws {
         let bridge = makeBridge()
         await bridge.publish([Fixture.reading(at: 3_600)], session: Fixture.session)
