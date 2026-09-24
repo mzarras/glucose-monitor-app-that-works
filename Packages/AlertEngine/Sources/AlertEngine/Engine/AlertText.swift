@@ -35,10 +35,20 @@ enum AlertText {
         case .sensorGracePeriod: return "Sensor grace period"
         case .sensorFailed: return "Sensor failed"
         case .sensorError: return "Sensor error"
+        case .calibrationNeeded: return "Calibration needed"
         case .sensorExpired: return "Sensor expired"
         case .bluetoothUnavailable: return "Bluetooth unavailable"
         case .trioBridge: return "Trio isn't getting readings"
         }
+    }
+
+    /// The title for a notification: the sensor alert says what to do about this failure (D36).
+    static func title(_ kind: AlertKind, context c: AlertTextContext) -> String {
+        if kind == .sensorFailed, case .failed(let failure) = c.settledSensorState {
+            if failure.requiresPairing { return "Pair the sensor again" }
+            if failure.requiresSensorReplacement { return "Replace the sensor" }
+        }
+        return title(kind)
     }
 
     /// `isRepeat`: a pre-scheduled urgent-low repeat, written for the moment it fires.
@@ -73,8 +83,9 @@ enum AlertText {
             }
             return "Change the sensor soon."
         case .sensorFailed:
-            if case .failed(let reason) = c.settledSensorState {
-                return "Readings have stopped. The sensor reported: \(reason)."
+            if case .failed(let failure) = c.settledSensorState {
+                // The source's text, written for the person wearing the sensor (D36).
+                return "Readings have stopped. \(failure.message)"
             }
             return "Readings have stopped."
         case .sensorError:
@@ -82,6 +93,15 @@ enum AlertText {
                 return "The sensor reported error \(code): \(description)."
             }
             return "The sensor reported an error."
+        case .calibrationNeeded:
+            switch c.settledSensorState {
+            case .calibrationError(let code):
+                return "The sensor could not use the calibration (state \(code)). No readings until it is calibrated again."
+            case .calibrationNeeded(let code):
+                return "The sensor needs a calibration (state \(code)). No readings until it is calibrated."
+            default:
+                return "The sensor needs a calibration."
+            }
         case .sensorExpired:
             return "The session has ended. No readings until a new sensor is paired."
         case .bluetoothUnavailable:

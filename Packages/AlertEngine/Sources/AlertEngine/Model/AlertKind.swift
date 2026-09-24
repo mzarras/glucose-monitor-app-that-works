@@ -30,10 +30,14 @@ public enum AlertKind: String, Sendable, Equatable, Hashable, Codable, CaseItera
     case sensorExpiringIn2Hours
     /// The sensor entered its grace period.
     case sensorGracePeriod
-    /// The sensor reported a failure. S5.
+    /// The sensor is finished (replace it) or no longer accepts this phone (pair again): only
+    /// `SensorFailure.raisesSensorAlert` failures (D36). Transient failures raise nothing; missed
+    /// readings covers a long gap. S5.
     case sensorFailed
     /// The sensor or transmitter reported an error. S5.
     case sensorError
+    /// The sensor withholds readings until it is calibrated, or rejected a calibration (D36).
+    case calibrationNeeded
     /// The sensor session has ended (grace period over). S5.
     case sensorExpired
     /// Bluetooth is off, unauthorized, or unsupported, so no readings can arrive. S5.

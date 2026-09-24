@@ -179,7 +179,7 @@ public struct MissedReadingsSettings: Sendable, Equatable, Hashable, Encodable {
 }
 
 /// A condition alert about the sensor, Bluetooth or the Trio bridge (sensor failed, sensor error,
-/// sensor expired, Bluetooth unavailable, Trio bridge). On by default (S5).
+/// calibration needed, sensor expired, Bluetooth unavailable, Trio bridge). On by default (S5).
 public struct StatusAlertSettings: Sendable, Equatable, Hashable, Encodable {
     public var isEnabled: Bool
     public var sound: AlertSoundID
@@ -203,6 +203,7 @@ public struct StatusAlertSettings: Sendable, Equatable, Hashable, Encodable {
         switch kind {
         case .bluetoothUnavailable: snooze = AlertLimits.bluetoothDefaultSnoozeMinutes
         case .trioBridge: snooze = AlertLimits.trioBridgeDefaultSnoozeMinutes
+        case .calibrationNeeded: snooze = AlertLimits.calibrationDefaultSnoozeMinutes
         default: snooze = AlertLimits.sensorProblemDefaultSnoozeMinutes
         }
         return StatusAlertSettings(

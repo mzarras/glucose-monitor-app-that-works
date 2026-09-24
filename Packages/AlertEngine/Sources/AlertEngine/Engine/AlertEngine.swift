@@ -165,6 +165,7 @@ public struct AlertEngine: Sendable {
 
         actions += step(.sensorFailed, StatusConditions.sensorFailed(snapshot.settledSensorState), now: now)
         actions += step(.sensorError, StatusConditions.sensorError(snapshot.settledSensorState), now: now)
+        actions += step(.calibrationNeeded, StatusConditions.calibrationNeeded(snapshot.settledSensorState), now: now)
         actions += step(.sensorExpired, StatusConditions.sensorExpired(snapshot.settledSensorState), now: now)
         actions += step(.bluetoothUnavailable, StatusConditions.bluetoothUnavailable(snapshot.lastReportedSensorState), now: now)
         actions += step(.trioBridge, StatusConditions.trioBridge(snapshot.bridgeStatus, now: now), now: now)
@@ -308,7 +309,7 @@ public struct AlertEngine: Sendable {
         )
         return AlertNotice(
             kind: kind,
-            title: AlertText.title(kind),
+            title: AlertText.title(kind, context: context),
             body: AlertText.body(kind, context: context, isRepeat: isRepeat),
             sound: settings.sound(kind),
             soundsOnSilent: settings.soundsOnSilent(kind),
