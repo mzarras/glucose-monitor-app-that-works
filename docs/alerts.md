@@ -228,7 +228,10 @@ entitlement. Only urgent low uses alarms; every other alert is unchanged.
   re-derivable after a relaunch. A new repeat never takes a slot held by any repeat the engine still
   remembers (at most ~60 of 128: an hour past + an hour ahead at the 2-minute floor): rapid settings
   changes can burn through the 128 sequence numbers in seconds, and a wrap onto a protected repeat
-  would cancel it (second delta review; `test_S7_idReuseNeverTouchesALivePendingRepeat`).
+  would cancel it (second delta review; `test_S7_idReuseNeverTouchesALivePendingRepeat`). If no
+  slot were free (it cannot happen within the bounds above), fewer repeats are planned, never a live
+  one disturbed, and it is loud: logged, and `DeliveryProblem.repeatsNotAllScheduled` on the
+  Settings screen (`test_S5_shortfallIsLoggedAndSurfacedThenClears`).
 - **A due or ringing repeat is never touched (delta review B2).** A wake-up up to 60 s before a repeat
   counts as that repeat, so rescheduling "from the next slot" used to cancel the repeat due 30 s later
   or stop the one ringing. Now planning is a diff against the repeat grid: entries due within 60 s
@@ -351,8 +354,8 @@ One per condition alert (`AlertEpisode`):
   wall clock against where it should be: the last input's `now` plus the real time elapsed on a
   monotonic clock that keeps counting in sleep and is unaffected by time adjustments
   (`AlertClock.uptime`: Darwin `CLOCK_MONOTONIC_RAW`, tagged with `kern.bootsessionuuid` so two
-  readings are compared only within one boot; after a reboot, or without it, the check is "earlier
-  than the latest `now` seen"). More than 60 s behind is a rollback — including one smaller than the time already elapsed
+  readings are compared only within one known boot; after a reboot, if the boot session cannot be
+  read, or without the clock, the check is "earlier than the latest `now` seen"). More than 60 s behind is a rollback — including one smaller than the time already elapsed
   (24 minutes back, 25 minutes into a snooze), even with no input in between. On a rollback: the
   **urgent-low snooze ends at once** (S7: real elapsed time since the snooze began cannot be trusted),
   other snoozes keep what was left of them, firing/delay timers and the missed-readings window
@@ -467,5 +470,7 @@ The host tests prove the decisions; these need the phone:
 5. Set the clock back and forward by hand with an urgent low in progress (review B1 scenarios), and
    change the time by hand **during an urgent-low snooze** (e.g. back 24 minutes, 25 minutes in): urgent
    low must sound again within 30 real minutes. Also confirm `CLOCK_MONOTONIC_RAW` keeps counting
-   through a locked, sleeping phone (the whole check relies on it).
+   through a locked, sleeping phone, and that `kern.bootsessionuuid` is readable by the app on the
+   phone (log `SystemAlertClock().uptime?.boot` once): if it is not, the partial-rollback check
+   without an intervening input is inactive and only the latest-wall-clock fallback applies.
 6. Media volume at zero: Settings shows the warning; the notification sound still plays with the ringer on.

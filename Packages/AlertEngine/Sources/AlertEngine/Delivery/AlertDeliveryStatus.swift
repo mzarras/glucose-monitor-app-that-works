@@ -72,6 +72,9 @@ public enum DeliveryProblem: Sendable, Equatable {
     /// Scheduling an urgent-low system alarm failed; urgent low fell back to notification +
     /// in-app sound. Carries the system's error text.
     case urgentLowAlarmFailed(String)
+    /// Fewer pending repeats than planned are scheduled for this alert (no free slot); while the
+    /// app is suspended it will repeat fewer times than it should.
+    case repeatsNotAllScheduled(AlertKind, missing: Int)
 }
 
 public struct AlertDeliveryStatus: Sendable, Equatable {
@@ -82,15 +85,19 @@ public struct AlertDeliveryStatus: Sendable, Equatable {
     public var urgentLowAlarm: SystemAlarmAuthorization
     /// The last urgent-low system alarm scheduling error, if the last attempt failed.
     public var urgentLowAlarmFailure: String?
+    /// Alerts with repeats that could not be scheduled, and how many.
+    public var repeatShortfalls: [AlertKind: Int]
 
     public init(
         permissions: NotificationPermissionState, outputVolume: Float?,
-        urgentLowAlarm: SystemAlarmAuthorization = .unavailable, urgentLowAlarmFailure: String? = nil
+        urgentLowAlarm: SystemAlarmAuthorization = .unavailable, urgentLowAlarmFailure: String? = nil,
+        repeatShortfalls: [AlertKind: Int] = [:]
     ) {
         self.permissions = permissions
         self.outputVolume = outputVolume
         self.urgentLowAlarm = urgentLowAlarm
         self.urgentLowAlarmFailure = urgentLowAlarmFailure
+        self.repeatShortfalls = repeatShortfalls
     }
 
     /// Problems, most serious first.
@@ -120,6 +127,11 @@ public struct AlertDeliveryStatus: Sendable, Equatable {
         }
         if let failure = urgentLowAlarmFailure {
             problems.append(.urgentLowAlarmFailed(failure))
+        }
+        for kind in AlertKind.allCases {
+            if let missing = repeatShortfalls[kind], missing > 0 {
+                problems.append(.repeatsNotAllScheduled(kind, missing: missing))
+            }
         }
         return problems
     }
