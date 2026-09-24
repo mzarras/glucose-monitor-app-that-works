@@ -35,8 +35,21 @@ struct TrendsContent: View {
                 select: selectPeriod
             )
             .padding(.top, -8)
-            if let warning = TrendsText.sufficiencyWarning(state.dataSufficiency) {
+            .accessibilityIdentifier("trends.periodPicker")
+            if let error = state.loadError {
+                WarningNote(text: error)
+            } else if state.isComputing {
+                HStack(spacing: 8) {
+                    ProgressView().accessibilityHidden(true)
+                    Text(verbatim: "Computing \(TrendsText.title(state.period).lowercased())…")
+                        .font(Typography.body(size: 13))
+                        .foregroundStyle(Theme.muted)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("trends.computing")
+            } else if let warning = TrendsText.sufficiencyWarning(state.dataSufficiency) {
                 WarningNote(text: warning)
+                    .accessibilityIdentifier("trends.sufficiencyWarning")
             }
             hero
             if let bins = state.rangeBins {
@@ -82,6 +95,7 @@ struct TrendsContent: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: TrendsText.heroSpeech(state)))
+        .accessibilityIdentifier("trends.hero")
     }
 
     private var heroNumber: some View {
@@ -105,7 +119,7 @@ struct TrendsContent: View {
             Text(verbatim: "70–180 mg/dL")
                 .font(Typography.label(size: 11))
                 .foregroundStyle(Theme.muted)
-            Text(verbatim: TrendsText.change(state.timeInRangeChange, period: state.period))
+            Text(verbatim: TrendsText.change(state.timeInRangeChange, period: state.period, priorIsSparse: state.priorPeriodIsSparse))
                 .font(Typography.label(size: 11, medium: true))
                 .foregroundStyle(state.timeInRangeChange == nil ? AnyShapeStyle(Theme.muted) : AnyShapeStyle(Theme.accent))
         }
@@ -131,7 +145,7 @@ struct TrendsContent: View {
             }
             switch state.profile {
             case .none:
-                Text(verbatim: "No readings in this period.")
+                Text(verbatim: state.isComputing ? " " : "No readings in this period.")
                     .font(Typography.body(size: 13))
                     .foregroundStyle(Theme.muted)
                     .frame(maxWidth: .infinity, minHeight: 160, alignment: .center)
@@ -274,7 +288,8 @@ struct MetricRowsView: View {
             Hairline(strong: true)
             row("Time in tight range", note: "70–140", value: TrendsText.percent(state.tightRange))
             row("Mean glucose", note: nil, value: TrendsText.mgdl(state.meanMgdl), unit: state.meanMgdl == nil ? nil : "mg/dL")
-            row("GMI", note: "est. A1C", value: TrendsText.gmi(state.gmiPercent, period: state.period), valueIsNote: state.period.days < TrendsText.gmiMinimumDays)
+            row("GMI", note: TrendsText.gmiNote(period: state.period, coverage: state.dataSufficiency),
+                value: TrendsText.gmi(state.gmiPercent, period: state.period), valueIsNote: state.period.days < TrendsText.gmiMinimumDays)
             row("Variability", note: "CV, target under 36%", value: TrendsText.percent(state.cvPercent))
             if let lows = state.lows {
                 row("Lows", note: TrendsText.lowsNote(lows), value: String(lows.count), unit: TrendsText.lowsDuration(lows))

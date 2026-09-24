@@ -6,6 +6,7 @@
 // TrioBridge and NightscoutKit, and updates the states from their streams. Nothing here creates a
 // reading.
 
+import AlertEngine
 import Foundation
 import GlucoseCore
 import Observation
@@ -65,7 +66,7 @@ final class AppModel {
         return AppModel(
             now: .empty,
             trends: .empty(period: .default),
-            alerts: AlertsViewState(rows: [], sounds: [], quietHours: QuietHours(isEnabled: false, start: TimeOfDay(hour: 22, minute: 0), end: TimeOfDay(hour: 7, minute: 0))),
+            alerts: AlertsMapping.make(.defaults),
             settings: SettingsViewState(
                 sensor: SensorSettings(state: .notPaired, serial: nil),
                 trio: TrioSettings(isEnabled: false, status: .off),
@@ -139,22 +140,16 @@ final class AppModel {
 
     // MARK: - Alerts (Phase 2: AlertEngine configuration)
 
-    func updateAlert(_ kind: AlertKind, _ change: (inout AlertRow) -> Void) {
-        guard let index = alerts.rows.firstIndex(where: { $0.kind == kind }) else { return }
-        var row = alerts.rows[index]
-        change(&row)
-        // S7: urgent low stays on, sounds on silent, and snoozes at most 30 minutes, whatever the UI sent.
-        if !kind.canBeDisabled { row.isEnabled = true }
-        if kind.soundOnSilentIsFixed { row.soundOnSilent = true }
-        if let snooze = row.snoozeMinutes { row.snoozeMinutes = min(max(snooze, 1), kind.maxSnoozeMinutes) }
-        // Thresholds stay inside their limits (urgent low 50–60, …) whatever the UI sent (review m5).
-        row.threshold = row.threshold?.clamped(for: kind)
-        if let delay = row.delayMinutes { row.delayMinutes = min(max(delay, 0), 60) }
-        alerts.rows[index] = row
+    /// Applies one Alerts-screen edit through AlertEngine's clamping settings (S7).
+    func editAlert(_ edit: AlertEdit) {
+        alertSettings = AlertsMapping.apply(edit, to: alertSettings)
+        alerts = AlertsMapping.make(alertSettings)
     }
 
-    func previewSound(_ soundID: String) {
-        // Phase 2: AlertEngine plays the sound once.
+    @ObservationIgnored private var alertSettings = AlertSettings.defaults
+
+    func previewSound(_ sound: AlertSoundID) -> Bool {
+        true // Phase 2: AlertEngine plays the sound once.
     }
 
     // MARK: - Calibration (Phase 2: CalibratingCGMSource.submitCalibration)

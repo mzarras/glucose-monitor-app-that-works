@@ -1,26 +1,24 @@
-// Alerts screen (HANDOFF §5, §7.3.3, PROGRESS D17): every alert with its threshold, sound,
+// Alerts screen (HANDOFF §5, §7.3.3, PROGRESS D17, D27): every alert with its threshold, sound,
 // sound-on-silent and on/off; quiet hours; per-alert detail with sound picker and preview.
+// Ranges come from AlertEngine's `AlertLimits` (via the rows' `allowed`, `AlertKind.snoozeRange`).
 //
 // S7: urgent low shows "Always on" instead of a toggle, its sound-on-silent is fixed on, and its
 // snooze choices stop at 30 minutes. AlertEngine enforces the same rules; this screen never offers
 // the option in the first place.
 
+import AlertEngine
 import SwiftUI
 import WidgetCore
 
 struct AlertsActions {
-    var setEnabled: @MainActor (AlertKind, Bool) -> Void
-    var setThreshold: @MainActor (AlertKind, AlertThreshold) -> Void
-    var setSound: @MainActor (AlertKind, String) -> Void
-    var setSoundOnSilent: @MainActor (AlertKind, Bool) -> Void
-    var setSnooze: @MainActor (AlertKind, Int) -> Void
-    var setDelay: @MainActor (AlertKind, Int) -> Void
-    var previewSound: @MainActor (String) -> Void
-    var setQuietHours: @MainActor (QuietHours) -> Void
+    /// Every settings change (`AlertsMapping.apply` → `AppServices.updateAlertSettings`).
+    var edit: @MainActor (AlertEdit) -> Void
+    /// Plays the sound once. Returns false (and plays nothing) while an alert's sound is playing.
+    var previewSound: @MainActor (AlertSoundID) -> Bool
+    var stopSoundPreview: @MainActor () -> Void
 
     static var noop: AlertsActions {
-        AlertsActions(setEnabled: { _, _ in }, setThreshold: { _, _ in }, setSound: { _, _ in }, setSoundOnSilent: { _, _ in },
-                      setSnooze: { _, _ in }, setDelay: { _, _ in }, previewSound: { _ in }, setQuietHours: { _ in })
+        AlertsActions(edit: { _ in }, previewSound: { _ in true }, stopSoundPreview: {})
     }
 }
 
@@ -71,7 +69,7 @@ struct AlertsContent: View {
                     }
                 }
             }
-            QuietHoursSection(quietHours: state.quietHours, setQuietHours: actions.setQuietHours)
+            QuietHoursSection(quietHours: state.quietHours, setQuietHours: { actions.edit(.quietHours($0)) })
         }
         .padding(.horizontal, Layout.sideMargin)
         .padding(.top, 8)
@@ -105,12 +103,14 @@ struct AlertListRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("alerts.row.\(row.kind.rawValue)")
             if row.kind.canBeDisabled {
-                Toggle(isOn: Binding(get: { row.isEnabled }, set: { actions.setEnabled(row.kind, $0) })) {
+                Toggle(isOn: Binding(get: { row.isEnabled }, set: { actions.edit(.enabled(row.kind, $0)) })) {
                     Text(verbatim: row.kind.title)
                 }
                 .labelsHidden()
                 .frame(minHeight: Layout.minTarget)
+                .accessibilityIdentifier("alerts.toggle.\(row.kind.rawValue)")
             } else {
                 Text(verbatim: "ALWAYS ON")
                     .monoLabel(size: 10, medium: true)
@@ -149,8 +149,8 @@ struct QuietHoursSection: View {
             }
             .frame(minHeight: Layout.minTarget)
             if quietHours.isEnabled {
-                timeRow("From", quietHours.start) { var q = quietHours; q.start = $0; setQuietHours(q) }
-                timeRow("Until", quietHours.end) { var q = quietHours; q.end = $0; setQuietHours(q) }
+                timeRow("From", TimeOfDay(minuteOfDay: quietHours.startMinuteOfDay)) { var q = quietHours; q.startMinuteOfDay = $0.minuteOfDay; setQuietHours(q) }
+                timeRow("Until", TimeOfDay(minuteOfDay: quietHours.endMinuteOfDay)) { var q = quietHours; q.endMinuteOfDay = $0.minuteOfDay; setQuietHours(q) }
             }
             Hairline()
         }
@@ -179,6 +179,7 @@ struct AlertDetailView: View {
     let row: AlertRow
     let sounds: [AlertSound]
     let actions: AlertsActions
+    @State private var previewRefused = false
 
     var body: some View {
         ScrollView {
@@ -191,7 +192,7 @@ struct AlertDetailView: View {
                         .font(Typography.body(size: 13))
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Toggle(isOn: Binding(get: { row.isEnabled }, set: { actions.setEnabled(row.kind, $0) })) {
+                    Toggle(isOn: Binding(get: { row.isEnabled }, set: { actions.edit(.enabled(row.kind, $0)) })) {
                         Text(verbatim: "On").font(Typography.body(size: 15, weight: .medium))
                     }
                     .frame(minHeight: Layout.minTarget)
@@ -204,8 +205,8 @@ struct AlertDetailView: View {
                 soundOnSilent
                 Hairline()
                 if let snooze = row.snoozeMinutes {
-                    Picker(selection: Binding(get: { snooze }, set: { actions.setSnooze(row.kind, $0) })) {
-                        ForEach(AlertsText.snoozeOptions(for: row.kind), id: \.self) { minutes in
+                    Picker(selection: Binding(get: { snooze }, set: { actions.edit(.snooze(row.kind, $0)) })) {
+                        ForEach(AlertsText.snoozeOptions(for: row.kind, current: snooze), id: \.self) { minutes in
                             Text(verbatim: "\(minutes) min").tag(minutes)
                         }
                     } label: {
@@ -216,7 +217,7 @@ struct AlertDetailView: View {
                     Hairline()
                 }
                 if let delay = row.delayMinutes {
-                    Stepper(value: Binding(get: { delay }, set: { actions.setDelay(row.kind, $0) }), in: 0...60, step: 5) {
+                    Stepper(value: Binding(get: { delay }, set: { actions.edit(.delay(row.kind, $0)) }), in: AlertLimits.highDelayMinutes, step: 5) {
                         Text(verbatim: delay == 0 ? "Fire immediately" : "Fire after \(delay) min above")
                             .font(Typography.body(size: 15))
                     }
@@ -224,35 +225,44 @@ struct AlertDetailView: View {
                     Hairline()
                 }
                 if let repeatMinutes = row.repeatMinutes {
-                    Text(verbatim: row.kind == .urgentLow
-                         ? "Repeats every \(repeatMinutes) min until acknowledged."
-                         : "Repeats every \(repeatMinutes) min while it lasts.")
-                        .font(Typography.body(size: 13))
-                        .foregroundStyle(Theme.muted)
+                    // HANDOFF §4.7: urgent low repeats until acknowledged; the interval may be shorter
+                    // than 5 minutes, never longer, and repeating can't be turned off.
+                    Stepper(value: Binding(get: { repeatMinutes }, set: { actions.edit(.repeatInterval(row.kind, $0)) }),
+                            in: AlertLimits.urgentLowRepeatMinutes, step: 1) {
+                        Text(verbatim: "Repeats every \(repeatMinutes) min until acknowledged")
+                            .font(Typography.body(size: 15))
+                    }
+                    .frame(minHeight: Layout.minTarget)
+                    Hairline()
                 }
                 SectionLabel("SOUND")
-                SoundPicker(sounds: sounds, selectedID: row.soundID, select: { actions.setSound(row.kind, $0) }, preview: actions.previewSound)
+                SoundPicker(sounds: sounds, selectedID: row.soundID, select: { actions.edit(.sound(row.kind, $0)) },
+                            preview: { previewRefused = !actions.previewSound($0) })
+                if previewRefused {
+                    FieldMessage(text: "An alert is sounding, so the preview didn't play.")
+                }
             }
             .padding(.horizontal, Layout.sideMargin)
             .padding(.vertical, 12)
         }
         .editorialScreen()
         .navigationBarTitleDisplayMode(.inline)
+        .onDisappear { actions.stopSoundPreview() }
     }
 
     @ViewBuilder
     private func thresholdEditor(_ threshold: AlertThreshold) -> some View {
         switch threshold {
-        case .glucose(let mgdl, let isBelow, let allowed):
-            Stepper(value: Binding(get: { mgdl }, set: { actions.setThreshold(row.kind, .glucose(mgdl: $0, isBelow: isBelow, allowed: allowed)) }), in: allowed, step: allowed.count > 60 ? 5 : 1) {
+        case .glucose(let mgdl, _, let allowed):
+            Stepper(value: Binding(get: { mgdl }, set: { actions.edit(.glucoseThreshold(row.kind, $0)) }), in: allowed, step: allowed.count > 60 ? 5 : 1) {
                 thresholdLabel(AlertsText.threshold(threshold) ?? "", range: "\(allowed.lowerBound)–\(allowed.upperBound) mg/dL")
             }
         case .rate(let rate, let allowed):
-            Stepper(value: Binding(get: { rate }, set: { actions.setThreshold(row.kind, .rate(mgdlPerMinute: $0, allowed: allowed)) }), in: allowed, step: 0.5) {
+            Stepper(value: Binding(get: { rate }, set: { actions.edit(.rateThreshold(row.kind, $0)) }), in: allowed, step: 0.5) {
                 thresholdLabel(AlertsText.threshold(threshold) ?? "", range: "from the sensor-reported rate")
             }
         case .window(let minutes, let allowed):
-            Stepper(value: Binding(get: { minutes }, set: { actions.setThreshold(row.kind, .window(minutes: $0, allowed: allowed)) }), in: allowed, step: 5) {
+            Stepper(value: Binding(get: { minutes }, set: { actions.edit(.window(row.kind, $0)) }), in: allowed, step: 5) {
                 thresholdLabel(AlertsText.threshold(threshold) ?? "", range: "\(allowed.lowerBound)–\(allowed.upperBound) min")
             }
         case .projected:
@@ -282,7 +292,7 @@ struct AlertDetailView: View {
             .frame(minHeight: Layout.minTarget)
             .accessibilityElement(children: .combine)
         } else {
-            Toggle(isOn: Binding(get: { row.soundOnSilent }, set: { actions.setSoundOnSilent(row.kind, $0) })) {
+            Toggle(isOn: Binding(get: { row.soundOnSilent }, set: { actions.edit(.soundOnSilent(row.kind, $0)) })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: "Sound on silent").font(Typography.body(size: 15, weight: .medium))
                     Text(verbatim: AlertsText.soundOnSilentNote).font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
@@ -295,9 +305,9 @@ struct AlertDetailView: View {
 
 struct SoundPicker: View {
     let sounds: [AlertSound]
-    let selectedID: String?
-    let select: @MainActor (String) -> Void
-    let preview: @MainActor (String) -> Void
+    let selectedID: AlertSoundID?
+    let select: @MainActor (AlertSoundID) -> Void
+    let preview: @MainActor (AlertSoundID) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -307,7 +317,13 @@ struct SoundPicker: View {
                         select(sound.id)
                     } label: {
                         HStack {
-                            Text(verbatim: sound.name).font(Typography.body(size: 15))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: sound.name).font(Typography.body(size: 15))
+                                Text(verbatim: sound.character)
+                                    .font(Typography.body(size: 12))
+                                    .foregroundStyle(Theme.muted)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                             Spacer()
                             if sound.id == selectedID {
                                 Image(systemName: "checkmark").foregroundStyle(Theme.accent)

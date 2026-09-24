@@ -76,14 +76,9 @@ struct RootView: View {
 
     private var alertsActions: AlertsActions {
         AlertsActions(
-            setEnabled: { kind, on in model.updateAlert(kind) { $0.isEnabled = on } },
-            setThreshold: { kind, threshold in model.updateAlert(kind) { $0.threshold = threshold } },
-            setSound: { kind, sound in model.updateAlert(kind) { $0.soundID = sound } },
-            setSoundOnSilent: { kind, on in model.updateAlert(kind) { $0.soundOnSilent = on } },
-            setSnooze: { kind, minutes in model.updateAlert(kind) { $0.snoozeMinutes = minutes } },
-            setDelay: { kind, minutes in model.updateAlert(kind) { $0.delayMinutes = minutes } },
-            previewSound: model.previewSound,
-            setQuietHours: { model.alerts.quietHours = $0 }
+            edit: { model.editAlert($0) },
+            previewSound: { model.previewSound($0) },
+            stopSoundPreview: {}
         )
     }
 

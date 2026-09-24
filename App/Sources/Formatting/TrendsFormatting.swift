@@ -44,13 +44,15 @@ enum TrendsText {
         period == .oneDay ? "compared with yesterday" : "compared with the prior \(period.days) days"
     }
 
-    /// "+4 pts vs prior 14d", or "no prior data" when there is nothing to compare with.
-    static func change(_ points: Double?, period: TrendsPeriod) -> String {
+    /// "+4 pts vs prior 14d", or "no prior data" when there is nothing to compare with. When the
+    /// prior period is under 70 % covered, the line says the comparison rests on sparse data.
+    static func change(_ points: Double?, period: TrendsPeriod, priorIsSparse: Bool = false) -> String {
         guard let points else { return "no prior data to compare" }
         let rounded = Int(points.rounded())
         let signed: String
         if rounded > 0 { signed = "+\(rounded)" } else if rounded < 0 { signed = "\u{2212}\(-rounded)" } else { signed = "±0" }
-        return "\(signed) pts \(comparison(period))"
+        let line = "\(signed) pts \(comparison(period))"
+        return priorIsSparse ? "\(line) (sparse data)" : line
     }
 
     /// "78%" or "—".
@@ -76,6 +78,13 @@ enum TrendsText {
         guard period.days >= gmiMinimumDays else { return "needs \(gmiMinimumDays) days" }
         guard let value else { return "—" }
         return String(format: "%.1f%%", value)
+    }
+
+    /// The GMI row's note. GMI from sparse data is weak, so the < 70 % coverage warning sits next to
+    /// it as well as at the top of the screen (docs/statistics.md, GMI).
+    static func gmiNote(period: TrendsPeriod, coverage: Double) -> String {
+        guard period.days >= gmiMinimumDays, coverage < sufficiencyWarningBelow else { return "est. A1C" }
+        return "est. A1C · only \(Int(coverage.rounded()))% of readings"
     }
 
     /// "11h 20m".
@@ -146,12 +155,27 @@ enum TrendsText {
         "Below 54: \(binPercent(bins.veryLow)). 54 to 69: \(binPercent(bins.low)). 70 to 180: \(binPercent(bins.inRange)). 181 to 250: \(binPercent(bins.high)). Above 250: \(binPercent(bins.veryHigh))."
     }
 
-    /// VoiceOver summary for the AGP chart.
+    /// VoiceOver summary for the AGP chart. A median that is the sensor's LOW/HIGH flag is spoken
+    /// as such, never as a number (S4).
     static func agpSpeech(_ buckets: [AGPBucket]) -> String {
-        guard let low = buckets.min(by: { $0.p50 < $1.p50 }), let high = buckets.max(by: { $0.p50 < $1.p50 }) else {
+        func rank(_ value: AGPLineValue) -> Double {
+            switch value {
+            case .belowRange: return -.infinity
+            case .mgdl(let mgdl): return mgdl
+            case .aboveRange: return .infinity
+            }
+        }
+        func spoken(_ value: AGPLineValue) -> String {
+            switch value {
+            case .belowRange: return "LOW (below sensor range)"
+            case .mgdl(let mgdl): return String(Int(mgdl.rounded()))
+            case .aboveRange: return "HIGH (above sensor range)"
+            }
+        }
+        guard let low = buckets.min(by: { rank($0.p50) < rank($1.p50) }), let high = buckets.max(by: { rank($0.p50) < rank($1.p50) }) else {
             return "A typical day: not enough data."
         }
-        return "A typical day: the median ranges from \(Int(low.p50.rounded())) at \(HourLabelText.spoken(minuteOfDay: low.minuteOfDay)) to \(Int(high.p50.rounded())) at \(HourLabelText.spoken(minuteOfDay: high.minuteOfDay)) milligrams per deciliter."
+        return "A typical day: the median ranges from \(spoken(low.p50)) at \(HourLabelText.spoken(minuteOfDay: low.minuteOfDay)) to \(spoken(high.p50)) at \(HourLabelText.spoken(minuteOfDay: high.minuteOfDay)) milligrams per deciliter."
     }
 }
 

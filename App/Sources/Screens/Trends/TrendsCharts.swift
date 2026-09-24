@@ -46,38 +46,43 @@ enum TimeOfDayAxis {
 
 /// Ambulatory glucose profile: 25–75 band filled in the accent, 5th and 95th as dashed lines,
 /// median solid. Statistics from GlucoseStats, not readings; buckets more than an hour apart are
-/// not joined.
+/// not joined. A percentile that is the sensor's LOW/HIGH flag is drawn at the chart's floor/
+/// ceiling (`AGPLineValue.chartY`), never as a number (S4).
 struct AGPChart: View {
     let buckets: [AGPBucket]
 
     var body: some View {
         let segments = AGPSegmentation.segments(buckets)
-        let upper = ChartScale.yUpperBound(maxPlotted: buckets.map { Int($0.p95.rounded()) }.max())
-        Chart {
+        let numbers = buckets.flatMap { [$0.p5, $0.p25, $0.p50, $0.p75, $0.p95].compactMap(\.mgdl) }
+        let upper = ChartScale.yUpperBound(maxPlotted: numbers.max().map { Int($0.rounded(.up)) })
+        let floor = Double(ChartScale.yLowerBound)
+        let ceiling = Double(upper)
+        func y(_ value: AGPLineValue) -> Double { value.chartY(floor: floor, ceiling: ceiling) }
+        return Chart {
             RectangleMark(xStart: .value("Start", 0), xEnd: .value("End", 24), yStart: .value("Low", 70), yEnd: .value("High", 180))
                 .foregroundStyle(Theme.rangeBand)
             ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
                 ForEach(segment, id: \.minuteOfDay) { bucket in
                     AreaMark(
                         x: .value("Hour", Double(bucket.minuteOfDay) / 60),
-                        yStart: .value("25th", bucket.p25),
-                        yEnd: .value("75th", bucket.p75),
+                        yStart: .value("25th", y(bucket.p25)),
+                        yEnd: .value("75th", y(bucket.p75)),
                         series: .value("Band", "iqr-\(index)")
                     )
                     .foregroundStyle(Theme.accent.opacity(0.22))
                 }
                 ForEach(segment, id: \.minuteOfDay) { bucket in
-                    LineMark(x: .value("Hour", Double(bucket.minuteOfDay) / 60), y: .value("5th", bucket.p5), series: .value("Line", "p5-\(index)"))
+                    LineMark(x: .value("Hour", Double(bucket.minuteOfDay) / 60), y: .value("5th", y(bucket.p5)), series: .value("Line", "p5-\(index)"))
                         .foregroundStyle(Theme.muted)
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
                 }
                 ForEach(segment, id: \.minuteOfDay) { bucket in
-                    LineMark(x: .value("Hour", Double(bucket.minuteOfDay) / 60), y: .value("95th", bucket.p95), series: .value("Line", "p95-\(index)"))
+                    LineMark(x: .value("Hour", Double(bucket.minuteOfDay) / 60), y: .value("95th", y(bucket.p95)), series: .value("Line", "p95-\(index)"))
                         .foregroundStyle(Theme.muted)
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
                 }
                 ForEach(segment, id: \.minuteOfDay) { bucket in
-                    LineMark(x: .value("Hour", Double(bucket.minuteOfDay) / 60), y: .value("Median", bucket.p50), series: .value("Line", "p50-\(index)"))
+                    LineMark(x: .value("Hour", Double(bucket.minuteOfDay) / 60), y: .value("Median", y(bucket.p50)), series: .value("Line", "p50-\(index)"))
                         .foregroundStyle(Theme.ink)
                         .lineStyle(StrokeStyle(lineWidth: 2, lineJoin: .round))
                 }

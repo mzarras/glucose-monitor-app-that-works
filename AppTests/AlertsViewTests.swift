@@ -1,3 +1,4 @@
+import AlertEngine
 import XCTest
 @testable import Sensor
 
@@ -8,32 +9,37 @@ final class AlertsViewTests: XCTestCase {
         XCTAssertFalse(AlertKind.urgentLow.canBeDisabled)
         XCTAssertTrue(AlertKind.urgentLow.soundOnSilentIsFixed)
         XCTAssertEqual(AlertKind.urgentLow.maxSnoozeMinutes, 30)
+        XCTAssertEqual(AlertKind.urgentLow.maxSnoozeMinutes, AlertLimits.urgentLowMaximumSnoozeMinutes, "one source of truth")
         XCTAssertEqual(AlertsText.snoozeOptions(for: .urgentLow).max(), 30)
-        XCTAssertTrue(AlertsText.snoozeOptions(for: .urgentLow).allSatisfy { $0 <= 30 })
+        XCTAssertTrue(AlertsText.snoozeOptions(for: .urgentLow, current: 45).allSatisfy { $0 <= 30 }, "an out-of-range current value is not offered")
         for kind in AlertKind.allCases where kind != .urgentLow {
             XCTAssertTrue(kind.canBeDisabled, "\(kind) is configurable")
         }
         // Whatever the stored flag says, the row reads as on.
-        let row = AlertRow(kind: .urgentLow, isEnabled: false, threshold: nil, soundID: nil, soundOnSilent: false, snoozeMinutes: 30, delayMinutes: nil, repeatMinutes: 5)
+        let row = AlertRow(kind: .urgentLow, isEnabled: false, threshold: nil, soundID: .cascade, soundOnSilent: false, snoozeMinutes: 30, delayMinutes: nil, repeatMinutes: 5)
         XCTAssertTrue(row.effectiveIsEnabled)
         XCTAssertTrue(row.effectiveSoundOnSilent)
     }
 
-    @MainActor
-    func test_S7_modelKeepsUrgentLowOnAndSnoozeCapped() {
-        let model = AppModel.launch(arguments: [])
-        model.updateAlert(.urgentLow) {
-            $0.isEnabled = false
-            $0.snoozeMinutes = 120
-            $0.soundOnSilent = false
+    /// Edits go through AlertEngine's clamping settings: urgent low cannot be turned off or made to
+    /// follow the ringer switch, and its snooze stays within 1–30 minutes.
+    func test_S7_editsKeepUrgentLowOnAndSnoozeCapped() {
+        var settings = AlertSettings.defaults
+        for edit in [AlertEdit.enabled(.urgentLow, false), .snooze(.urgentLow, 120), .soundOnSilent(.urgentLow, false)] {
+            settings = AlertsMapping.apply(edit, to: settings)
         }
-        let row = model.alerts.row(.urgentLow)
+        let row = AlertsMapping.make(settings).row(.urgentLow)
         XCTAssertEqual(row?.isEnabled, true)
         XCTAssertEqual(row?.snoozeMinutes, 30)
         XCTAssertEqual(row?.soundOnSilent, true)
-        model.updateAlert(.low) { $0.isEnabled = false; $0.soundOnSilent = false }
-        XCTAssertEqual(model.alerts.row(.low)?.isEnabled, false, "other alerts are configurable")
-        XCTAssertEqual(model.alerts.row(.low)?.soundOnSilent, false)
+        XCTAssertTrue(settings.isEnabled(.urgentLow))
+        settings = AlertsMapping.apply(.snooze(.urgentLow, 0), to: settings)
+        XCTAssertEqual(settings.urgentLow.snoozeMinutes, 1)
+        // Other alerts are configurable.
+        settings = AlertsMapping.apply(.enabled(.low, false), to: settings)
+        settings = AlertsMapping.apply(.soundOnSilent(.low, false), to: settings)
+        XCTAssertEqual(AlertsMapping.make(settings).row(.low)?.isEnabled, false)
+        XCTAssertEqual(AlertsMapping.make(settings).row(.low)?.soundOnSilent, false)
     }
 
     /// D27 / HANDOFF §5: quiet hours silence everything except urgent low — Low and missed
@@ -43,29 +49,42 @@ final class AlertsViewTests: XCTestCase {
         XCTAssertFalse(AlertKind.low.soundsDuringQuietHours)
         XCTAssertFalse(AlertKind.missedReadings.soundsDuringQuietHours)
         XCTAssertEqual(AlertsText.quietHoursNote, "Silences all alerts except Urgent low.")
-        XCTAssertEqual(AlertsText.quietHoursSchedule(QuietHours(isEnabled: true, start: TimeOfDay(hour: 22, minute: 0), end: TimeOfDay(hour: 7, minute: 0))), "10 PM – 7 AM")
+        XCTAssertEqual(AlertsText.quietHoursSchedule(QuietHours(isEnabled: true, startMinuteOfDay: 22 * 60, endMinuteOfDay: 7 * 60)), "10 PM – 7 AM")
+        let edited = AlertsMapping.apply(.quietHours(QuietHours(isEnabled: true, startMinuteOfDay: 23 * 60 + 30, endMinuteOfDay: 6 * 60)), to: .defaults)
+        XCTAssertEqual(AlertsMapping.make(edited).quietHours, edited.quietHours)
     }
 
-    /// Review m5: thresholds stay inside their limits whatever the screen sends.
-    @MainActor
-    func test_S7_thresholdsAreClampedToTheirLimits() {
-        let model = AppModel.launch(arguments: [])
-        model.updateAlert(.urgentLow) { $0.threshold = .glucose(mgdl: 45, isBelow: true, allowed: 40...80) }
-        XCTAssertEqual(model.alerts.row(.urgentLow)?.threshold, .glucose(mgdl: 50, isBelow: true, allowed: 50...60))
-        model.updateAlert(.urgentLow) { $0.threshold = .glucose(mgdl: 75, isBelow: true, allowed: 40...80) }
-        XCTAssertEqual(model.alerts.row(.urgentLow)?.threshold, .glucose(mgdl: 60, isBelow: true, allowed: 50...60))
-        model.updateAlert(.low) { $0.threshold = .glucose(mgdl: 30, isBelow: true, allowed: 0...500) }
-        XCTAssertEqual(model.alerts.row(.low)?.threshold, .glucose(mgdl: 60, isBelow: true, allowed: 60...100))
-        model.updateAlert(.high) { $0.threshold = .glucose(mgdl: 500, isBelow: false, allowed: 0...600) }
-        XCTAssertEqual(model.alerts.row(.high)?.threshold, .glucose(mgdl: 400, isBelow: false, allowed: 120...400))
-        model.updateAlert(.rateOfChange) { $0.threshold = .rate(mgdlPerMinute: 9, allowed: 0...10) }
-        XCTAssertEqual(model.alerts.row(.rateOfChange)?.threshold, .rate(mgdlPerMinute: 5, allowed: 2...5))
-        model.updateAlert(.missedReadings) { $0.threshold = .window(minutes: 2, allowed: 0...90) }
-        XCTAssertEqual(model.alerts.row(.missedReadings)?.threshold, .window(minutes: 10, allowed: 10...60))
-        model.updateAlert(.high) { $0.delayMinutes = 500 }
-        XCTAssertEqual(model.alerts.row(.high)?.delayMinutes, 60)
-        model.updateAlert(.urgentLow) { $0.snoozeMinutes = 0 }
-        XCTAssertEqual(model.alerts.row(.urgentLow)?.snoozeMinutes, 1)
+    /// Phase 2 must-do: thresholds use AlertEngine's `AlertLimits` (not the screen's own numbers) and
+    /// stay inside them whatever the screen sends (review m5).
+    func test_S7_thresholdsUseAlertLimits() {
+        let rows = AlertsMapping.make(.defaults)
+        XCTAssertEqual(rows.row(.urgentLow)?.threshold, .glucose(mgdl: 55, isBelow: true, allowed: AlertLimits.urgentLowThresholdMgdl))
+        XCTAssertEqual(rows.row(.low)?.threshold, .glucose(mgdl: 70, isBelow: true, allowed: AlertLimits.lowThresholdMgdl))
+        XCTAssertEqual(rows.row(.high)?.threshold, .glucose(mgdl: 250, isBelow: false, allowed: AlertLimits.highThresholdMgdl))
+        XCTAssertEqual(rows.row(.fallingFast)?.threshold, .rate(mgdlPerMinute: 3, allowed: AlertLimits.rateThresholdMgdlPerMinute))
+        XCTAssertEqual(rows.row(.missedReadings)?.threshold, .window(minutes: 15, allowed: AlertLimits.missedReadingsWindowMinutes))
+        XCTAssertEqual(rows.row(.urgentLowSoon)?.threshold, .projected(mgdl: 55, minutes: AlertLimits.urgentLowSoonHorizonMinutes))
+
+        var s = AlertSettings.defaults
+        s = AlertsMapping.apply(.glucoseThreshold(.urgentLow, 45), to: s)
+        XCTAssertEqual(s.urgentLow.thresholdMgdl, AlertLimits.urgentLowThresholdMgdl.lowerBound)
+        s = AlertsMapping.apply(.glucoseThreshold(.urgentLow, 75), to: s)
+        XCTAssertEqual(s.urgentLow.thresholdMgdl, AlertLimits.urgentLowThresholdMgdl.upperBound)
+        s = AlertsMapping.apply(.glucoseThreshold(.low, 30), to: s)
+        XCTAssertEqual(s.low.thresholdMgdl, AlertLimits.lowThresholdMgdl.lowerBound)
+        s = AlertsMapping.apply(.glucoseThreshold(.high, 500), to: s)
+        XCTAssertEqual(s.high.thresholdMgdl, AlertLimits.highThresholdMgdl.upperBound)
+        s = AlertsMapping.apply(.rateThreshold(.risingFast, 9), to: s)
+        XCTAssertEqual(s.risingFast.thresholdMgdlPerMinute, AlertLimits.rateThresholdMgdlPerMinute.upperBound)
+        s = AlertsMapping.apply(.window(.missedReadings, 2), to: s)
+        XCTAssertEqual(s.missedReadings.windowMinutes, AlertLimits.missedReadingsWindowMinutes.lowerBound)
+        s = AlertsMapping.apply(.delay(.high, 500), to: s)
+        XCTAssertEqual(s.high.delayMinutes, AlertLimits.highDelayMinutes.upperBound)
+        s = AlertsMapping.apply(.repeatInterval(.urgentLow, 60), to: s)
+        XCTAssertEqual(s.urgentLow.repeatMinutes, AlertLimits.urgentLowRepeatMinutes.upperBound)
+        // An edit that doesn't fit the alert changes nothing.
+        XCTAssertEqual(AlertsMapping.apply(.rateThreshold(.low, 4), to: .defaults), .defaults)
+        XCTAssertEqual(AlertsMapping.apply(.delay(.low, 30), to: .defaults), .defaults)
     }
 
     func test_thresholdText() {
@@ -78,24 +97,35 @@ final class AlertsViewTests: XCTestCase {
         XCTAssertNil(AlertsText.threshold(nil))
         XCTAssertEqual(AlertsText.time(TimeOfDay(hour: 22, minute: 0)), "10 PM")
         XCTAssertEqual(AlertsText.time(TimeOfDay(hour: 7, minute: 5)), "7:05 AM")
+        XCTAssertEqual(TimeOfDay(minuteOfDay: 22 * 60 + 15), TimeOfDay(hour: 22, minute: 15))
     }
 
     /// D36: "Calibration needed" is a configurable sensor alert with its own sound and
     /// sound-on-silent setting.
-    @MainActor
     func test_calibrationNeededAlertRow() {
         XCTAssertEqual(AlertKind.calibrationNeeded.section, .sensor)
         XCTAssertTrue(AlertKind.calibrationNeeded.canBeDisabled)
         XCTAssertFalse(AlertKind.calibrationNeeded.soundOnSilentIsFixed)
-        let model = AppModel.launch(arguments: [])
-        XCTAssertEqual(model.alerts.row(.calibrationNeeded)?.soundID, "warble")
-        model.updateAlert(.calibrationNeeded) { $0.isEnabled = false; $0.soundOnSilent = false; $0.soundID = "sonar" }
-        XCTAssertEqual(model.alerts.row(.calibrationNeeded)?.isEnabled, false)
-        XCTAssertEqual(model.alerts.row(.calibrationNeeded)?.soundOnSilent, false)
-        XCTAssertEqual(model.alerts.row(.calibrationNeeded)?.soundID, "sonar")
+        XCTAssertEqual(AlertsMapping.make(.defaults).row(.calibrationNeeded)?.soundID, .warble)
+        var s = AlertSettings.defaults
+        s = AlertsMapping.apply(.enabled(.calibrationNeeded, false), to: s)
+        s = AlertsMapping.apply(.soundOnSilent(.calibrationNeeded, false), to: s)
+        s = AlertsMapping.apply(.sound(.calibrationNeeded, .sonar), to: s)
+        let row = AlertsMapping.make(s).row(.calibrationNeeded)
+        XCTAssertEqual(row?.isEnabled, false)
+        XCTAssertEqual(row?.soundOnSilent, false)
+        XCTAssertEqual(row?.soundID, .sonar)
     }
 
-    func test_everyAlertHasASection() {
+    /// Every alert the engine can raise has a row (S5: Bluetooth and "sensor expired" included), in
+    /// a section, with the engine's default sound.
+    func test_everyEngineAlertHasARowInASection() {
+        let state = AlertsMapping.make(.defaults)
+        XCTAssertEqual(state.rows.map(\.kind), AlertKind.allCases)
         XCTAssertEqual(Set(AlertKind.allCases.map(\.section)), Set(AlertSection.allCases))
+        for row in state.rows {
+            XCTAssertEqual(row.soundID, AlertSoundCatalog.defaultSound(for: row.kind), "\(row.kind)")
+        }
+        XCTAssertEqual(state.sounds.map(\.id), AlertSoundID.allCases)
     }
 }
