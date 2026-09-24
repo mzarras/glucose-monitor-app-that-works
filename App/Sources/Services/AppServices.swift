@@ -107,7 +107,7 @@ protocol AppServices: AnyObject {
 
     // MARK: History import (HANDOFF §4.5; imported readings feed charts and stats only, S6)
 
-    /// The running or last finished import in this process, nil if none.
+    /// The running import, or the last finished/failed one (kept across launches), nil if none.
     var historyImport: HistoryImportState? { get }
     /// Imports from the saved Nightscout site (resumable, idempotent).
     func startNightscoutImport(scope: NightscoutImportScope)
