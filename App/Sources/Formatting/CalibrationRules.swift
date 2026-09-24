@@ -63,8 +63,19 @@ enum CalibrationRules {
             return .unavailable(reason: "The sensor has expired.")
         case .gracePeriod(let endsAt) where now >= endsAt:
             return .unavailable(reason: "The sensor has expired.")
-        case .failed, .error:
+        case .failed(let failure):
+            if failure.requiresSensorReplacement {
+                return .unavailable(reason: "The sensor has ended. Replace it; a new sensor can be calibrated after warm-up.")
+            }
+            if failure.requiresPairing {
+                return .unavailable(reason: "The sensor needs to be paired again before it can take a calibration.")
+            }
+            return .unavailable(reason: "The sensor isn't connected right now: \(failure.message)")
+        case .error:
             return .unavailable(reason: "The sensor reported an error.")
+        case .calibrationNeeded, .calibrationError:
+            // Exactly when the sensor asks for one (D36).
+            return .available
         case .bluetoothUnavailable:
             return .unavailable(reason: "Bluetooth is unavailable, so the sensor can't receive a calibration.")
         case .searching, .connecting, .authenticating:
@@ -178,6 +189,7 @@ enum CalibrationRules {
         case .sessionEnded: return "The sensor session has ended."
         case .valueOutOfRange(let range): return "The sensor accepts \(range.lowerBound)–\(range.upperBound) mg/dL."
         case .anotherCalibrationInProgress: return "Another calibration is still waiting for the sensor."
+        case .invalidTime: return "Use a fingerstick taken in the last 5 minutes."
         }
     }
 }

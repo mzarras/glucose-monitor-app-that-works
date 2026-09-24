@@ -355,9 +355,17 @@ struct PairingStep: View {
                     .font(Typography.body(size: 14))
                     .fixedSize(horizontal: false, vertical: true)
             }
-        case .failed(let message):
-            FieldMessage(text: message)
-            PairingCodeEntry(pair: actions.submitPairingCode)
+        case .failed(let failure):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: OnboardingText.pairingFailureTitle(failure))
+                    .font(Typography.body(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.alert)
+                FieldMessage(text: failure.message)
+            }
+            .accessibilityElement(children: .combine)
+            if !failure.requiresSensorReplacement {
+                PairingCodeEntry(pair: actions.submitPairingCode)
+            }
         case .paired:
             Text(verbatim: "Paired.").font(Typography.body(size: 15, weight: .semibold))
             Button("Continue") { actions.goTo(.warmUp) }.buttonStyle(PrimaryButtonStyle())

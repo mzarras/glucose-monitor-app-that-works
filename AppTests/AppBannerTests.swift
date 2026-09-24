@@ -30,7 +30,11 @@ final class AppBannerTests: XCTestCase {
             ("Bluetooth unsupported", banners(.bluetoothUnavailable(.unsupported)), .bluetoothUnavailable, .critical),
             ("Bluetooth resetting", banners(.bluetoothUnavailable(.resetting)), .bluetoothUnavailable, .warning),
             ("sensor error", banners(.error(code: 7, description: "Signal error")), .sensorError, .critical),
-            ("sensor failed", banners(.failed(reason: "Sensor failed")), .sensorError, .critical),
+            ("sensor failed (D36)", banners(.failed(SensorFailure(kind: .sensorFailed, message: "Sensor failed"))), .sensorNeedsReplacement, .critical),
+            ("pairing lost (D36)", banners(.failed(SensorFailure(kind: .bondRemoved, message: "Pair again"))), .sensorNeedsPairing, .critical),
+            ("transient failure (D36)", banners(.failed(SensorFailure(kind: .otherAppRejected, message: "Another app"))), .sensorInterrupted, .warning),
+            ("calibration needed (D36)", banners(.calibrationNeeded(code: 4)), .calibrationNeeded, .critical),
+            ("calibration error (D36)", banners(.calibrationError(code: 8)), .calibrationNeeded, .critical),
             ("sensor expired", banners(.expired), .sensorExpired, .critical),
             ("grace period over", banners(.gracePeriod(endsAt: minutes(-1))), .sensorExpired, .critical),
             ("grace period", banners(.gracePeriod(endsAt: minutes(300))), .sensorExpiring, .warning),
@@ -81,6 +85,53 @@ final class AppBannerTests: XCTestCase {
             XCTAssertTrue(banner?.detail.contains("doesn't match this phone's clock") ?? false)
         }
         XCTAssertNil(banners(latestAge: -0.5).first { $0.kind == .missedReadings }, "within the 60 s tolerance")
+    }
+
+    /// D36: transient failures are a warning banner with the source's message — never the critical
+    /// "replace/pair" banner — and the missed-readings banner still appears if they last 15 min.
+    func test_S5_transientFailureIsAWarningNotCritical() {
+        for kind in SensorFailure.Kind.allCases where !SensorFailure(kind: kind, message: "").raisesSensorAlert {
+            let failure = SensorFailure(kind: kind, message: "Message for \(kind)")
+            let result = banners(.failed(failure), latestAge: 3)
+            XCTAssertEqual(result.map(\.kind), [.sensorInterrupted], "\(kind)")
+            XCTAssertEqual(result.first?.severity, .warning, "\(kind)")
+            XCTAssertEqual(result.first?.detail, failure.message, "\(kind): the source's words")
+            XCTAssertTrue(banners(.failed(failure), latestAge: 16).contains { $0.kind == .missedReadings && $0.severity == .critical },
+                          "\(kind): a lasting failure is covered by missed readings")
+        }
+        let incomplete = banners(.failed(SensorFailure(kind: .bluetoothPairingIncomplete, message: "m"))).first
+        XCTAssertEqual(incomplete?.action, .pairSensor)
+        XCTAssertEqual(incomplete?.actionTitle, "Pair again")
+    }
+
+    /// D36: an ended sensor or a lost pairing is critical, with the matching call to action.
+    func test_S5_endedSensorOrLostPairingIsCritical() {
+        for kind in SensorFailure.Kind.allCases {
+            let failure = SensorFailure(kind: kind, message: "Message for \(kind)")
+            guard failure.raisesSensorAlert else { continue }
+            let result = banners(.failed(failure), latestAge: 16)
+            guard let banner = result.first else { return XCTFail("\(kind): no banner") }
+            XCTAssertEqual(banner.severity, .critical, "\(kind)")
+            XCTAssertEqual(banner.detail, failure.message)
+            XCTAssertEqual(banner.action, .pairSensor)
+            if failure.requiresSensorReplacement {
+                XCTAssertEqual(banner.kind, .sensorNeedsReplacement, "\(kind)")
+                XCTAssertEqual(banner.actionTitle, "Replace sensor")
+            } else {
+                XCTAssertEqual(banner.kind, .sensorNeedsPairing, "\(kind)")
+                XCTAssertEqual(banner.actionTitle, "Pair again")
+            }
+            XCTAssertFalse(result.contains { $0.kind == .missedReadings }, "\(kind): its own banner, not missed readings")
+        }
+    }
+
+    func test_calibrationBannerOpensCalibration() {
+        for state in [SensorState.calibrationNeeded(code: 4), .calibrationError(code: 8)] {
+            let banner = banners(state, latestAge: 30).first
+            XCTAssertEqual(banner?.kind, .calibrationNeeded)
+            XCTAssertEqual(banner?.action, .openCalibration)
+            XCTAssertEqual(banners(state, latestAge: 30).count, 1, "no missed-readings banner on top")
+        }
     }
 
     func test_urgentLowAlarmNotAvailableIsNotAProblem() {

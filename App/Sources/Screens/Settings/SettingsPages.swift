@@ -22,7 +22,10 @@ struct SensorSettingsView: View {
                     SettingsValueRow(title: "Serial", value: serial)
                 }
                 calibrateRow
-                if case .notPaired = sensor.state {
+                if needsPairing {
+                    if case .failed(let failure) = sensor.state {
+                        FieldMessage(text: failure.message)
+                    }
                     PairingCodeEntry(pair: actions.pair)
                 } else {
                     Button("Stop sensor session") { confirmingStop = true }
@@ -36,6 +39,15 @@ struct SensorSettingsView: View {
             }
             .padding(.horizontal, Layout.sideMargin)
             .padding(.vertical, 12)
+        }
+    }
+
+    /// Not paired, or the sensor no longer accepts this phone (D36).
+    private var needsPairing: Bool {
+        switch sensor.state {
+        case .notPaired: return true
+        case .failed(let failure): return failure.requiresPairing
+        default: return false
         }
     }
 

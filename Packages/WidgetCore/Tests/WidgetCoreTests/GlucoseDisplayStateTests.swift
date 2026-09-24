@@ -27,8 +27,11 @@ final class GlucoseDisplayStateTests: XCTestCase {
             .warmingUp(endsAt: Fixture.now.addingTimeInterval(600)),
             .expired,
             .gracePeriod(endsAt: Fixture.now.addingTimeInterval(-1)),
-            .failed(reason: "Sensor failed"),
+            .failed(SensorFailure(kind: .sensorFailed, message: "Sensor failed")),
+            .failed(SensorFailure(kind: .pairingRejected, message: "Pair again")),
             .error(code: 7, description: "Sensor error"),
+            .calibrationNeeded(code: 4),
+            .calibrationError(code: 8),
         ]
         for state in unusable {
             XCTAssertNil(classify(reading, state).displayedReading, "\(state) must not show a number")
@@ -41,6 +44,38 @@ final class GlucoseDisplayStateTests: XCTestCase {
         let reading = Fixture.latest(.mgdl(105), minutesAgo: 2)
         XCTAssertEqual(classify(reading, .bluetoothUnavailable(.poweredOff)), .current(reading))
         XCTAssertEqual(classify(Fixture.latest(.mgdl(105), minutesAgo: 12), .bluetoothUnavailable(.unauthorized)), .stale(Fixture.latest(.mgdl(105), minutesAgo: 12)))
+    }
+
+    /// D36: transient failures keep a real fresh reading on screen (a banner explains; missed
+    /// readings covers a failure that lasts); ending failures and lost pairings replace it.
+    func test_S5_transientFailureKeepsARealReadingOnlyWhileFresh() {
+        let fresh = Fixture.latest(.mgdl(105), minutesAgo: 2)
+        let old = Fixture.latest(.mgdl(105), minutesAgo: 25)
+        for kind in SensorFailure.Kind.allCases {
+            let failure = SensorFailure(kind: kind, message: "m")
+            if failure.raisesSensorAlert {
+                XCTAssertEqual(classify(fresh, .failed(failure)), .sensorFailed(failure, last: fresh), "\(kind)")
+            } else {
+                XCTAssertEqual(classify(fresh, .failed(failure)), .current(fresh), "\(kind)")
+                XCTAssertEqual(classify(old, .failed(failure)), .noData(last: old), "\(kind): age rules still apply")
+            }
+        }
+    }
+
+    /// D36: while the sensor asks for a calibration (or rejected one) no number is shown, however
+    /// fresh the last reading.
+    func test_S5_calibrationStatesNeverShowANumber() {
+        let fresh = Fixture.latest(.mgdl(105), minutesAgo: 1)
+        XCTAssertEqual(classify(fresh, .calibrationNeeded(code: 4)), .calibrationNeeded(last: fresh))
+        XCTAssertEqual(classify(fresh, .calibrationError(code: 8)), .calibrationRejected(last: fresh))
+        XCTAssertNil(classify(fresh, .calibrationNeeded(code: 4)).displayedReading)
+        XCTAssertNil(classify(nil, .calibrationError(code: 8)).displayedReading)
+        XCTAssertEqual(WidgetStyle.title(.calibrationNeeded(last: fresh)), "Calibrate sensor")
+        XCTAssertEqual(WidgetStyle.title(.calibrationRejected(last: nil)), "Calibration not accepted")
+        XCTAssertEqual(WidgetStyle.title(.sensorFailed(SensorFailure(kind: .pairingCodeNeeded, message: "m"), last: nil)), "Pair again")
+        XCTAssertEqual(WidgetStyle.title(.sensorFailed(SensorFailure(kind: .sessionStopped, message: "m"), last: nil)), "Replace sensor")
+        // The latch never hides a sensor message.
+        XCTAssertEqual(ClockMismatchLatch.apply(.calibrationNeeded(last: fresh), latest: fresh, latchedFor: fresh.date), .calibrationNeeded(last: fresh))
     }
 
     func test_clockMismatchLatchRules() {
@@ -70,7 +105,10 @@ final class GlucoseDisplayStateTests: XCTestCase {
         XCTAssertEqual(classify(reading, .expired), .sensorExpired(last: reading))
         XCTAssertEqual(classify(reading, .gracePeriod(endsAt: Fixture.now.addingTimeInterval(60))), .current(reading))
         XCTAssertEqual(classify(reading, .gracePeriod(endsAt: Fixture.now)), .sensorExpired(last: reading))
-        XCTAssertEqual(classify(reading, .failed(reason: "Sensor failed")), .sensorError(message: "Sensor failed", last: reading))
+        let ended = SensorFailure(kind: .sensorFailed, message: "The sensor has failed. Replace it.")
+        XCTAssertEqual(classify(reading, .failed(ended)), .sensorFailed(ended, last: reading))
+        let unpaired = SensorFailure(kind: .bondRemoved, message: "Pair the sensor again.")
+        XCTAssertEqual(classify(reading, .failed(unpaired)), .sensorFailed(unpaired, last: reading))
         XCTAssertEqual(classify(reading, .error(code: 7, description: "Bad sensor")), .sensorError(message: "Bad sensor (code 7)", last: reading))
         for transient in [SensorState.searching, .connecting, .authenticating] {
             XCTAssertEqual(classify(reading, transient), .current(reading))

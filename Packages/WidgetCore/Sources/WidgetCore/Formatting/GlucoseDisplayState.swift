@@ -25,8 +25,16 @@ public enum GlucoseDisplayState: Sendable, Equatable, Hashable {
     case warmingUp(endsAt: Date)
     /// Sensor expired, or its grace period ended.
     case sensorExpired(last: LatestReading?)
-    /// Sensor reported an error or the session failed.
+    /// Sensor reported an error code (`SensorState.error`).
     case sensorError(message: String, last: LatestReading?)
+    /// The sensor has ended (replace it) or no longer accepts this phone (pair again) (D36).
+    /// Transient failures are not a display state: a real fresh reading stays visible and a
+    /// banner explains.
+    case sensorFailed(SensorFailure, last: LatestReading?)
+    /// The sensor withholds readings until it is calibrated (D36).
+    case calibrationNeeded(last: LatestReading?)
+    /// The sensor could not use a calibration and withholds readings (D36).
+    case calibrationRejected(last: LatestReading?)
     /// No sensor paired.
     case notPaired
     /// The latest reading is dated more than `LiveReadingGate.futureTolerance` ahead of the
@@ -49,13 +57,18 @@ public enum GlucoseDisplayState: Sendable, Equatable, Hashable {
         case .gracePeriod(let endsAt) where now >= endsAt:
             // The grace period's end is a date the sensor reported; past it no reading is valid.
             return .sensorExpired(last: latest)
-        case .failed(let reason):
-            return .sensorError(message: reason, last: latest)
+        case .failed(let failure) where failure.requiresSensorReplacement || failure.requiresPairing:
+            return .sensorFailed(failure, last: latest)
         case .error(let code, let description):
             return .sensorError(message: "\(description) (code \(code))", last: latest)
-        case .searching, .connecting, .authenticating, .warmingUp, .active, .gracePeriod, .bluetoothUnavailable:
-            // Readings may still be current (e.g. Bluetooth just turned off); age decides.
-            // Bluetooth problems are reported separately as an S5 banner.
+        case .calibrationNeeded:
+            return .calibrationNeeded(last: latest)
+        case .calibrationError:
+            return .calibrationRejected(last: latest)
+        case .searching, .connecting, .authenticating, .warmingUp, .active, .gracePeriod, .bluetoothUnavailable, .failed:
+            // Readings may still be current (e.g. Bluetooth just turned off, or a transient sensor
+            // failure, D36); age decides. The problem is reported separately as an S5 banner, and
+            // the missed-readings banner and alert cover a failure that lasts.
             break
         }
         guard let latest else { return .noData(last: nil) }
@@ -73,7 +86,8 @@ public enum GlucoseDisplayState: Sendable, Equatable, Hashable {
     public var displayedReading: LatestReading? {
         switch self {
         case .current(let reading), .stale(let reading): return reading
-        case .noData, .warmingUp, .sensorExpired, .sensorError, .notPaired, .clockMismatch: return nil
+        case .noData, .warmingUp, .sensorExpired, .sensorError, .sensorFailed, .calibrationNeeded, .calibrationRejected, .notPaired, .clockMismatch:
+            return nil
         }
     }
 

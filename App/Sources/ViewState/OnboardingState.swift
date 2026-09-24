@@ -61,7 +61,9 @@ enum PairingState: Equatable, Sendable {
     case idle
     /// Code sent; waiting for the sensor (and the iOS pairing prompt).
     case inProgress
-    case failed(message: String)
+    /// The source's failure (D36), e.g. `bluetoothPairingIncomplete`, `pairingRejected`,
+    /// `pairingCodeNeeded`; shown with its message.
+    case failed(SensorFailure)
     case paired
 }
 
@@ -106,6 +108,20 @@ enum OnboardingText {
         let start = TimeText.shortDay(covered.start, context)
         let end = TimeText.shortDay(covered.end, context)
         return "\(count) \(noun) imported · \(start) – \(end)"
+    }
+}
+
+extension OnboardingText {
+    /// Headline for a failed pairing; the detail is always the source's own message (D36).
+    static func pairingFailureTitle(_ failure: SensorFailure) -> String {
+        switch failure.kind {
+        case .bluetoothPairingIncomplete: return "Pairing didn't finish"
+        case .pairingRejected: return "The sensor didn't accept this phone"
+        case .pairingCodeNeeded: return "Enter the pairing code"
+        case .bondRemoved: return "The sensor forgot this phone"
+        case .otherAppRejected: return "Another app is connected to the sensor"
+        default: return failure.requiresSensorReplacement ? "This sensor can't be used" : "Pairing failed"
+        }
     }
 }
 

@@ -34,8 +34,9 @@ final class WidgetSnapshotTests: XCTestCase {
     func test_snapshotRoundTripsThroughJSONExactly() throws {
         let states: [SensorState] = [
             Fixture.activeSensor, .notPaired, .searching, .warmingUp(endsAt: Fixture.now), .expired,
-            .gracePeriod(endsAt: Fixture.now), .failed(reason: "x"), .error(code: 3, description: "y"),
-            .bluetoothUnavailable(.unauthorized),
+            .gracePeriod(endsAt: Fixture.now), .failed(SensorFailure(kind: .sensorFailed, message: "x")),
+            .failed(SensorFailure(kind: .otherAppRejected, message: "Another app")), .error(code: 3, description: "y"),
+            .calibrationNeeded(code: 4), .calibrationError(code: 8), .bluetoothUnavailable(.unauthorized),
         ]
         for state in states {
             let snapshot = sampleSnapshot(state: state)

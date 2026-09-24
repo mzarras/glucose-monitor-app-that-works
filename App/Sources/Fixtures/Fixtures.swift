@@ -59,7 +59,8 @@ enum Fixtures {
     // MARK: - Now
 
     enum NowScenario: String, CaseIterable, Identifiable {
-        case normal, low, high, lowFlag, highFlag, stale, noData, warmUp, expired, bluetoothOff, trioFailing, sensorError, notPaired, clockMismatch, manyProblems
+        case normal, low, high, lowFlag, highFlag, stale, noData, warmUp, expired, bluetoothOff, trioFailing, sensorError,
+             transientFailure, pairingRejected, sensorEnded, calibrationNeeded, notPaired, clockMismatch, manyProblems
         var id: String { rawValue }
     }
 
@@ -137,6 +138,19 @@ enum Fixtures {
         case .sensorError:
             points = dayOfPoints(now: now, lastReadingAge: 6)
             sensor = .error(code: 7, description: "Sensor signal error")
+        case .transientFailure:
+            // A real reading 2 min old stays visible; the warning banner explains (D36).
+            points = dayOfPoints(now: now, lastReadingAge: 2)
+            sensor = .failed(SensorFailure(kind: .otherAppRejected, message: "Another app on this phone is connected to the sensor. Close it or remove it."))
+        case .pairingRejected:
+            points = dayOfPoints(now: now, lastReadingAge: 4)
+            sensor = .failed(SensorFailure(kind: .pairingRejected, message: "The sensor didn't accept this phone. Pair it again with the 4-digit code on the applicator."))
+        case .sensorEnded:
+            points = dayOfPoints(now: now, lastReadingAge: 8)
+            sensor = .failed(SensorFailure(kind: .sensorFailed, message: "The sensor has failed and won't send more readings. Replace it."))
+        case .calibrationNeeded:
+            points = dayOfPoints(now: now, lastReadingAge: 7)
+            sensor = .calibrationNeeded(code: 4)
         case .notPaired:
             points = []
             fingersticks = []
@@ -162,6 +176,22 @@ enum Fixtures {
             health: health,
             replayScenario: nil
         )
+    }
+
+    /// The kinds of messages a source gives for pairing problems (D36). Wording is sample text.
+    static func pairingFailure(_ kind: SensorFailure.Kind) -> SensorFailure {
+        switch kind {
+        case .bluetoothPairingIncomplete:
+            return SensorFailure(kind: kind, message: "iOS pairing was cancelled or timed out. Keep the phone near the sensor and tap Pair when iOS asks.")
+        case .pairingRejected:
+            return SensorFailure(kind: kind, message: "The sensor didn't accept the pairing code. Check the 4 digits on the applicator and try again.")
+        case .pairingCodeNeeded:
+            return SensorFailure(kind: kind, message: "This sensor needs its 4-digit pairing code.")
+        case .bondRemoved:
+            return SensorFailure(kind: kind, message: "The sensor no longer recognises this phone. Pair it again with the code on the applicator.")
+        default:
+            return SensorFailure(kind: kind, message: "Pairing failed.")
+        }
     }
 
     // MARK: - Calibration
@@ -290,6 +320,7 @@ enum Fixtures {
         AlertSound(id: "sonar", name: "Sonar"),
         AlertSound(id: "knock", name: "Knock"),
         AlertSound(id: "marimba", name: "Marimba"),
+        AlertSound(id: "warble", name: "Warble"),
     ]
 
     static let alerts = AlertsViewState(
@@ -307,6 +338,8 @@ enum Fixtures {
             AlertRow(kind: .sensorGracePeriod, isEnabled: true, threshold: nil, soundID: "marimba", soundOnSilent: false, snoozeMinutes: nil, delayMinutes: nil, repeatMinutes: nil),
             AlertRow(kind: .sensorFailed, isEnabled: true, threshold: nil, soundID: "knock", soundOnSilent: true, snoozeMinutes: nil, delayMinutes: nil, repeatMinutes: nil),
             AlertRow(kind: .sensorError, isEnabled: true, threshold: nil, soundID: "knock", soundOnSilent: true, snoozeMinutes: nil, delayMinutes: nil, repeatMinutes: nil),
+            // AlertEngine defaults (D36): on, sound on silent, re-alerts every 30 min, Warble.
+            AlertRow(kind: .calibrationNeeded, isEnabled: true, threshold: nil, soundID: "warble", soundOnSilent: true, snoozeMinutes: nil, delayMinutes: nil, repeatMinutes: 30),
         ],
         sounds: sounds,
         quietHours: QuietHours(isEnabled: false, start: TimeOfDay(hour: 22, minute: 0), end: TimeOfDay(hour: 7, minute: 0))

@@ -61,7 +61,8 @@ struct NowContent: View {
                     }
                 }
             }
-            NowHeroView(hero: NowHero.make(display, now: now, context: context), now: now, pairSensor: actions.pairSensor)
+            NowHeroView(hero: NowHero.make(display, now: now, context: context), now: now,
+                        pairSensor: actions.pairSensor, calibrate: actions.openCalibration)
             stateLine(display)
             chartSection
             TodaySoFarView(today: state.today)
@@ -246,6 +247,7 @@ struct NowHeroView: View {
     let hero: NowHero
     let now: Date
     let pairSensor: @MainActor () -> Void
+    var calibrate: @MainActor () -> Void = {}
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -262,10 +264,15 @@ struct NowHeroView: View {
                     .font(Typography.body(size: 14))
                     .foregroundStyle(Theme.ink)
                     .fixedSize(horizontal: false, vertical: true)
-                if action == .pairSensor {
-                    Button("Pair a sensor", action: pairSensor)
-                        .buttonStyle(PrimaryButtonStyle())
-                        .frame(maxWidth: 220)
+                if let action {
+                    Button(action.title) {
+                        switch action {
+                        case .pairSensor, .pairAgain: pairSensor()
+                        case .calibrate: calibrate()
+                        }
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .frame(maxWidth: 220)
                 }
             }
             .padding(.leading, 12)

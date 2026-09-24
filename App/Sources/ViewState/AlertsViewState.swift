@@ -17,6 +17,8 @@ enum AlertKind: String, CaseIterable, Identifiable, Sendable {
     case sensorGracePeriod
     case sensorFailed
     case sensorError
+    /// D36: the sensor withholds readings until calibrated (or rejected a calibration).
+    case calibrationNeeded
     case trioBridge
 
     var id: String { rawValue }
@@ -65,6 +67,7 @@ enum AlertKind: String, CaseIterable, Identifiable, Sendable {
         case .sensorGracePeriod: return "Grace period started"
         case .sensorFailed: return "Sensor failed"
         case .sensorError: return "Sensor error"
+        case .calibrationNeeded: return "Calibration needed"
         case .trioBridge: return "Trio handoff failing"
         }
     }
@@ -73,7 +76,7 @@ enum AlertKind: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .urgentLow, .urgentLowSoon, .low, .high, .rateOfChange: return .glucose
         case .missedReadings, .trioBridge: return .dataFlow
-        case .sensorWarmUpComplete, .sensorExpiring24h, .sensorExpiring2h, .sensorGracePeriod, .sensorFailed, .sensorError: return .sensor
+        case .sensorWarmUpComplete, .sensorExpiring24h, .sensorExpiring2h, .sensorGracePeriod, .sensorFailed, .sensorError, .calibrationNeeded: return .sensor
         }
     }
 }

@@ -1,3 +1,4 @@
+import GlucoseCore
 import UIKit
 import WidgetCore
 import XCTest
@@ -86,6 +87,16 @@ final class AppShellTests: XCTestCase {
             XCTAssertFalse(SettingsText.urgentLowAlarm(status).note.isEmpty)
         }
         XCTAssertTrue(SettingsText.urgentLowAlarm(.unavailable).note.contains("iOS 26"))
+    }
+
+    /// D36: pairing failures in onboarding show a headline by kind and the source's message.
+    func test_pairingFailureHeadlines() {
+        XCTAssertEqual(OnboardingText.pairingFailureTitle(SensorFailure(kind: .bluetoothPairingIncomplete, message: "m")), "Pairing didn't finish")
+        XCTAssertEqual(OnboardingText.pairingFailureTitle(SensorFailure(kind: .pairingRejected, message: "m")), "The sensor didn't accept this phone")
+        XCTAssertEqual(OnboardingText.pairingFailureTitle(SensorFailure(kind: .pairingCodeNeeded, message: "m")), "Enter the pairing code")
+        for kind in SensorFailure.Kind.allCases {
+            XCTAssertFalse(OnboardingText.pairingFailureTitle(SensorFailure(kind: kind, message: "m")).isEmpty, "\(kind)")
+        }
     }
 
     func test_settingsText() {

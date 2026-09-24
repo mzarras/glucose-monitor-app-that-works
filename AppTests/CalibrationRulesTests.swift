@@ -94,7 +94,9 @@ final class CalibrationRulesTests: XCTestCase {
             ("grace ended", state(.gracePeriod(endsAt: minutes(-1)))),
             ("not paired", state(.notPaired)),
             ("error", state(.error(code: 1, description: "x"))),
-            ("failed", state(.failed(reason: "x"))),
+            ("sensor ended", state(.failed(SensorFailure(kind: .sensorFailed, message: "x")))),
+            ("pairing lost", state(.failed(SensorFailure(kind: .bondRemoved, message: "x")))),
+            ("transient", state(.failed(SensorFailure(kind: .otherAppRejected, message: "x")))),
             ("Bluetooth off", state(.bluetoothUnavailable(.poweredOff))),
             ("searching", state(.searching)),
             ("source cannot calibrate", state(range: nil)),
@@ -107,6 +109,9 @@ final class CalibrationRulesTests: XCTestCase {
             }
             XCTAssertFalse(reason.isEmpty, name)
         }
+        // D36: exactly when the sensor asks for a calibration, it is available.
+        XCTAssertEqual(CalibrationRules.availability(state(.calibrationNeeded(code: 4)), now: t0), .available)
+        XCTAssertEqual(CalibrationRules.availability(state(.calibrationError(code: 8)), now: t0), .available)
         // A finished submission does not block the next one.
         XCTAssertEqual(CalibrationRules.availability(state(submission: CalibrationSubmission(request: CalibrationRequest(mgdl: 100, takenAt: t0), outcome: .status(.accepted), updatedAt: t0)), now: t0), .available)
     }
@@ -173,5 +178,6 @@ final class CalibrationRulesTests: XCTestCase {
         XCTAssertEqual(CalibrationRules.outcomeText(.status(.rejected(code: 3, reason: "Glucose changing too fast"))).detail, "Glucose changing too fast. Readings are unchanged.")
         XCTAssertEqual(CalibrationRules.outcomeText(.status(.unknown(description: "No answer"))).title, "Outcome unknown")
         XCTAssertEqual(CalibrationRules.outcomeText(.refused(.valueOutOfRange(accepted: 40...400))).detail, "The sensor accepts 40–400 mg/dL.")
+        XCTAssertEqual(CalibrationRules.outcomeText(.refused(.invalidTime)).detail, "Use a fingerstick taken in the last 5 minutes.")
     }
 }

@@ -23,7 +23,10 @@ final class NowFormattingTests: XCTestCase {
             ("expired", hero(fresh, .expired)),
             ("grace ended", hero(fresh, .gracePeriod(endsAt: minutes(-1)))),
             ("sensor error", hero(fresh, .error(code: 7, description: "Signal error"))),
-            ("sensor failed", hero(fresh, .failed(reason: "Sensor failed"))),
+            ("sensor failed", hero(fresh, .failed(SensorFailure(kind: .sensorFailed, message: "Sensor failed")))),
+            ("pairing rejected", hero(fresh, .failed(SensorFailure(kind: .pairingRejected, message: "Pair again")))),
+            ("calibration needed", hero(fresh, .calibrationNeeded(code: 4))),
+            ("calibration error", hero(fresh, .calibrationError(code: 8))),
             ("not paired", hero(nil, .notPaired)),
         ]
         for (name, result) in invalid {
@@ -117,6 +120,33 @@ final class NowFormattingTests: XCTestCase {
             XCTAssertEqual(state.display(now: clock), .clockMismatch(latest: newer), "at \(clock)")
             XCTAssertEqual(state.banners(now: clock, context: testContext).first?.title, "No current reading")
         }
+    }
+
+    /// D36: calibration states replace the hero with a message and a Calibrate action.
+    func test_S5_calibrationNeededReplacesTheHero() {
+        let fresh = latest(.mgdl(105), ageMinutes: 1)
+        guard case .message(let title, _, let action) = hero(fresh, .calibrationNeeded(code: 4)) else { return XCTFail("number shown") }
+        XCTAssertEqual(title, "Calibrate the sensor")
+        XCTAssertEqual(action, .calibrate)
+        guard case .message(let rejected, _, let rejectedAction) = hero(fresh, .calibrationError(code: 8)) else { return XCTFail("number shown") }
+        XCTAssertEqual(rejected, "Calibration not accepted")
+        XCTAssertEqual(rejectedAction, .calibrate)
+        let display = GlucoseDisplayState.classify(latest: fresh, sensorState: .calibrationNeeded(code: 4), now: t0)
+        XCTAssertEqual(StateLine.make(display, sensorState: .calibrationNeeded(code: 4), now: t0).text, "CALIBRATION NEEDED")
+    }
+
+    /// D36: the hero uses the source's message for ending failures; transient failures keep the
+    /// real fresh reading.
+    func test_S5_failureHeroUsesTheSourceMessage() {
+        let fresh = latest(.mgdl(105), ageMinutes: 2)
+        let ended = SensorFailure(kind: .sessionStopped, message: "The session was stopped. Start a new sensor.")
+        XCTAssertEqual(hero(fresh, .failed(ended)), .message(title: "Replace the sensor", detail: ended.message, action: .pairSensor))
+        let lost = SensorFailure(kind: .pairingCodeNeeded, message: "Enter the sensor's 4-digit code.")
+        XCTAssertEqual(hero(fresh, .failed(lost)), .message(title: "Pair the sensor again", detail: lost.message, action: .pairAgain))
+        XCTAssertEqual(hero(fresh, .failed(SensorFailure(kind: .authenticationFailed, message: "m"))), .reading(fresh))
+        XCTAssertEqual(SensorStatusText.connection(.failed(SensorFailure(kind: .noGlucoseValue, message: "m"))), "readings interrupted")
+        XCTAssertEqual(SensorStatusText.connection(.failed(ended)), "replace sensor")
+        XCTAssertEqual(SensorStatusText.connection(.failed(lost)), "pair again")
     }
 
     /// Review M2: the Now chart is scrubbable in every window.
