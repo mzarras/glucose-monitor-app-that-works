@@ -44,6 +44,9 @@ public enum CalibrationRefusal: Error, Sendable, Equatable {
     /// The value is outside the range the sensor accepts (the range is source-specific).
     case valueOutOfRange(accepted: ClosedRange<Int>)
     case anotherCalibrationInProgress
+    /// Added in Phase 2: the fingerstick time is in the future or too old for the sensor to use
+    /// (the accepted window is source-specific and documented by the source).
+    case invalidTime
 }
 
 /// A status change for one submitted calibration.
