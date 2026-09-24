@@ -74,6 +74,10 @@ final class GlucoseDisplayStateTests: XCTestCase {
         XCTAssertEqual(WidgetStyle.title(.calibrationRejected(last: nil)), "Calibration not accepted")
         XCTAssertEqual(WidgetStyle.title(.sensorFailed(SensorFailure(kind: .pairingCodeNeeded, message: "m"), last: nil)), "Pair again")
         XCTAssertEqual(WidgetStyle.title(.sensorFailed(SensorFailure(kind: .sessionStopped, message: "m"), last: nil)), "Replace sensor")
+        // D37: an unclassified failure is loud too.
+        XCTAssertEqual(WidgetStyle.title(.sensorFailed(SensorFailure(kind: .other, message: "m"), last: nil)), "Sensor problem")
+        let unknown = SensorFailure(kind: .other, message: "Unrecognised sensor status.")
+        XCTAssertEqual(classify(fresh, .failed(unknown)), .sensorFailed(unknown, last: fresh), "no number for an unclassified failure")
         // The latch never hides a sensor message.
         XCTAssertEqual(ClockMismatchLatch.apply(.calibrationNeeded(last: fresh), latest: fresh, latchedFor: fresh.date), .calibrationNeeded(last: fresh))
     }
