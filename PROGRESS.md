@@ -7,8 +7,8 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | Phase | State |
 |---|---|
 | 0 — Bootstrap | done (2026-09-23) |
-| 1 — Parallel build | in progress |
-| 2 — Integration | not started |
+| 1 — Parallel build | done (2026-09-23): all 7 workstreams merged into `integration`; gates 1–3 PASS |
+| 2 — Integration | next |
 | 3 — Hardening | not started |
 | 4 — Device build | not started |
 
@@ -16,11 +16,11 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 
 | WS | Agent | Branch / worktree | State | Review | Merged to `integration` |
 |---|---|---|---|---|---|
-| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (43d55b7): 142 tests; N1 two-connection session end, N2, P4/P7/P9 fixed | 2 FAILs → fixed; second delta re-review running | — |
+| WS1 G7Kit | ble-engineer | `ws1-g7kit` / `../wt-ws1-g7kit` | done (43d55b7): 142 tests, 99.04% cov Messages/ | **PASS** (after 3 review rounds) | **yes** — 1ad1b27 |
 | WS2 Store + Replay | data-engineer | `ws2-store-replay` / `../wt-ws2-store-replay` | done (a1f0c6c): 92 + 39 tests, 98.2% / 97.3% cov | **PASS** (after 2 fix rounds) | **yes** — 3b51811 (+ a4a782e store compile-out gate); gates PASS on merged result |
 | WS3 Stats | stats-engineer | `ws3-stats` / `../wt-ws3-stats` | done (de6da6b): 150 tests, 99.88% cov, 90 d in 5.8 ms release | **PASS** (after 2 fix rounds) | **yes** — 3002c9d; gates build+tests+safety PASS on merged result |
-| WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (564eca3): 214 tests; fixing ID-reuse major | **PASS** (second delta); ID reuse fix before merge | — |
-| WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | done (ea2e587): 68 + 64 tests; N1 clock-mismatch latch, n2, n3 | **PASS**; final check of N1 running | — |
+| WS4 Alerts | alerts-engineer | `ws4-alerts` / `../wt-ws4-alerts` | done (959fb80): 219 tests, 99.06% cov | **PASS** (after 4 review rounds) | **yes** — f9ffac4 |
+| WS5 UI + Widgets | ui-engineer | `ws5-ui` / `../wt-ws5-ui` | done (ea2e587): 68 + 64 tests | **PASS** (after 3 review rounds) | **yes** — 5421924 |
 | WS6 TrioBridge | trio-integrator | `ws6-trio` / `../wt-ws6-trio` | done (cbf5619): 62 tests, 97.8% cov | **PASS** (after 2 fix rounds) | **yes** — 9305a72; gates build+tests+safety (S2–S6) PASS on merged result |
 | WS7 Import + Follow | sync-engineer | `ws7-sync` / `../wt-ws7-sync` | done (a70f3ae): 111 tests, 91.9% cov | **PASS** (after 3 fix rounds) | **yes** — 6113de7; gates PASS on merged result (480 tests, S1–S6) |
 
@@ -68,6 +68,7 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D32 | Design tokens: light `high` #C58A2B → **#B07B26** (the §7.1 value is 2.64:1 on the background, fails 3:1) and `veryHigh` #8A5A12 → **#754D0F** (keeps the step between them); dark values unchanged; dark accents #4BAA7E, #D57B53, #6A92C8, #EDE8DE. Recorded in `docs/design-tokens.md`. | §7.1 requires WCAG AA; WS5's contrast test, accepted by the WS5 reviewer. |
 | D33 | Stores also reject (whole batch) non-finite trend rates (`.nonFiniteTrendRate`, never rewritten to nil) and readings dated later than the store clock + `LiveReadingGate.futureTolerance` (`.futureDated`); `insert` returns readings exactly as passed. Importers skip future-dated rows (counted). | WS2 review M1: rewriting NaN → nil let a parse-fault reading pass the gate downstream; reviewer's contract note on future-dated rows becoming the current value. |
 | D34 | AlarmKit details (WS4): precedence Critical Alert > AlarmKit > D17; urgent-low repeat interval 2–5 min (was 1–5) to keep ≥ 60 min of pre-scheduled repeats under iOS's 64 pending-notification limit; alarm title is just "Urgent low" (no value — pre-scheduled repeats would show a stale number, S1); no separate Snooze button (Stop = acknowledge, ≤ 30 min); a backwards clock jump ends an urgent-low snooze (errs loud). | Orchestrator, following WS4's evidence; S1/S7 considerations. |
+| D35 | Residual P1c risk accepted: if a second primary-mode G7 app on the same phone sends a spoofed `05 01 01` milliseconds before the sensor's real rejection, one genuine live `0x4E` could be published (backfill from that window is discarded). Not holding live readings until disconnect, because Trio's heartbeat reads at sensor disconnect (+5 min dosing latency for every reading otherwise). Conditions: pinned test, documented in `docs/g7-protocol.md` §3, §11 item, and Phase 2 onboarding/diagnostics flag other G7 apps. | WS1 second delta review concurred; setup forbids a second primary collector (HANDOFF §4.6). |
 
 ## Discrepancies with HANDOFF (resolved)
 
@@ -113,6 +114,9 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 
 - Map G7Kit's new failure reasons in AlertEngine and UI (`sensorFailed`, `sessionStopped` → sensor-ended alert; `rejectedAfterAuthentication`, `otherAppRejected`, `sessionLengthUnknown`, `sensorClockMismatch`, `noGlucoseValue`, `credentialsUnavailable`).
 
+- Clock-mismatch latch in the app (WS5 final check): update it on every reading/store change incl. background BLE wakes and at launch/foreground, persist it, and add a memoryless check (store wall clock + uptime at each ingest; wall-clock delta ≠ uptime delta by > 60 s → latch). A future-dated newest stored reading must count as stale for missed-readings logic in both app and AlertEngine (WS1 final check).
+- Onboarding/diagnostics: flag other G7 apps (D35).
+
 ## §11 on-device checklist additions (collected from reviews; goes into docs/setup.md in Phase 3)
 
 - Capture raw G7 packets for a real LOW and HIGH (D31) before relying on HIGH→401 in closed loop.
@@ -123,6 +127,8 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Trio loop cadence with the phone locked 30+ min (heartbeat); Dexcom Follow shows LOW/HIGH from Share (D30); Nightscout LOW shows "LOW" and LoopFollow alarms (D29).
 - Urgent low as an AlarmKit system alarm on silent while suspended, incl. repeats and Stop → acknowledge (D26).
 - Widget lag measured and recorded in docs/widgets.md; DB writes while locked for hours (file protection).
+- WidgetKit reload behaviour when the phone clock is set back 1 h with a timeline queued (WS5 final check).
+- Residual P1c: with another G7 app installed, confirm `otherAppRejected` surfaces (D35).
 - Change the phone's time manually during an urgent-low snooze (rollback detection with the monotonic clock, WS4); AlarmKit: 31 alarms at the 2-min floor, wake 30 s before / 3 s after a repeat, revoke alarm permission with repeats pending.
 
 ## Open questions for Michael
@@ -131,6 +137,13 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Nightscout token (read + write), when ready — enter it in the app, not in chat or files.
 
 ## Phase log
+
+### Phase 1 — Parallel build (2026-09-23)
+
+- Seven workstreams in parallel worktrees; every one reviewed by an independent safety reviewer; 16 review rounds in total (initial + deltas), 11 blockers found and fixed before merge. Two API usage-limit interruptions; affected agents resumed from their transcripts.
+- Merged into `integration`: WS6 9305a72, WS3 3002c9d, WS2 3b51811, WS7 6113de7, WS5 5421924, WS4 f9ffac4, WS1 1ad1b27; NOTICE updated.
+- Gates on `integration` (`.build-logs/20260923-222836`): build Debug/Release zero warnings; 973 tests, 0 failures; coverage G7Kit Messages 99.04%, GlucoseStats 99.88%, AlertEngine 99.06%, TrioBridge 97.75%; safety S1 36, S2 69, S3 62, S4 47, S5 66, S6 34, S7 25, S8 2; S6 compile-out checks PASS. Gate 4 (replay run) needs Phase 2 wiring, so `main` is not updated yet (D15).
+- Owner decisions this phase: D16, D17, D21–D24, D26, D27, D29, D30 (plus orchestrator decisions D18–D20, D25, D28, D31–D35).
 
 ### Phase 0 — Bootstrap (2026-09-23)
 
