@@ -143,6 +143,13 @@ final class NowFormattingTests: XCTestCase {
         XCTAssertEqual(hero(fresh, .failed(ended)), .message(title: "Replace the sensor", detail: ended.message, action: .pairSensor))
         let lost = SensorFailure(kind: .pairingCodeNeeded, message: "Enter the sensor's 4-digit code.")
         XCTAssertEqual(hero(fresh, .failed(lost)), .message(title: "Pair the sensor again", detail: lost.message, action: .pairAgain))
+        let bond = SensorFailure(kind: .bondRemoved, message: "The sensor forgot this phone.")
+        XCTAssertEqual(hero(fresh, .failed(bond)),
+                       .message(title: "Pair the sensor again", detail: "The sensor forgot this phone. \(PairingGuidance.forgetInBluetooth)", action: .pairAgain))
+        // D37: unclassified → loud, no number.
+        let unknown = SensorFailure(kind: .other, message: "Unrecognised status.")
+        XCTAssertEqual(hero(fresh, .failed(unknown)), .message(title: "Sensor problem", detail: unknown.message, action: nil))
+        XCTAssertEqual(SensorStatusText.connection(.failed(unknown)), "sensor problem")
         XCTAssertEqual(hero(fresh, .failed(SensorFailure(kind: .authenticationFailed, message: "m"))), .reading(fresh))
         XCTAssertEqual(SensorStatusText.connection(.failed(SensorFailure(kind: .noGlucoseValue, message: "m"))), "readings interrupted")
         XCTAssertEqual(SensorStatusText.connection(.failed(ended)), "replace sensor")

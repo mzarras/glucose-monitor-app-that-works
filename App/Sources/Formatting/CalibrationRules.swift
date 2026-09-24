@@ -70,8 +70,17 @@ enum CalibrationRules {
             if failure.requiresPairing {
                 return .unavailable(reason: "The sensor needs to be paired again before it can take a calibration.")
             }
+            if failure.kind == .clockMismatch {
+                // G7Kit refuses a calibration during a clock mismatch (`invalidTime`); say why first.
+                return .unavailable(reason: CalibrationRules.clockMismatchReason)
+            }
+            if failure.raisesSensorAlert {
+                return .unavailable(reason: "The sensor reported a problem: \(failure.message)")
+            }
             return .unavailable(reason: "The sensor isn't connected right now: \(failure.message)")
         case .error:
+            // Conservative: refused during any `.error` (also temporary issues); the sensor's
+            // state must be ordinary before a value that shifts every later reading is sent.
             return .unavailable(reason: "The sensor reported an error.")
         case .calibrationNeeded, .calibrationError:
             // Exactly when the sensor asks for one (D36).
@@ -84,6 +93,8 @@ enum CalibrationRules {
             return .available
         }
     }
+
+    static let clockMismatchReason = "Phone clock doesn't match — fix Date & Time first."
 
     /// Parses the typed fingerstick value. Only ASCII digits (the field uses a number pad).
     static func parse(_ text: String, acceptedRange: ClosedRange<Int>) -> CalibrationEntry {
@@ -257,5 +268,23 @@ struct CalibrationFlow: Equatable, Sendable {
     var confirmMismatch: Bool {
         guard case .confirm(let value, _) = step, confirmText.count >= String(value).count else { return false }
         return !CalibrationRules.retypeMatches(value, retyped: confirmText)
+    }
+}
+
+/// Review minor 4: remembers that the sensor asked for a calibration while its state passes through
+/// transient failures (a clock mismatch, another app, …), so the need stays visible. Pure.
+enum CalibrationNeed {
+    static func update(previous: Bool, sensorState: SensorState) -> Bool {
+        switch sensorState {
+        case .calibrationNeeded, .calibrationError:
+            return true
+        case .failed(let failure) where !failure.raisesSensorAlert:
+            return previous
+        case .searching, .connecting, .authenticating, .bluetoothUnavailable, .error:
+            return previous
+        case .notPaired, .warmingUp, .active, .gracePeriod, .expired, .failed:
+            // Readings resumed (the calibration took), or the sensor/pairing is gone.
+            return false
+        }
     }
 }

@@ -27,7 +27,8 @@ public enum GlucoseDisplayState: Sendable, Equatable, Hashable {
     case sensorExpired(last: LatestReading?)
     /// Sensor reported an error code (`SensorState.error`).
     case sensorError(message: String, last: LatestReading?)
-    /// The sensor has ended (replace it) or no longer accepts this phone (pair again) (D36).
+    /// The sensor has ended (replace it), no longer accepts this phone (pair again), or failed in a
+    /// way the source could not classify (D36, D37: every kind that raises the sensor alert).
     /// Transient failures are not a display state: a real fresh reading stays visible and a
     /// banner explains.
     case sensorFailed(SensorFailure, last: LatestReading?)
@@ -57,7 +58,7 @@ public enum GlucoseDisplayState: Sendable, Equatable, Hashable {
         case .gracePeriod(let endsAt) where now >= endsAt:
             // The grace period's end is a date the sensor reported; past it no reading is valid.
             return .sensorExpired(last: latest)
-        case .failed(let failure) where failure.requiresSensorReplacement || failure.requiresPairing:
+        case .failed(let failure) where failure.raisesSensorAlert:
             return .sensorFailed(failure, last: latest)
         case .error(let code, let description):
             return .sensorError(message: "\(description) (code \(code))", last: latest)

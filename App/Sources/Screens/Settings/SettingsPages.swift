@@ -22,11 +22,11 @@ struct SensorSettingsView: View {
                     SettingsValueRow(title: "Serial", value: serial)
                 }
                 calibrateRow
-                if needsPairing {
+                if let offer = PairingGuidance.settingsOffer(for: sensor.state, failureSince: sensor.failureSince, now: Date()) {
                     if case .failed(let failure) = sensor.state {
                         FieldMessage(text: failure.message)
                     }
-                    PairingCodeEntry(pair: actions.pair)
+                    PairingOfferView(offer: offer, pairNew: actions.pair, pairAgain: actions.pairAgain)
                 } else {
                     Button("Stop sensor session") { confirmingStop = true }
                         .buttonStyle(SecondaryButtonStyle())
@@ -39,15 +39,6 @@ struct SensorSettingsView: View {
             }
             .padding(.horizontal, Layout.sideMargin)
             .padding(.vertical, 12)
-        }
-    }
-
-    /// Not paired, or the sensor no longer accepts this phone (D36).
-    private var needsPairing: Bool {
-        switch sensor.state {
-        case .notPaired: return true
-        case .failed(let failure): return failure.requiresPairing
-        default: return false
         }
     }
 
@@ -70,17 +61,58 @@ struct SensorSettingsView: View {
     }
 }
 
+/// The pairing recovery for a failure (PairingGuidance): numbered steps and the right code entry.
+struct PairingOfferView: View {
+    let offer: PairingRecovery
+    let pairNew: @MainActor (String) -> Void
+    let pairAgain: @MainActor (String) -> Void
+
+    var body: some View {
+        switch offer {
+        case .pairAgain(let steps):
+            VStack(alignment: .leading, spacing: 10) {
+                SectionLabel("PAIR AGAIN")
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(verbatim: "\(index + 1).").font(Typography.label(size: 12, medium: true))
+                        Text(verbatim: step).font(Typography.body(size: 13)).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                PairingCodeEntry(buttonTitle: "Pair again", showsIntro: false, pair: pairAgain)
+            }
+        case .acceptBluetoothPrompt(let instruction):
+            Text(verbatim: instruction)
+                .font(Typography.body(size: 14))
+                .fixedSize(horizontal: false, vertical: true)
+        case .pairNewSensor(let instruction):
+            VStack(alignment: .leading, spacing: 10) {
+                Text(verbatim: instruction)
+                    .font(Typography.body(size: 13))
+                    .fixedSize(horizontal: false, vertical: true)
+                PairingCodeEntry(buttonTitle: "Pair a new sensor", pair: pairNew)
+            }
+        case .retryCode:
+            PairingCodeEntry(pair: pairNew)
+        }
+    }
+}
+
 /// 4-digit pairing code entry (HANDOFF §4.6). Also used in onboarding.
 struct PairingCodeEntry: View {
+    var buttonTitle = "Pair sensor"
+    /// The "enter the code / remove the Dexcom app" paragraph; off where steps are listed above.
+    var showsIntro = true
     let pair: @MainActor (String) -> Void
     @State private var code = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionLabel("PAIRING CODE")
-            Text(verbatim: "Enter the 4-digit code printed on the sensor applicator. Remove the Dexcom app from this phone first: only one app can be the sensor's primary device.")
-                .font(Typography.body(size: 13))
-                .fixedSize(horizontal: false, vertical: true)
+            if showsIntro {
+                Text(verbatim: "Enter the 4-digit code printed on the sensor applicator. Remove the Dexcom app from this phone first: only one app can be the sensor's primary device.")
+                    .font(Typography.body(size: 13))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             TextField(text: Binding(get: { code }, set: { code = PairingCode.sanitize($0) })) {
                 Text(verbatim: "0000")
             }
@@ -92,7 +124,7 @@ struct PairingCodeEntry: View {
             .padding(.horizontal, 12)
             .overlay(Rectangle().stroke(Theme.ink, lineWidth: 1))
             .accessibilityLabel(Text("Pairing code, 4 digits"))
-            Button("Pair sensor") { pair(code) }
+            Button(buttonTitle) { pair(code) }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(!PairingCode.isComplete(code))
         }
