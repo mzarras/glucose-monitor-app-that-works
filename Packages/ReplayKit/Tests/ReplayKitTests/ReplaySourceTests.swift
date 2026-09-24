@@ -151,6 +151,59 @@ final class ReplaySourceTests: XCTestCase {
         }
     }
 
+    /// Active, one reading, then `state` 5 minutes later.
+    private func timeline(thenState state: SensorState) -> ReplayTimeline {
+        let session = G7ReplaySession.session(serial: "REPLAY-FAILURE", start: testOrigin.addingTimeInterval(-86_400))
+        let factory = ReplayReadingFactory(origin: testOrigin, session: session)
+        return ReplayTimeline(
+            name: "failure", origin: testOrigin, session: session, initialState: .searching,
+            events: [
+                ReplayEvent(offset: 0, kind: .state(.active(sessionStart: session.start, expiresAt: session.expiresAt))),
+                ReplayEvent(offset: 0, kind: .reading(factory.reading(minute: 0, .mgdl(120), trend: 0))),
+                ReplayEvent(offset: 5 * minute, kind: .state(state)),
+            ]
+        )
+    }
+
+    /// D36: a replay session ends on `.expired` or on a `.failed` whose failure requires replacing
+    /// the sensor — not on transient failures, pairing loss, calibration states, errors or
+    /// Bluetooth problems.
+    func test_S2_replaySessionEndsOnlyOnExpiryOrAFailureThatRequiresReplacement() async throws {
+        var endingKinds: [SensorFailure.Kind] = []
+        for kind in SensorFailure.Kind.allCases {
+            let failure = SensorFailure(kind: kind, message: "replay \(kind.rawValue)")
+            let timeline = timeline(thenState: .failed(failure))
+            let source = ReplaySource(timeline: timeline, clock: ImmediateReplayClock(start: testOrigin))
+            _ = try await playToEnd(source)
+            let current = await source.currentSession
+            if failure.requiresSensorReplacement {
+                XCTAssertNil(current, "\(kind) ends the session")
+                endingKinds.append(kind)
+            } else {
+                XCTAssertEqual(current, timeline.session, "\(kind) does not end the session")
+            }
+        }
+        XCTAssertEqual(Set(endingKinds), [.sensorFailed, .sessionStopped, .unsupportedSensor], "non-vacuous: exactly these end it")
+
+        let keepsSession: [SensorState] = [
+            .calibrationNeeded(code: 1), .calibrationError(code: 2), .error(code: 3, description: "replay"),
+            .bluetoothUnavailable(.poweredOff), .searching,
+        ]
+        for state in keepsSession {
+            let timeline = timeline(thenState: state)
+            let source = ReplaySource(timeline: timeline, clock: ImmediateReplayClock(start: testOrigin))
+            _ = try await playToEnd(source)
+            let current = await source.currentSession
+            XCTAssertEqual(current, timeline.session, "\(state) does not end the session")
+        }
+
+        let expiring = timeline(thenState: .expired)
+        let expired = ReplaySource(timeline: expiring, clock: ImmediateReplayClock(start: testOrigin))
+        _ = try await playToEnd(expired)
+        let afterExpiry = await expired.currentSession
+        XCTAssertNil(afterExpiry, ".expired ends the session")
+    }
+
     func test_stateStreamStartsWithTheCurrentStateBeforeStart() async {
         let source = ReplayScenario.sensorExpiry.makeSource(origin: testOrigin, clock: ManualReplayClock(start: testOrigin))
         var states = source.state.makeAsyncIterator()

@@ -62,7 +62,9 @@ for await reading in source.readings { _ = try await store.insert([reading]) }
   timeline's state events.
 - **`currentSession`** follows the CGMSource lifetime rule (PROGRESS D28): nil until the first
   `start`; then the timeline's session, unchanged across `stop`/`start` (a routine disconnect);
-  nil again once the session has ended — the timeline delivered `.expired` or `.failed` (set before
+  nil again once the session has ended — the timeline delivered `.expired`, or `.failed` whose
+  `SensorFailure.requiresSensorReplacement` is true (D36; transient failures, pairing loss,
+  calibration states and `.error` do not end it) (set before
   the state is yielded, so a consumer that sees `.expired` already gets nil), or replay time
   (`clock.now()`) is past `gracePeriodEndsAt`. In `sensorExpiry` it becomes nil at +750 min; the
   other scenarios' timelines end before their sessions do, so the session stays. A replay run is
