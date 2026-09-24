@@ -184,8 +184,8 @@ enum ServiceConfigurationError: Error, Sendable, Equatable {
 
 // MARK: - History import (HANDOFF §4.5)
 
-struct HistoryImportState: Sendable, Equatable {
-    enum Phase: Sendable, Equatable {
+struct HistoryImportState: Sendable, Equatable, Codable {
+    enum Phase: Sendable, Equatable, Codable {
         case running
         case finished
         case cancelled
@@ -237,6 +237,8 @@ enum PairingError: Error, Sendable, Equatable {
     case invalidCode
     /// The pairing record could not be saved (Keychain unavailable, e.g. before the first unlock).
     case credentialStoreFailed(String)
+    /// `pairAgain(code:)` with no stored sensor: use `pair(code:)` (the new-sensor flow).
+    case noSensorToPairAgain
     /// DEBUG: a replay run is active; stop it before pairing.
     case replayActive
 }

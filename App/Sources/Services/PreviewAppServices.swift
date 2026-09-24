@@ -23,6 +23,8 @@ final class PreviewAppServices: AppServices {
     var sensorState: SensorState
     var sensorSession: SensorSession?
     var canStopSession = false
+    var hasStoredSensor = false
+    var storedSensorSerial: String?
     var acceptedCalibrationRange: ClosedRange<Int>? = 40...400
     var recentCalibrations: [CalibrationRecord] = []
     var trio: TrioBridgeSummary = .off
@@ -80,10 +82,19 @@ final class PreviewAppServices: AppServices {
         send(.sensor)
     }
 
+    func pairAgain(code: String) async throws(PairingError) {
+        calls.append("pairAgain(\(code))")
+        if let pairingError { throw pairingError }
+        sensorState = .searching
+        send(.sensor)
+    }
+
     func forgetSensor() async {
         calls.append("forgetSensor")
         sensorState = .notPaired
         sensorSession = nil
+        hasStoredSensor = false
+        storedSensorSerial = nil
         send(.sensor)
     }
 

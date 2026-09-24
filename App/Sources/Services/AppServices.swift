@@ -66,8 +66,18 @@ protocol AppServices: AnyObject {
     /// Pairs a new sensor with its 4-digit code. Failures after the code is accepted arrive as
     /// `sensorState` `.failed(_:)` (D36).
     func pair(code: String) async throws(PairingError)
+    /// Pairs the sensor being worn again with its 4-digit code (e.g. after "pair again" failures:
+    /// `pairingRejected`, `pairingCodeNeeded`, `bondRemoved`), keeping its session. `pair(code:)`
+    /// is the new-sensor flow.
+    func pairAgain(code: String) async throws(PairingError)
     /// Deletes the pairing (key and code), reports `.notPaired`, and removes Trio's heartbeat keys.
     func forgetSensor() async
+    /// Whether the G7 source has a stored sensor (one this phone has connected to). Route a pairing
+    /// retry to `pairAgain(code:)` only when true; otherwise `pair(code:)` (a new sensor). Refreshed
+    /// after every sensor state, pairing and forgetting; a change sends `.sensor`.
+    var hasStoredSensor: Bool { get }
+    /// The stored sensor's serial ("DXCMxx-1A2B3C4D"), nil when none is stored.
+    var storedSensorSerial: String? { get }
 
     // MARK: Calibration (PROGRESS D16; never a reading, S1)
 
@@ -103,7 +113,7 @@ protocol AppServices: AnyObject {
 
     // MARK: History import (HANDOFF §4.5; imported readings feed charts and stats only, S6)
 
-    /// The running or last finished import in this process, nil if none.
+    /// The running import, or the last finished/failed one (kept across launches), nil if none.
     var historyImport: HistoryImportState? { get }
     /// Imports from the saved Nightscout site (resumable, idempotent).
     func startNightscoutImport(scope: NightscoutImportScope)
