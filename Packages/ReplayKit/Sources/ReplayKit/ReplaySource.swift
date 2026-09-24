@@ -27,7 +27,9 @@ public actor ReplaySource: CGMSource {
     private var nextEventIndex = 0
     private var playback: Task<Void, Never>?
     private var hasStarted = false
-    /// Set when the timeline delivers a state that ends the session (`.expired`, `.failed`).
+    /// Set when the timeline delivers a state that ends the session: `.expired`, or `.failed` whose
+    /// failure requires replacing the sensor (D36). Transient failures, pairing loss, calibration
+    /// states and `.error` do not end it.
     private var sessionEnded = false
 
     /// Everything put on the streams so far, in order. `emit` and `deliver(state:)` are the only
@@ -57,7 +59,9 @@ public actor ReplaySource: CGMSource {
     /// The CGMSource lifetime rule: nil before the first `start` (a real source knows its session
     /// only once authenticated); then the timeline's session, unchanged across `stop`/`start`
     /// (a routine disconnect); nil again once the session has ended — the timeline delivered
-    /// `.expired` or `.failed`, or replay time is past `gracePeriodEndsAt`.
+    /// `.expired` or a `.failed` with `requiresSensorReplacement` (D36), or replay time is past
+    /// `gracePeriodEndsAt`. Any other failure (transient, or one that only needs pairing again)
+    /// leaves the session in place, as a real sensor's session outlives them.
     ///
     /// A replay run is not persisted: after an app relaunch a new source starts a new run, so the
     /// relaunch part of the rule does not apply.
@@ -115,7 +119,10 @@ public actor ReplaySource: CGMSource {
             }
         case .state(let newState):
             switch newState {
-            case .expired, .failed: sessionEnded = true
+            case .expired:
+                sessionEnded = true
+            case .failed(let failure) where failure.requiresSensorReplacement:
+                sessionEnded = true
             default: break
             }
             emittedStates.append(newState)
