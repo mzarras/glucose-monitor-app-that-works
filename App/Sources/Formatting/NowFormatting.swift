@@ -195,6 +195,8 @@ enum UploadStatusText {
         case .ok(nil): return "no upload yet"
         case .failing(let count, _, let since):
             return "\(count) \(count == 1 ? "failure" : "failures") since \(TimeText.time(since, context))"
+        case .notSetUp:
+            return "not set up"
         }
     }
 }
