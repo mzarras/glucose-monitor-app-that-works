@@ -23,6 +23,8 @@ final class PreviewAppServices: AppServices {
     var sensorState: SensorState
     var sensorSession: SensorSession?
     var canStopSession = false
+    var hasStoredSensor = false
+    var storedSensorSerial: String?
     var acceptedCalibrationRange: ClosedRange<Int>? = 40...400
     var recentCalibrations: [CalibrationRecord] = []
     var trio: TrioBridgeSummary = .off
@@ -91,6 +93,8 @@ final class PreviewAppServices: AppServices {
         calls.append("forgetSensor")
         sensorState = .notPaired
         sensorSession = nil
+        hasStoredSensor = false
+        storedSensorSerial = nil
         send(.sensor)
     }
 

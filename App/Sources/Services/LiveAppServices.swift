@@ -104,6 +104,8 @@ final class LiveAppServices: AppServices {
     var alertDelivery = AlertDeliveryReport.unknown
     var storage = StorageStatus(availability: .opening, summary: nil, retention: .default, lastPurgeAt: nil, lastPurgeRemoved: 0)
     private(set) var accent = AccentChoice.default
+    private(set) var hasStoredSensor = false
+    private(set) var storedSensorSerial: String?
     var nightscoutHasToken = false
     var shareAccountName: String?
     var shareHasPassword = false
@@ -126,7 +128,10 @@ final class LiveAppServices: AppServices {
         sensorPipeline.onChange = { [weak self] change in self?.send(change) }
         sensorPipeline.onBatchProcessed = { [weak self] in self?.sensorBatchProcessed() }
         sensorPipeline.outputs.sensorStateProcessed = { [weak self] _ in
-            Task { await self?.updateTrioHeartbeat() }
+            Task {
+                await self?.refreshStoredSensor()
+                await self?.updateTrioHeartbeat()
+            }
         }
         trioCoordinator.onChange = { [weak self] summary in self?.trioSummaryChanged(summary) }
         uploads.onChange = { [weak self] in self?.send(.uploads) }
@@ -258,6 +263,7 @@ final class LiveAppServices: AppServices {
         } catch {
             throw .credentialStoreFailed(String(describing: error))
         }
+        await refreshStoredSensor()
         await updateTrioHeartbeat()
     }
 
@@ -274,6 +280,7 @@ final class LiveAppServices: AppServices {
         } catch {
             throw .credentialStoreFailed(String(describing: error))
         }
+        await refreshStoredSensor()
         await updateTrioHeartbeat()
     }
 
@@ -288,7 +295,18 @@ final class LiveAppServices: AppServices {
     func forgetSensor() async {
         await g7.forgetSensor()
         log(.sensor, "sensor forgotten")
+        await refreshStoredSensor()
         await updateTrioHeartbeat()
+        send(.sensor)
+    }
+
+    /// Re-reads whether the G7 source has a stored sensor; a change is a `.sensor` change.
+    func refreshStoredSensor() async {
+        let has = await g7.hasStoredSensor
+        let serial = await g7.storedSensorSerial
+        guard has != hasStoredSensor || serial != storedSensorSerial else { return }
+        hasStoredSensor = has
+        storedSensorSerial = serial
         send(.sensor)
     }
 
@@ -439,6 +457,7 @@ final class LiveAppServices: AppServices {
         sensorPipeline.activate()
         await openStoreIfNeeded()
         await startG7()
+        await refreshStoredSensor()
         await updateTrioHeartbeat()
         updateClockMismatchLatch(now: Date())
         send(.health)

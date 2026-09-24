@@ -72,6 +72,12 @@ protocol AppServices: AnyObject {
     func pairAgain(code: String) async throws(PairingError)
     /// Deletes the pairing (key and code), reports `.notPaired`, and removes Trio's heartbeat keys.
     func forgetSensor() async
+    /// Whether the G7 source has a stored sensor (one this phone has connected to). Route a pairing
+    /// retry to `pairAgain(code:)` only when true; otherwise `pair(code:)` (a new sensor). Refreshed
+    /// after every sensor state, pairing and forgetting; a change sends `.sensor`.
+    var hasStoredSensor: Bool { get }
+    /// The stored sensor's serial ("DXCMxx-1A2B3C4D"), nil when none is stored.
+    var storedSensorSerial: String? { get }
 
     // MARK: Calibration (PROGRESS D16; never a reading, S1)
 
