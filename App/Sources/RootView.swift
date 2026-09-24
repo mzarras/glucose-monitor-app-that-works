@@ -14,7 +14,6 @@ struct RootView: View {
         VStack(spacing: 0) {
             if let banner = model.now.buildBanner {
                 BuildBannerView(banner: banner)
-                    .accessibilityIdentifier("build.banner")
             }
             screen
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

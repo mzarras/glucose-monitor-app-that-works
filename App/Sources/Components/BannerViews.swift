@@ -58,5 +58,6 @@ struct BuildBannerView: View {
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .layoutProbe("build.banner")
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("build.banner")
     }
 }
