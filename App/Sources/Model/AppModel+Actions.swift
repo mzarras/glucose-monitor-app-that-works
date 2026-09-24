@@ -104,7 +104,10 @@ extension AppModel {
         pairingInProgress = true
         settings.sensor.pairingInProgress = true
         settings.feedback.pairing = nil
-        if onboarding != nil { onboarding?.pairing = .inProgress }
+        if onboarding != nil {
+            onboarding?.pairing = .inProgress
+            if !again, hadStoredSensorAtPairingStart == nil { hadStoredSensorAtPairingStart = hasStoredSensor }
+        }
         track { [weak self] in
             do throws(PairingError) {
                 if again {
@@ -329,6 +332,7 @@ extension AppModel {
 
     func finishOnboarding() {
         onboarding = nil
+        hadStoredSensorAtPairingStart = nil
         preferences?.onboardingCompleted = true
     }
 

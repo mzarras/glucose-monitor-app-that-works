@@ -79,15 +79,34 @@ except the lengths inside the J-PAKE hash (big-endian, §3.3).
   candidate are ignored (a stray `didConnect` is disconnected immediately).
 - **Pairing a new sensor (`pair(code:)` = `start(pairingCode:)`):** a fresh pairing record; the first
   advertising G7 (`DXCM…`) that connects and accepts the code is paired. Sensors that refused the
-  code or did not connect in time are not tried again during that pairing. The **previous sensor is
-  ignored only when its session has ended or it was unsupported** (safety review M1, D37); a
-  previous sensor that is still running may be the one being paired. If that previous sensor
-  answers first and refuses the new code, the refusal is expected: it is logged to `DiagnosticLog`,
-  the sensor is excluded for the rest of this pairing and scanning continues, **without**
-  `.failed(pairingCodeRejected)` (that kind raises the sensor alert; it would be a false alarm while
-  the user is deliberately pairing a new sensor). The previous sensor's own pairing is untouched and
-  nothing is published from it. A refusal from any other sensor is still shown as
-  `.failed(pairingCodeRejected)`. Test `test_S5_previousSensorRefusingANewCodeIsSilentlySkipped`.
+  code or did not connect in time are not tried again during that pairing. Exclusions are by
+  CoreBluetooth identifier, never by name: G7 names are "DXCM" + 2 characters and repeat across
+  sensors (re-review N1). The **previous sensor is ignored only when its session has ended or it was
+  unsupported** (safety review M1, D37); a previous sensor that is still running may be the one
+  being paired.
+  - **Previous sensor refusing the new code (coordinator decision; re-review N1).** When the
+    candidate that refuses the code has the previous record's `peripheralIdentifier` (the same
+    physical sensor as seen by this phone — a matching name is not enough), the refusal is expected:
+    it is logged to `DiagnosticLog`, the sensor is excluded for the rest of this pairing and scanning
+    continues, **without** `.failed(pairingCodeRejected)` (that kind raises the sensor alert; it
+    would be a false alarm while the user is deliberately pairing a new sensor). Its own pairing is
+    untouched and nothing is published from it. This skip is **time-limited** (Sensor policy,
+    `previousSensorSkipLimit` = 10 min from the pairing start, two sensor wakes): if no sensor has
+    authenticated by then, or if the previous sensor's refusal comes after that, the state becomes
+    `.failed(previousSensorRejectedCode(sensorName:))` (kind `pairingRejected`), whose message names
+    the previous sensor and asks to enter its 4-digit code again if the person meant to keep using
+    it, or to check the new applicator's code — they may be re-pairing the sensor they wear with a
+    mistyped code. (No "Pair again" in the text: onboarding offers only "Try again", `pair(code:)`,
+    which does reach the worn sensor.) A refusal from any other sensor (including a different sensor with
+    the same name) is shown as `.failed(pairingCodeRejected)` at once. Tests
+    `test_S5_previousSensorRefusingANewCodeIsSilentlySkipped`,
+    `test_S5_sameNameDifferentIdentifierRefusalSurfaces`, `test_S5_previousSensorSkipIsTimeLimited`.
+  - **Which call the app uses.** `G7CGMSource.hasStoredSensor` is true once this phone has
+    authenticated to a sensor (serial and identifier stored; `storedSensorSerial` gives the serial).
+    Then every code retry — including "try the code again" in onboarding after the sensor already
+    authenticated — must call `pairAgain(code:)`, which never skips a refusal; `pair(code:)` is for a
+    first pairing (`hasStoredSensor` false) and for deliberately pairing a different sensor. Test
+    `test_S5_retryAfterAuthenticationUsesPairAgain`.
 - **Pairing the same sensor again (`pairAgain(code:)`, D37):** for the sensor being worn after it
   refused this phone (`.failed` kind `pairingRejected`, e.g. another device took the slot, or a wrong
   code) or asked for the code (`pairingCodeNeeded`). It keeps the stored sensor's name, iOS identifier,
@@ -522,7 +541,7 @@ Every `.failed(_:)` carries a `SensorFailure`: consumers decide from `kind`, nev
 |---|---|---|---|
 | `sensorFailed`, `sessionStopped` | same | yes (replace sensor) | latched end, §6.1a |
 | `unsupportedSensor` | same | yes (replace sensor) | §6.2 |
-| `pairingCodeRejected`, `savedKeyRejected` | `pairingRejected` | yes (pair again) | §3.1 |
+| `pairingCodeRejected`, `savedKeyRejected`, `previousSensorRejectedCode(sensorName:)` | `pairingRejected` | yes (pair again) | §3.1, §2.2 |
 | `pairingCodeNeeded` | same | yes (pair again) | §3.2 |
 | `bondRemovedBySensor` | `bondRemoved` | yes (pair again) | §2.4 |
 | `bluetoothPairingNotCompleted` | `bluetoothPairingIncomplete` | no (banner) | §2.4 |

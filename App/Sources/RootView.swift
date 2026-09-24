@@ -53,7 +53,8 @@ struct RootView: View {
         }
         .fullScreenCover(isPresented: onboardingPresented) {
             if let onboarding = model.onboarding {
-                OnboardingFlowView(state: onboarding, actions: onboardingActions, replayScenario: model.now.replayScenario)
+                OnboardingFlowView(state: onboarding, actions: onboardingActions, replayScenario: model.now.replayScenario,
+                                   pairingContext: model.onboardingPairingContext)
                     .environment(\.accentChoice, model.accent)
             }
         }
@@ -69,7 +70,8 @@ struct RootView: View {
         case .alerts:
             AlertsScreen(state: model.alerts, actions: alertsActions)
         case .settings:
-            SettingsScreen(state: model.settings, calibration: model.calibration, route: $model.settingsRoute, actions: settingsActions)
+            SettingsScreen(state: model.settings, calibration: model.calibration, route: $model.settingsRoute, actions: settingsActions,
+                           hasStoredSensor: model.hasStoredSensor)
         }
     }
 

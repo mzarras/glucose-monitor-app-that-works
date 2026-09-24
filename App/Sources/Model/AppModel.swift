@@ -33,6 +33,11 @@ final class AppModel {
     var importSheet: OnboardingState?
     /// Settings sub-page to open (from a banner or the Now menu).
     var settingsRoute: SettingsRoute?
+    /// G7Kit `hasStoredSensor` (review N2): whether `pairAgain(code:)` has a sensor to re-pair.
+    var hasStoredSensor = false
+    /// Whether a sensor was stored when the onboarding pairing started (review N1 item 3: the sensor
+    /// authenticated in this pairing once `hasStoredSensor` becomes true after that).
+    @ObservationIgnored var hadStoredSensorAtPairingStart: Bool?
     /// A file to hand to the share sheet (CSV export, diagnostics).
     var sharedFile: SharedFile?
 
@@ -65,6 +70,13 @@ final class AppModel {
     @ObservationIgnored var alertSettingsDraft: AlertSettings?
     /// Pre-integration fixture launch only: alert edits apply here.
     @ObservationIgnored var legacyAlertSettings = AlertSettings.defaults
+
+    /// Onboarding's pairing context (review N1/N2): a new pairing, which counts as authenticated
+    /// once a sensor is stored that wasn't when this pairing started.
+    var onboardingPairingContext: PairingContext {
+        let authenticated = hadStoredSensorAtPairingStart == false && hasStoredSensor
+        return PairingContext(hasStoredSensor: hasStoredSensor, isNewPairing: true, authenticatedInThisPairing: authenticated)
+    }
 
     init(now: NowViewState, trends: TrendsViewState, alerts: AlertsViewState, settings: SettingsViewState, calibration: CalibrationViewState, onboarding: OnboardingState?) {
         self.now = now
@@ -309,6 +321,7 @@ final class AppModel {
     private func refreshSensor(_ time: Date) {
         guard let services else { return }
         let state = services.sensorState
+        hasStoredSensor = services.hasStoredSensorAdapter
         now.sensorState = state
         now.sensorSession = services.sensorSession
         calibration.sensorState = state
