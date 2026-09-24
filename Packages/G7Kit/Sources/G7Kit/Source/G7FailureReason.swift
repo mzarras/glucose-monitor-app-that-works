@@ -86,6 +86,6 @@ public enum G7FailureReason {
     /// (what was not saved would be lost at the next app restart).
     public static let credentialsUnavailable = SensorFailure(
         kind: .credentialsUnavailable,
-        message: "The sensor's pairing could not be read from or saved to the Keychain. Unlock the phone; if this persists, pair the sensor again."
+        message: "The sensor's pairing could not be read from or saved to the Keychain. Unlock the phone. If this continues after unlocking, pair the sensor again from Settings › Sensor."
     )
 }

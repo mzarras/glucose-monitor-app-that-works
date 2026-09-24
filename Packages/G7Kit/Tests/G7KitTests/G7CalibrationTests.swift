@@ -58,6 +58,16 @@ final class G7CalibrationQueueTests: XCTestCase {
         XCTAssertEqual(statuses, [.queued])
     }
 
+    /// D37: while the clocks disagree the fingerstick cannot be placed in sensor time: `invalidTime`.
+    func test_S3_calibrationRefusedWhileTheClocksDisagree() {
+        var mismatch = context(state: active)
+        mismatch.clockMismatch = true
+        XCTAssertThrowsError(try queue.submit(CalibrationRequest(mgdl: 120, takenAt: now), context: mismatch, now: now)) {
+            XCTAssertEqual($0 as? CalibrationRefusal, .invalidTime)
+        }
+        XCTAssertTrue(updates.isEmpty)
+    }
+
     /// D36: the calibration states let a running sensor calibrate; a temporary issue does too.
     func test_calibrationStatesMayCalibrate() throws {
         for state: SensorState in [.calibrationNeeded(code: 0x07), .calibrationError(code: 0x08), .error(code: 0x12, description: "Temporary sensor issue")] {

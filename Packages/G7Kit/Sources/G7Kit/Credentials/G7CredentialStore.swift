@@ -39,8 +39,17 @@ public struct G7PairingRecord: Sendable, Equatable, Codable {
     public var unconfirmedSessionEnd: G7UnconfirmedSessionEnd?
     /// The newest published reading, so dates stay in sensor-time order across relaunches (S3).
     public var newestReading: G7ReadingMark?
+    /// Set when the sensor's `0x52` reported a session length other than the 10-day sensor's. Optional
+    /// in storage so records saved before this field existed still decode.
+    private var unsupported: Bool?
 
     public var sessionEnded: Bool { sessionEnd != nil }
+
+    /// The sensor was refused as not a G7 10-day sensor (`.failed(unsupportedSensor)`).
+    public var isUnsupportedSensor: Bool {
+        get { unsupported ?? false }
+        set { unsupported = newValue ? true : nil }
+    }
 
     public init(pairingCode: String, slot: G7AuthenticationSlot) {
         self.pairingCode = pairingCode
