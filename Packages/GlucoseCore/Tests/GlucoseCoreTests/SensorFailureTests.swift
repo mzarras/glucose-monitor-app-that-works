@@ -4,7 +4,7 @@ import XCTest
 final class SensorFailureTests: XCTestCase {
     func test_S5_onlyEndedSensorsAndLostPairingsRaiseTheSensorAlert() {
         let alerting: Set<SensorFailure.Kind> = [.sensorFailed, .sessionStopped, .unsupportedSensor,
-                                                 .pairingRejected, .pairingCodeNeeded, .bondRemoved]
+                                                 .pairingRejected, .pairingCodeNeeded, .bondRemoved, .other]
         for kind in SensorFailure.Kind.allCases {
             let failure = SensorFailure(kind: kind, message: "m")
             XCTAssertEqual(failure.raisesSensorAlert, alerting.contains(kind), "\(kind)")
