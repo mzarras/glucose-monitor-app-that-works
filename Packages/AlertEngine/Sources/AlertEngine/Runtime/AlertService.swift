@@ -96,7 +96,8 @@ public final class AlertService {
             permissions: permissions,
             outputVolume: lastOutputVolume,
             urgentLowAlarm: alarms?.authorization ?? .unavailable,
-            urgentLowAlarmFailure: executor.urgentLowAlarmFailure
+            urgentLowAlarmFailure: executor.urgentLowAlarmFailure,
+            repeatShortfalls: executor.repeatShortfalls
         )
     }
 

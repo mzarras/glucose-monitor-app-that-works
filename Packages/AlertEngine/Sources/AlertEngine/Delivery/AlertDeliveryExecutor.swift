@@ -21,6 +21,9 @@ public final class AlertDeliveryExecutor {
     /// Set when scheduling an urgent-low system alarm failed in the last attempt (S5: shown on the
     /// Settings screen); cleared when a later attempt succeeds in full.
     public private(set) var urgentLowAlarmFailure: String?
+    /// Alerts whose last plan could not schedule every repeat, with how many are missing (S5).
+    /// Cleared by the next `.schedule` or cancel for that alert.
+    public private(set) var repeatShortfalls: [AlertKind: Int] = [:]
 
     public init(
         center: AlertNotificationCenter, audio: AlertAudioPlaying, alarms: SystemAlarmScheduling? = nil,
@@ -87,6 +90,7 @@ public final class AlertDeliveryExecutor {
             // names a slot that is due within a minute, so no due or ringing repeat is touched.
             let first = notices.first?.fireDate.map { "\($0)" } ?? "-"
             log("schedule \(kind.rawValue): \(notices.count) pending from \(first)")
+            repeatShortfalls[kind] = nil
             var alarmsOK = true
             var triedAlarms = false
             for notice in notices {
@@ -108,11 +112,13 @@ public final class AlertDeliveryExecutor {
 
         case .cancelScheduled(let kind):
             log("cancel all pending \(kind.rawValue)")
+            repeatShortfalls[kind] = nil
             center.removePending(identifiers: AlertNotificationIDs.allScheduled(kind))
             if kind == .urgentLow { cancelAllAlarms() }
 
         case .cancel(let kind):
             log("cancel \(kind.rawValue)")
+            repeatShortfalls[kind] = nil
             let identifiers = AlertNotificationIDs.all(kind)
             center.removePending(identifiers: identifiers)
             center.removeDelivered(identifiers: identifiers)
@@ -122,6 +128,10 @@ public final class AlertDeliveryExecutor {
         case .stopSound(let kind):
             log("stop sound \(kind.rawValue)")
             stopInApp(for: kind)
+
+        case .repeatsNotAllScheduled(let kind, let missing):
+            repeatShortfalls[kind] = missing
+            log("\(kind.rawValue): \(missing) repeat(s) NOT scheduled: every free slot is held by a repeat that must not be disturbed")
 
         case .readingRejected(let id, let reason):
             log("reading \(id) refused: \(reason)")

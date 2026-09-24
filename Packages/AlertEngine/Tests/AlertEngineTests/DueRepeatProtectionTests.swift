@@ -217,6 +217,26 @@ final class PartialRollbackTests: XCTestCase {
         XCTAssertNil(Uptime(seconds: 60_000, boot: "B").seconds(since: before), "another boot, even with a larger value")
         XCTAssertNil(Uptime(seconds: 40_000, boot: "A").seconds(since: before), "went backwards")
         XCTAssertNil(Uptime(seconds: 60_000, boot: nil).seconds(since: before))
+        XCTAssertNil(Uptime(seconds: 60_000, boot: nil).seconds(since: Uptime(seconds: 50_000, boot: nil)),
+                     "two unreadable boot sessions are not 'the same boot'")
+    }
+
+    /// If `kern.bootsessionuuid` cannot be read, the engine must not compare monotonic readings:
+    /// it falls back to comparing with the latest wall clock seen.
+    func test_unreadableBootSessionFallsBackToTheLatestWallClockSeen() {
+        // Real time passes 25 min (monotonic +25 min) while the wall clock moves only +2 min.
+        // Comparable readings would call that a rollback; with unknown boots it is not assumed.
+        var engine = AlertEngine(settings: .defaults, configuration: Fixtures.configuration, now: Fixtures.t0)
+        let start = Uptime(seconds: 1_000, boot: nil)
+        _ = engine.handle(.reading(Fixtures.reading(.mgdl(50), at: Fixtures.t0), session: Fixtures.session), at: Fixtures.t0, uptime: start)
+        _ = engine.handle(.user(.snooze(.urgentLow, minutes: 30)), at: Fixtures.t0, uptime: start)
+        let later = Fixtures.t0.addingTimeInterval(minutes(2))
+        _ = engine.handle(.tick, at: later, uptime: Uptime(seconds: 1_000 + minutes(25), boot: nil))
+        XCTAssertEqual(engine.phase(of: .urgentLow), .snoozed(until: Fixtures.t0.addingTimeInterval(minutes(30))), "not treated as a rollback")
+        // A wall clock earlier than the latest seen is still caught.
+        let back = Fixtures.t0.addingTimeInterval(-minutes(5))
+        _ = engine.handle(.tick, at: back, uptime: Uptime(seconds: 1_000 + minutes(26), boot: nil))
+        XCTAssertEqual(engine.phase(of: .urgentLow), .snoozed(until: back), "fallback detects it; the snooze ends")
     }
 
     /// Second delta review, minor: an NTP correction (or a user) setting the clock back while a
@@ -341,5 +361,41 @@ final class SlotAllocationTests: XCTestCase {
         XCTAssertTrue(entries.contains { $0.sequence == 120 }, "the protected entry stays")
         XCTAssertEqual(actions.scheduled(.urgentLow)?.count, 12)
         XCTAssertFalse(actions.scheduledNotices(.urgentLow)?.contains { $0.slot == 120 % AlertLimits.scheduleIDCycle } ?? true)
+    }
+}
+
+/// Reviewer follow-up: the "no free slot" path must be loud (logged, shown in Settings), never silent.
+@MainActor
+final class RepeatShortfallTests: XCTestCase {
+    /// 128 repeats, all due within the protected minute: every slot is held and none may be touched.
+    private func fullSeries(now: Date) -> RepeatSeries {
+        var series = RepeatSeries()
+        series.entries = (0..<AlertLimits.scheduleIDCycle).map { ScheduledRepeat(sequence: $0, date: now.addingTimeInterval(Double(1 + $0 % 59))) }
+            .sorted { $0.date < $1.date }
+        series.nextSequence = AlertLimits.scheduleIDCycle
+        return series
+    }
+
+    func test_whenEverySlotIsHeldTheShortfallIsReported() {
+        var engine = AlertEngine(settings: .defaults, configuration: Fixtures.configuration, now: Fixtures.t0)
+        engine.snapshot.repeatSeries[AlertKind.urgentLow.rawValue] = fullSeries(now: Fixtures.t0)
+        let actions = engine.planSeries(.urgentLow, anchor: Fixtures.t0, interval: minutes(5), firstIndex: 1, count: 12, now: Fixtures.t0, isRepeat: true)
+        XCTAssertEqual(actions, [.repeatsNotAllScheduled(.urgentLow, missing: 12)], "nothing scheduled, nothing touched, and it says so")
+        XCTAssertEqual(engine.series(.urgentLow).entries.count, AlertLimits.scheduleIDCycle)
+    }
+
+    func test_S5_shortfallIsLoggedAndSurfacedThenClears() async throws {
+        let firing = EngineHarness()
+        firing.mgdl(50)
+        var snapshot = firing.engine.snapshot
+        snapshot.repeatSeries[AlertKind.urgentLow.rawValue] = fullSeries(now: Fixtures.t0)
+        let h = ServiceHarness(snapshot: snapshot)
+        await h.service.start()
+        XCTAssertEqual(h.service.deliveryStatus.problems, [.repeatsNotAllScheduled(.urgentLow, missing: 12)])
+        XCTAssertTrue(h.log.messages.contains { $0.contains("12 repeat(s) NOT scheduled") })
+
+        h.clock.advance(minutes: 1)
+        await h.reading(.mgdl(90))   // recovers: everything cancelled, nothing missing any more
+        XCTAssertEqual(h.service.deliveryStatus.problems, [])
     }
 }

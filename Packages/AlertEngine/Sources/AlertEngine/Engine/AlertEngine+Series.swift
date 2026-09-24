@@ -76,9 +76,13 @@ extension AlertEngine {
         }
         var held = Set(remembered.map(\.slot))
         var added: [ScheduledRepeat] = []
+        var missing = 0
         for date in desired where !keptDates.contains(date) {
             guard let sequence = Self.nextFreeSequence(&series, held: held) else {
-                break   // No free slot (cannot happen, see above): keep fewer repeats rather than disturb one.
+                // No free slot (cannot happen, see above): keep fewer repeats rather than disturb
+                // one, and say so (reported as `.repeatsNotAllScheduled`).
+                missing += 1
+                continue
             }
             let entry = ScheduledRepeat(sequence: sequence, date: date)
             added.append(entry)
@@ -94,6 +98,9 @@ extension AlertEngine {
         }
         if !added.isEmpty {
             actions.append(.schedule(kind, added.map { makeNotice(kind, fireDate: $0.date, now: now, isRepeat: isRepeat, slot: $0.slot) }))
+        }
+        if missing > 0 {
+            actions.append(.repeatsNotAllScheduled(kind, missing: missing))
         }
         return actions
     }

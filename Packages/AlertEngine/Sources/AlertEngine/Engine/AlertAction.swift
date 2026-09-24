@@ -60,6 +60,10 @@ public enum AlertAction: Sendable, Equatable {
     case cancel(AlertKind)
     /// Stop the in-app sound for this alert; leave notifications alone.
     case stopSound(AlertKind)
+    /// Fewer pending repeats could be planned than wanted, because every free notification/alarm
+    /// slot is held by a repeat that must not be disturbed. Should never happen (see
+    /// `AlertEngine.planSeries`); if it does, it is logged and shown on the Settings screen (S5).
+    case repeatsNotAllScheduled(AlertKind, missing: Int)
     /// A reading was refused by `LiveReadingGate` and changed nothing (S2, S6). For diagnostics.
     case readingRejected(readingID: String, reason: LiveReadingGate.Rejection)
     /// A user action that does not apply in the alert's current state (e.g. snoozing an alert that

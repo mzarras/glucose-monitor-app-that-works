@@ -17,7 +17,8 @@ public protocol AlertClock: AnyObject {
 /// A reading of the monotonic clock. Two readings can be compared only within the same boot.
 public struct Uptime: Sendable, Equatable, Codable {
     public let seconds: TimeInterval
-    /// Identifies the boot (`kern.bootsessionuuid`); `nil` if unknown.
+    /// Identifies the boot (`kern.bootsessionuuid`); `nil` if it could not be read, and then the
+    /// reading is never compared with another.
     public let boot: String?
 
     public init(seconds: TimeInterval, boot: String?) {
@@ -25,10 +26,11 @@ public struct Uptime: Sendable, Equatable, Codable {
         self.boot = boot
     }
 
-    /// Real seconds from `earlier` to `self`, or `nil` if they are not comparable (different or
-    /// unknown boot, or the clock went backwards, i.e. a reboot).
+    /// Real seconds from `earlier` to `self`, or `nil` if they are not comparable: a different boot,
+    /// an unknown boot on either side (two unknowns are not "the same boot"), or the clock went
+    /// backwards. The engine then falls back to comparing with the latest wall clock seen.
     public func seconds(since earlier: Uptime) -> TimeInterval? {
-        guard boot == earlier.boot, seconds >= earlier.seconds else { return nil }
+        guard let boot, let earlierBoot = earlier.boot, boot == earlierBoot, seconds >= earlier.seconds else { return nil }
         return seconds - earlier.seconds
     }
 }
