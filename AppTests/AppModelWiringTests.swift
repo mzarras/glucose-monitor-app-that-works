@@ -379,6 +379,50 @@ final class AppModelWiringTests: XCTestCase {
         XCTAssertFalse(model.settings.sensor.pairingInProgress)
     }
 
+    /// Pair again goes to `pairAgain(code:)`; `noSensorToPairAgain` is shown, never retried as a new
+    /// pairing (review N2). The stored sensor's serial shows before a session exists.
+    func test_pairAgainFromSettings() async {
+        let services = liveServices()
+        services.sensorState = .failed(SensorFailure(kind: .pairingRejected, message: "Rejected"))
+        services.hasStoredSensor = true
+        services.storedSensorSerial = "DXCM01-1A2B3C4D"
+        let model = launch(services)
+        XCTAssertTrue(model.hasStoredSensor)
+        XCTAssertEqual(model.settings.sensor.serial, "DXCM01-1A2B3C4D")
+        guard case .enterCode(_, _, .pairAgain)? = PairingGuidance.settingsOffer(for: model.settings.sensor.state, failureSince: nil,
+                                                                                 hasStoredSensor: model.hasStoredSensor, now: t0) else {
+            return XCTFail("Settings offers pair again for a stored sensor")
+        }
+        model.pairSensorAgain(code: "4321")
+        await model.settle()
+        XCTAssertTrue(services.calls.contains("pairAgain(4321)"))
+        XCTAssertFalse(services.calls.contains("pair(4321)"))
+
+        services.pairingError = .noSensorToPairAgain
+        model.pairSensorAgain(code: "4321")
+        await model.settle()
+        XCTAssertEqual(model.settings.feedback.pairing, OnboardingMapping.pairingErrorText(.noSensorToPairAgain))
+        XCTAssertEqual(services.calls.filter { $0 == "pair(4321)" }.count, 0, "never falls back to a new pairing")
+    }
+
+    /// Review N1 item 3: a new pairing that has authenticated (a sensor is stored now that wasn't
+    /// when it started) retries with `pairAgain(code:)`.
+    func test_onboardingPairingContextFollowsHasStoredSensor() async {
+        let services = PreviewAppServices(sensorState: .notPaired)
+        let model = launch(services, onboardingCompleted: false)
+        model.goToOnboardingStep(.pairing)
+        model.pairNewSensor(code: "1234")
+        await model.settle()
+        XCTAssertFalse(model.onboardingPairingContext.authenticatedInThisPairing)
+        services.hasStoredSensor = true
+        services.sensorState = .failed(SensorFailure(kind: .pairingRejected, message: "m"))
+        services.send(.sensor)
+        _ = await eventually { model.hasStoredSensor }
+        XCTAssertTrue(model.onboardingPairingContext.isNewPairing)
+        XCTAssertTrue(model.onboardingPairingContext.authenticatedInThisPairing)
+        XCTAssertTrue(model.onboardingPairingContext.canPairAgain)
+    }
+
     /// The Settings failure timer for `credentialsUnavailable` starts when the failure begins.
     func test_failureSinceStartsWithTheFailure() {
         let services = liveServices()

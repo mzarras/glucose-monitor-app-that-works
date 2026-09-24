@@ -8,7 +8,7 @@ the pipeline, stores, alert service, Trio bridge, uploaders — is Integrator A'
 ## Shape
 
 ```
-SensorApp → AppModel.launch(services:)          one model, @MainActor @Observable
+SensorApp → AppModel.launch(services: AppEnvironment.shared.services)   one model, @MainActor @Observable
               │  rebuildAll()                    every view state from the facade's properties
               │  for await change in services.changes() { apply(change) }
               │  tick()  ← RootView's 15 s TimelineView and scene → active
@@ -27,8 +27,10 @@ SensorApp → AppModel.launch(services:)          one model, @MainActor @Observa
   lines under the control that failed (`SettingsFeedback`, `OnboardingState.*Message`), the share
   sheet, the optimistic Alerts draft (below).
 - **Clock.** `AppModel.clock` (injected in tests) is what the UI classifies against: Now's hero and
-  banners, the tab dot, the latch, "today". It is the phone clock; see Open questions for
-  accelerated DEBUG replay.
+  banners, the tab dot, the latch, "today". It is the phone clock, so DEBUG replay runs in the UI
+  use speed 1 (`-replayStartMinute` jumps ahead instead; see Open questions).
+- **Fixtures.** DEBUG `AppModel.fixtures()` builds fixture view states with no services, for
+  previews and the fixture-based unit tests only.
 
 ## `ServiceChange` → what is rebuilt
 
@@ -131,7 +133,7 @@ low.").
 
 | Page | From | Actions |
 |---|---|---|
-| Sensor | `sensorState`, `sensorSession`, `storedSensorSerial`, `canStopSession`, `hasStoredSensor`, `bluetoothAuthorization` | `PairingGuidance.settingsOffer` → `pair(code:)` / `pairAgain(code:)`; forget sensor; stop session only if `canStopSession` (G7: hidden); calibrate |
+| Sensor | `sensorState`, `sensorSession`, `storedSensorSerial`, `canStopSession`, `hasStoredSensor`, `bluetoothAuthorization` | `PairingGuidance.settingsOffer` → `pair(code:)` / `pairAgain(code:)` (`PairingError.noSensorToPairAgain` is shown, never retried as a new pairing); forget sensor; stop session only if `canStopSession` (G7: hidden); calibrate |
 | Trio | `trio` | `setTrioBridgeEnabled`; shows `TrioAppGroupID` to compare with Trio's Group ID, last write, heartbeat, D20 pause note |
 | Sharing | `nightscout`, `dexcomShare` | `saveNightscout(url:token:)`, `setNightscoutUploadEnabled`, `saveDexcomShare(accountName:password:receiverSerialNumber:)`, `setDexcomShareRegion` (US default, D7), `setDexcomShareEnabled`, `retryUploads`; errors under the Save button; D29/D30 notes |
 | Alert delivery | `alertDelivery` | `requestNotificationAuthorization`, `requestUrgentLowAlarmAuthorization`, open iOS Settings; `refreshAlertDelivery` on appear |
@@ -196,9 +198,10 @@ launches the DEBUG app on every ReplayKit scenario (`-replayScenario <name> -rep
 
 ## Open questions
 
-- **Pipeline clock for accelerated replay.** At `-replaySpeed` > 1 replay readings are dated ahead of
-  the phone clock; the UI (which uses the phone clock) then shows "clock doesn't match". The facade
-  could expose the pipeline's `now` (the replay clock in a replay run) for `AppModel.clock`. Speed 1
-  (the UI tests, `-replayStartMinute`) is unaffected.
+- **Pipeline clock for accelerated replay.** At `-replaySpeed` > 1 (or the Developer page's faster
+  speeds) replay readings are dated ahead of the phone clock, so the UI shows "Phone clock doesn't
+  match" — correct for the phone clock, unhelpful for a demo. Exposing the pipeline's `now` (the
+  replay clock during a run) on the facade would let `AppModel.clock` follow it. The UI tests use
+  speed 1 with `-replayStartMinute`, so they are unaffected.
 - **Stop session.** The facade has `canStopSession` but no `stopSession()`; the row is hidden while
   no source can stop a session (G7).

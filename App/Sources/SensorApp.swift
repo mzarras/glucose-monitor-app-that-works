@@ -9,7 +9,7 @@ import SwiftUI
 struct SensorApp: App {
     @UIApplicationDelegateAdaptor(SensorAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
-    @State private var model = AppModel.launch()
+    @State private var model = AppModel.launch(services: AppEnvironment.shared.services)
 
     var body: some Scene {
         WindowGroup {

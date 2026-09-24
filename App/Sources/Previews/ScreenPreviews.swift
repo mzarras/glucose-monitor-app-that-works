@@ -149,9 +149,9 @@ private enum CalibrationPreviews {
 // MARK: - Banners and app shell
 
 #Preview("Build banner · light") { VStack(spacing: 0) { BuildBannerView(banner: BuildBanner.forThisBuild(replayScenario: nil)!); BuildBannerView(banner: BuildBanner.forThisBuild(replayScenario: "slow fall to urgent low")!); Spacer() }.editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) }
-#Preview("App · light") { RootView(model: AppModel.launch(arguments: [])).environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("App · light") { RootView(model: AppModel.fixtures()).environment(\.colorScheme, .light).preferredColorScheme(.light) }
 #Preview("Build banner · dark") { VStack(spacing: 0) { BuildBannerView(banner: BuildBanner.forThisBuild(replayScenario: nil)!); BuildBannerView(banner: BuildBanner.forThisBuild(replayScenario: "slow fall to urgent low")!); Spacer() }.editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
-#Preview("App · dark") { RootView(model: AppModel.launch(arguments: [])).environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+#Preview("App · dark") { RootView(model: AppModel.fixtures()).environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
 
 // MARK: - D26 alarms, D27 quiet hours, D23 scrubbing
 

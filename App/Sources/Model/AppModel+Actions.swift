@@ -50,8 +50,8 @@ extension AppModel {
     /// on it (`alertSettingsDraft`), so quick successive edits are never lost.
     func editAlert(_ edit: AlertEdit) {
         guard let services else {
-            legacyAlertSettings = AlertsMapping.apply(edit, to: legacyAlertSettings)
-            alerts = AlertsMapping.make(legacyAlertSettings)
+            fixtureAlertSettings = AlertsMapping.apply(edit, to: fixtureAlertSettings)
+            alerts = AlertsMapping.make(fixtureAlertSettings)
             return
         }
         let updated = AlertsMapping.apply(edit, to: alertSettingsDraft ?? services.alertSettings)
@@ -113,7 +113,7 @@ extension AppModel {
         track { [weak self] in
             do throws(PairingError) {
                 if again {
-                    try await services.pairAgainAdapter(code: code)
+                    try await services.pairAgain(code: code)
                 } else {
                     try await services.pair(code: code)
                 }

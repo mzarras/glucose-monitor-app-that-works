@@ -41,8 +41,7 @@ final class AppModel {
     /// A file to hand to the share sheet (CSV export, diagnostics).
     var sharedFile: SharedFile?
 
-    /// Nil only for the pre-integration fixture launch (`launch(arguments:)`), which previews and
-    /// the Phase 1 screenshot flags use.
+    /// Nil only for the DEBUG fixture model (`fixtures()`: previews and fixture-based tests).
     let services: (any AppServices)?
     /// The clock the UI classifies against (staleness, the latch, "today"). The phone clock; see
     /// OPEN QUESTIONS in docs/app-wiring.md for accelerated DEBUG replay.
@@ -74,8 +73,8 @@ final class AppModel {
     /// The last `updateAlertSettings` call in flight: each waits for the one before, so the engine
     /// ends up with the last edit whatever order the calls would otherwise finish in.
     @ObservationIgnored var alertUpdate: Task<Void, Never>?
-    /// Pre-integration fixture launch only: alert edits apply here.
-    @ObservationIgnored var legacyAlertSettings = AlertSettings.defaults
+    /// Fixture model only (`fixtures()`, no services): alert edits apply here.
+    @ObservationIgnored var fixtureAlertSettings = AlertSettings.defaults
 
     /// Onboarding's pairing context (review N1/N2): a new pairing, which counts as authenticated
     /// once a sensor is stored that wasn't when this pairing started.
@@ -133,7 +132,7 @@ final class AppModel {
         let model = AppModel(services: services, preferences: preferences, clock: clock)
         model.calendar = calendar
         model.rebuildAll()
-        if OnboardingMapping.showsAtLaunch(sensorState: services.sensorState, hasStoredSensor: services.hasStoredSensorAdapter,
+        if OnboardingMapping.showsAtLaunch(sensorState: services.sensorState, hasStoredSensor: services.hasStoredSensor,
                                            onboardingCompleted: preferences.onboardingCompleted,
                                            replayActive: services.replay.activeScenario != nil, arguments: arguments) {
             model.presentOnboarding(at: .welcome)
@@ -145,11 +144,11 @@ final class AppModel {
         return model
     }
 
-    /// Before the services are wired (Phase 1): DEBUG builds show fixtures (`-nowScenario`, `-tab`,
-    /// `-onboarding` for simctl screenshots), Release builds an empty state with onboarding.
-    /// PRE-INTEGRATION ONLY: the app itself launches with `launch(services:)`.
-    static func launch(arguments: [String] = ProcessInfo.processInfo.arguments) -> AppModel {
-        #if DEBUG
+    #if DEBUG
+    /// DEBUG: fixture view states and no services, for previews and the fixture-based unit tests
+    /// (`-nowScenario <name>`, `-tab <tab>`, `-onboarding`). The app launches with
+    /// `launch(services:)`.
+    static func fixtures(arguments: [String] = []) -> AppModel {
         var scenario = Fixtures.NowScenario.normal
         if let index = arguments.firstIndex(of: "-nowScenario"), index + 1 < arguments.count,
            let chosen = Fixtures.NowScenario(rawValue: arguments[index + 1]) {
@@ -169,11 +168,8 @@ final class AppModel {
             model.selectedTab = tab
         }
         return model
-        #else
-        return AppModel(now: .empty, trends: .empty(period: .default), alerts: AlertsMapping.make(.defaults),
-                        settings: emptySettings(appearance: .default), calibration: .unavailable, onboarding: .initial)
-        #endif
     }
+    #endif
 
     static func emptySettings(appearance: AppearancePreference) -> SettingsViewState {
         SettingsViewState(
@@ -330,7 +326,7 @@ final class AppModel {
     private func refreshSensor(_ time: Date) {
         guard let services else { return }
         let state = services.sensorState
-        hasStoredSensor = services.hasStoredSensorAdapter
+        hasStoredSensor = services.hasStoredSensor
         now.sensorState = state
         now.sensorSession = services.sensorSession
         calibration.sensorState = state
@@ -360,7 +356,8 @@ final class AppModel {
         let sensorIsSetUp = OnboardingMapping.sensorIsSetUp(sensorState: state, hasStoredSensor: hasStoredSensor)
         if sensorIsSetUp { preferences?.onboardingCompleted = true }
 
-        settings.sensor = SettingsMapping.sensor(state: state, session: services.sensorSession, canStopSession: services.canStopSession,
+        settings.sensor = SettingsMapping.sensor(state: state, session: services.sensorSession, storedSerial: services.storedSensorSerial,
+                                                 canStopSession: services.canStopSession,
                                                  bluetooth: services.bluetoothAuthorization, failureSince: failure?.since,
                                                  pairingInProgress: pairingInProgress)
         if var onboarding {

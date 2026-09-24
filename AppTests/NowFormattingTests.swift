@@ -189,7 +189,7 @@ final class NowFormattingTests: XCTestCase {
 
     @MainActor
     func test_S1_calibrationNotShownAsReading() {
-        let model = AppModel.launch(arguments: [])
+        let model = AppModel.fixtures()
         let before = model.now
         let sensorValue = before.latestLiveReading?.value
         XCTAssertNotNil(sensorValue)

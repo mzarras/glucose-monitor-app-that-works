@@ -115,9 +115,9 @@ enum CalibrationMapping {
 // MARK: - Settings
 
 enum SettingsMapping {
-    static func sensor(state: SensorState, session: SensorSession?, canStopSession: Bool, bluetooth: BluetoothAuthorization,
+    static func sensor(state: SensorState, session: SensorSession?, storedSerial: String?, canStopSession: Bool, bluetooth: BluetoothAuthorization,
                        failureSince: Date?, pairingInProgress: Bool) -> SensorSettings {
-        SensorSettings(state: state, serial: session?.serial, failureSince: failureSince, canStopSession: canStopSession,
+        SensorSettings(state: state, serial: session?.serial ?? storedSerial, failureSince: failureSince, canStopSession: canStopSession,
                        session: session, bluetooth: bluetooth, pairingInProgress: pairingInProgress)
     }
 
@@ -257,6 +257,9 @@ enum OnboardingMapping {
             return "The pairing couldn't be saved (\(message)). Unlock the phone and try again."
         case .replayActive:
             return "A replay run is active (DEBUG build). Stop it in Settings › Developer first."
+        case .noSensorToPairAgain:
+            // Surfaced, never retried as a new pairing behind the person's back (review N2).
+            return "No sensor is stored on this phone to pair again. Pair it as a new sensor with the code on its applicator."
         }
     }
 
