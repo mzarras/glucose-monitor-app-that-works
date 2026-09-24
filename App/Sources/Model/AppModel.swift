@@ -280,8 +280,8 @@ final class AppModel {
     private func refreshLatestReading(_ time: Date) {
         guard let services else { return }
         let latest = NowMapping.latestLiveReading(services.latestLiveReading, previous: services.previousLiveReading)
-        now.latestLiveReading = latest
-        calibration.latestLiveReading = latest
+        if now.latestLiveReading != latest { now.latestLiveReading = latest }
+        if calibration.latestLiveReading != latest { calibration.latestLiveReading = latest }
         refreshLatch(time)
     }
 
