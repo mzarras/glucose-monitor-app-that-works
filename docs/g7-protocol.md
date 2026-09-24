@@ -77,9 +77,32 @@ except the lengths inside the J-PAKE hash (big-endian, §3.3).
   same mechanism with 5 s (`BluetoothTransmitter.swift:212`, `:643-654`).
 - Connect/disconnect callbacks for any peripheral other than the paired sensor or the current
   candidate are ignored (a stray `didConnect` is disconnected immediately).
+- **Pairing a new sensor (`pair(code:)` = `start(pairingCode:)`):** a fresh pairing record; the first
+  advertising G7 (`DXCM…`) that connects and accepts the code is paired. Sensors that refused the
+  code or did not connect in time are not tried again during that pairing. The **previous sensor is
+  ignored only when its session has ended or it was unsupported** (safety review M1, D37); a
+  previous sensor that is still running may be the one being paired. If that previous sensor
+  answers first and refuses the new code, the refusal is expected: it is logged to `DiagnosticLog`,
+  the sensor is excluded for the rest of this pairing and scanning continues, **without**
+  `.failed(pairingCodeRejected)` (that kind raises the sensor alert; it would be a false alarm while
+  the user is deliberately pairing a new sensor). The previous sensor's own pairing is untouched and
+  nothing is published from it. A refusal from any other sensor is still shown as
+  `.failed(pairingCodeRejected)`. Test `test_S5_previousSensorRefusingANewCodeIsSilentlySkipped`.
+- **Pairing the same sensor again (`pairAgain(code:)`, D37):** for the sensor being worn after it
+  refused this phone (`.failed` kind `pairingRejected`, e.g. another device took the slot, or a wrong
+  code) or asked for the code (`pairingCodeNeeded`). It keeps the stored sensor's name, iOS identifier,
+  serial, session start, session end and newest-reading mark, replaces the code, deletes the saved key
+  and clears `requiresNewPairing`; the next connection to that sensor (pending connect by identifier,
+  or found again by name) runs the full J-PAKE (§3.2) and saves the new key once the sensor confirms
+  ownership. Readings keep their ids (same serial). It claims this phone's slot again, so another
+  collector paired in the same slot loses it — the user's explicit choice; automatic reconnection
+  never does this (§3.1, §9). A wrong code shows `.failed(pairingCodeRejected)` and waits for another
+  `pairAgain`. Throws `G7StartError.noSensorToPairAgain` when this phone never connected to a sensor
+  (use `pair(code:)`).
 - **Credentials:** a pairing record that cannot be read (e.g. Keychain before the first unlock after
   a restart) is reported as `.failed(credentialsUnavailable)`, never `.notPaired`; the app should call
-  `start(pairingCode: nil)` again once protected data is available. Saving the record (at least once
+  `start(pairingCode: nil)` again once protected data is available (the message tells the person to
+unlock the phone, and to pair again from Settings › Sensor only if it continues after unlocking). Saving the record (at least once
   per wake) keeps working in memory when it fails, but a relaunch would lose what was not saved; after
   3 consecutive failed saves (Sensor policy) every further failed save emits
   `.failed(credentialsUnavailable)` too, and a successful save clears the count.
@@ -542,8 +565,11 @@ the sensor is running (`.active`, `.gracePeriod`, `.calibrationNeeded`, `.calibr
 `.error` in the temporary-issue category); value in **40…400 mg/dL**
 (`CGMG7Transmitter.swift:1967-1974`); fingerstick time not in the future and at most 5 min old,
 else `.invalidTime` (D36; xDrip4iOS `calibrationIsValid`, `CGMG7Transmitter.swift:1970-1972`,
-`ConstantsDexcomG5.swift:23-24`); one calibration at a time (queued, sent or awaiting the record).
-Then:
+`ConstantsDexcomG5.swift:23-24`); also `.invalidTime` while the last failure the reading pipeline
+surfaced is a clock mismatch (D37, §5.1): the fingerstick time can only be placed in sensor time
+through the phone ↔ sensor clock relation, which is exactly what is in doubt; it clears when a later
+wake reports the sensor state with agreeing clocks. One calibration at a time (queued, sent or
+awaiting the record). Then:
 
 1. `.queued` until the next wake.
 2. After that wake's `0x4E`: re-check age (0 ≤ age ≤ 5 min, `ConstantsDexcomG5.swift:23-24` applied
@@ -601,7 +627,8 @@ authentication (`authenticated = 0`). It confirms a key only after ownership so 
 "can restore it instead of repeating ownership and replacing another app's authentication
 credential" (`DexcomG7AuthSession.swift:297-302`), and it stops instead of re-pairing when its own
 key is refused because "another app may now own this slot" (`:409-420`, `:460-462`). G7Kit does the
-same (`requiresNewPairing`, `.failed(savedKeyRejected)`), so it never fights another collector.
+same (`requiresNewPairing`, `.failed(savedKeyRejected)`), so it never fights another collector on its
+own; only the user's "Pair again" (`pairAgain(code:)`, §2.2) claims the slot back.
 Consequence (same caveat): pairing this app into slot 1 would evict a paired receiver (xDrip4iOS's G6
 warning says so for G6, `TextsBluetoothPeripheralView.swift:320-321`); a Dexcom app left installed
 would evict this app from slot 2 and vice versa.

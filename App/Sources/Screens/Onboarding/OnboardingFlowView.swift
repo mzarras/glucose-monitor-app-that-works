@@ -17,11 +17,14 @@ struct OnboardingActions {
     var requestAlarms: @MainActor () -> Void
     var setShareUpload: @MainActor (_ enabled: Bool, _ username: String, _ password: String, _ region: ShareRegion) -> Void
     var submitPairingCode: @MainActor (String) -> Void
+    /// Pair the worn sensor again (G7Kit `pairAgain(code:)`, review M1).
+    var pairAgain: @MainActor (String) -> Void
     var finish: @MainActor () -> Void
 
     static var noop: OnboardingActions {
         OnboardingActions(goTo: { _ in }, startNightscoutImport: { _, _, _ in }, startClarityImport: { _, _ in }, requestBluetooth: {},
-                          requestNotifications: {}, requestAlarms: {}, setShareUpload: { _, _, _, _ in }, submitPairingCode: { _ in }, finish: {})
+                          requestNotifications: {}, requestAlarms: {}, setShareUpload: { _, _, _, _ in }, submitPairingCode: { _ in },
+                          pairAgain: { _ in }, finish: {})
     }
 }
 
@@ -363,9 +366,9 @@ struct PairingStep: View {
                 FieldMessage(text: failure.message)
             }
             .accessibilityElement(children: .combine)
-            if !failure.requiresSensorReplacement {
-                PairingCodeEntry(pair: actions.submitPairingCode)
-            }
+            // Review M1 / minor 6: the recovery depends on the kind — pair the worn sensor again,
+            // accept the iOS prompt, or pair a new sensor. Never a dead end.
+            PairingOfferView(offer: PairingGuidance.recovery(for: failure), pairNew: actions.submitPairingCode, pairAgain: actions.pairAgain)
         case .paired:
             Text(verbatim: "Paired.").font(Typography.body(size: 15, weight: .semibold))
             Button("Continue") { actions.goTo(.warmUp) }.buttonStyle(PrimaryButtonStyle())

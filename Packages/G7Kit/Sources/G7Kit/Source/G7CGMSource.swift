@@ -10,7 +10,8 @@ import GlucoseCore
 /// central), then call `start(pairingCode: nil)`. Stream rules follow `CGMSource`: each stream is
 /// created once with unbounded buffering, never finished, one consumer each.
 ///
-/// Settings support: `pair(code:)`, `forgetSensor()`. There is no "stop session": xDrip4iOS
+/// Settings support: `pair(code:)` (a new sensor), `pairAgain(code:)` (the same sensor, after it
+/// refused this phone), `forgetSensor()`. There is no "stop session": xDrip4iOS
 /// 7.1.0 primary mode sends no session-stop command for the G7 (its `CGMG7Transmitter` has none;
 /// LoopKit G7SensorKit declares opcode 0x28 in G7Opcode.swift:13 but never sends it), so there is
 /// nothing verified to port. `supportsStopSession` is false.
@@ -116,6 +117,22 @@ public final class G7CGMSource: CalibratingCGMSource, @unchecked Sendable {
     /// Pairs a new sensor: `start(pairingCode:)` with the code from the applicator.
     public func pair(code: String) async throws {
         try await start(pairingCode: code)
+    }
+
+    /// Pairs the stored sensor again with a full J-PAKE (D37): use after `.failed` with kind
+    /// `.pairingRejected` or `.pairingCodeNeeded` for the sensor being worn. Keeps the sensor's identity
+    /// and session; replaces the code and, once the sensor confirms, the key. Throws `G7StartError`
+    /// (`.noSensorToPairAgain` when this phone never connected to a sensor: use `pair(code:)`).
+    public func pairAgain(code: String) async throws {
+        let result = await onQueue { () -> Result<Void, G7StartError> in
+            do throws(G7StartError) {
+                try self.controller.pairAgain(pairingCode: code)
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
+        try result.get()
     }
 
     /// Stops, deletes the pairing code and key, and reports `.notPaired`.

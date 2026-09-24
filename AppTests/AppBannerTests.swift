@@ -95,13 +95,14 @@ final class AppBannerTests: XCTestCase {
             let result = banners(.failed(failure), latestAge: 3)
             XCTAssertEqual(result.map(\.kind), [.sensorInterrupted], "\(kind)")
             XCTAssertEqual(result.first?.severity, .warning, "\(kind)")
-            XCTAssertEqual(result.first?.detail, failure.message, "\(kind): the source's words")
+            XCTAssertTrue(result.first?.detail.hasPrefix(failure.message) ?? false, "\(kind): the source's words first")
             XCTAssertTrue(banners(.failed(failure), latestAge: 16).contains { $0.kind == .missedReadings && $0.severity == .critical },
                           "\(kind): a lasting failure is covered by missed readings")
         }
+        // Review M1: nothing to type — accept the iOS request at the next connection.
         let incomplete = banners(.failed(SensorFailure(kind: .bluetoothPairingIncomplete, message: "m"))).first
-        XCTAssertEqual(incomplete?.action, .pairSensor)
-        XCTAssertEqual(incomplete?.actionTitle, "Pair again")
+        XCTAssertNil(incomplete?.action)
+        XCTAssertTrue(incomplete?.detail.contains(PairingGuidance.acceptPrompt) ?? false)
     }
 
     /// D36: an ended sensor or a lost pairing is critical, with the matching call to action.
@@ -112,17 +113,58 @@ final class AppBannerTests: XCTestCase {
             let result = banners(.failed(failure), latestAge: 16)
             guard let banner = result.first else { return XCTFail("\(kind): no banner") }
             XCTAssertEqual(banner.severity, .critical, "\(kind)")
-            XCTAssertEqual(banner.detail, failure.message)
-            XCTAssertEqual(banner.action, .pairSensor)
             if failure.requiresSensorReplacement {
                 XCTAssertEqual(banner.kind, .sensorNeedsReplacement, "\(kind)")
+                XCTAssertEqual(banner.detail, failure.message)
+                XCTAssertEqual(banner.action, .pairSensor, "new-sensor flow")
                 XCTAssertEqual(banner.actionTitle, "Replace sensor")
-            } else {
+            } else if failure.requiresPairing {
+                // Review M1: pair the worn sensor again (Settings › Sensor → pairAgain(code:)).
                 XCTAssertEqual(banner.kind, .sensorNeedsPairing, "\(kind)")
+                XCTAssertEqual(banner.action, .pairAgain)
                 XCTAssertEqual(banner.actionTitle, "Pair again")
+                XCTAssertEqual(banner.detail, PairingGuidance.pairAgainDetail(failure))
+            } else {
+                // D37: unclassified.
+                XCTAssertEqual(banner.kind, .sensorProblem, "\(kind)")
+                XCTAssertEqual(banner.title, "Sensor problem")
+                XCTAssertEqual(banner.detail, failure.message)
             }
             XCTAssertFalse(result.contains { $0.kind == .missedReadings }, "\(kind): its own banner, not missed readings")
         }
+    }
+
+    /// D37: a failure the source could not classify is critical, never a quiet warning.
+    func test_S5_unclassifiedFailureIsCritical() {
+        let unknown = SensorFailure(kind: .other, message: "Unrecognised sensor status.")
+        let result = banners(.failed(unknown), latestAge: 3)
+        XCTAssertEqual(result.map(\.kind), [.sensorProblem])
+        XCTAssertEqual(result.first?.severity, .critical)
+        XCTAssertEqual(result.first?.detail, unknown.message)
+    }
+
+    /// Review minor 4: after "calibration needed", a transient clock mismatch keeps the calibration
+    /// banner (the sensor still needs calibrating) next to the clock warning.
+    func test_S5_calibrationNeedSurvivesATransientFailure() {
+        var need = CalibrationNeed.update(previous: false, sensorState: .calibrationNeeded(code: 4))
+        XCTAssertTrue(need)
+        let clock = SensorState.failed(SensorFailure(kind: .clockMismatch, message: "Check the phone's clock."))
+        need = CalibrationNeed.update(previous: need, sensorState: clock)
+        XCTAssertTrue(need, "a transient failure keeps the need")
+        let result = AppBanners.make(sensorState: clock, latestLiveReadingDate: minutes(-3), health: healthy, now: t0,
+                                     sensorNeedsCalibration: need, context: testContext)
+        XCTAssertEqual(result.map(\.kind), [.calibrationNeeded, .sensorInterrupted])
+        XCTAssertEqual(result.first?.action, .openCalibration)
+        // Calibration itself is refused with the clock reason (G7Kit would answer invalidTime).
+        let calibration = CalibrationViewState(sensorState: clock, latestLiveReading: nil, acceptedRange: 40...400, lastSubmission: nil)
+        XCTAssertEqual(CalibrationRules.availability(calibration, now: t0), .unavailable(reason: CalibrationRules.clockMismatchReason))
+        XCTAssertEqual(CalibrationRules.clockMismatchReason, "Phone clock doesn't match — fix Date & Time first.")
+        // Readings resuming, or the sensor/pairing ending, clears it.
+        XCTAssertFalse(CalibrationNeed.update(previous: true, sensorState: activeSensor))
+        XCTAssertFalse(CalibrationNeed.update(previous: true, sensorState: .failed(SensorFailure(kind: .sensorFailed, message: "m"))))
+        XCTAssertTrue(CalibrationNeed.update(previous: true, sensorState: .searching))
+        XCTAssertTrue(CalibrationNeed.update(previous: true, sensorState: .error(code: 1, description: "temporary")))
+        XCTAssertFalse(CalibrationNeed.update(previous: false, sensorState: clock))
     }
 
     func test_calibrationBannerOpensCalibration() {

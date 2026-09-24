@@ -30,6 +30,10 @@ struct NowViewState: Equatable, Sendable {
     /// with `updatingClockMismatchLatch(now:)` on every clock tick and every new state; cleared
     /// when a newer live reading arrives. Phase 2 persists it with the rest of the Now state.
     var clockMismatchLatchedFor: Date? = nil
+    /// Review minor 4: the sensor asked for a calibration and has not been calibrated since, even
+    /// if its state has moved to a transient failure (e.g. the phone clock). Maintained with
+    /// `CalibrationNeed.update(previous:sensorState:)` on every sensor-state change.
+    var sensorNeedsCalibration: Bool = false
 
     /// The DEBUG/REPLAY banner. Computed, not stored, so no code path can clear it in a DEBUG
     /// build; nil in Release.
@@ -37,7 +41,7 @@ struct NowViewState: Equatable, Sendable {
 
     func banners(now: Date, context: DisplayContext = .current) -> [AppBanner] {
         AppBanners.make(sensorState: sensorState, latestLiveReadingDate: latestLiveReading?.date, health: health, now: now,
-                        clockMismatchLatched: isClockMismatchLatched, context: context)
+                        clockMismatchLatched: isClockMismatchLatched, sensorNeedsCalibration: sensorNeedsCalibration, context: context)
     }
 
     func display(now: Date) -> GlucoseDisplayState {

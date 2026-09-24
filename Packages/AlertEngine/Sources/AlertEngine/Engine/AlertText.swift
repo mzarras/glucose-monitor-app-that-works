@@ -47,6 +47,8 @@ enum AlertText {
         if kind == .sensorFailed, case .failed(let failure) = c.settledSensorState {
             if failure.requiresPairing { return "Pair the sensor again" }
             if failure.requiresSensorReplacement { return "Replace the sensor" }
+            // `.other` (D37): a failure the source could not classify; its message says what it is.
+            return "Sensor problem"
         }
         return title(kind)
     }

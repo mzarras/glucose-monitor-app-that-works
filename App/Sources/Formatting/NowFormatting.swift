@@ -15,7 +15,8 @@ enum NowHero: Equatable, Sendable {
 
     enum HeroAction: Equatable, Sendable {
         case pairSensor
-        /// The sensor no longer accepts this phone (D36): pair again.
+        /// The sensor being worn no longer accepts this phone (D36): pair it again with its code
+        /// (Settings › Sensor, G7Kit `pairAgain(code:)`), not the new-sensor flow.
         case pairAgain
         /// The sensor asks for a calibration (D36).
         case calibrate
@@ -60,9 +61,13 @@ enum NowHero: Equatable, Sendable {
         case .sensorFailed(let failure, _):
             // The source's own words (D36); the title and the action come from the kind.
             if failure.requiresPairing {
-                return .message(title: "Pair the sensor again", detail: failure.message, action: .pairAgain)
+                return .message(title: "Pair the sensor again", detail: PairingGuidance.pairAgainDetail(failure), action: .pairAgain)
             }
-            return .message(title: "Replace the sensor", detail: failure.message, action: .pairSensor)
+            if failure.requiresSensorReplacement {
+                return .message(title: "Replace the sensor", detail: failure.message, action: .pairSensor)
+            }
+            // D37: a failure the source could not classify fails loud.
+            return .message(title: "Sensor problem", detail: failure.message, action: nil)
         case .calibrationNeeded:
             return .message(
                 title: "Calibrate the sensor",
@@ -113,7 +118,8 @@ struct StateLine: Equatable, Sendable {
         case .sensorError:
             return StateLine(text: "SENSOR ERROR", dot: .alert)
         case .sensorFailed(let failure, _):
-            return StateLine(text: failure.requiresPairing ? "PAIR THE SENSOR AGAIN" : "REPLACE THE SENSOR", dot: .alert)
+            let text = failure.requiresPairing ? "PAIR THE SENSOR AGAIN" : failure.requiresSensorReplacement ? "REPLACE THE SENSOR" : "SENSOR PROBLEM"
+            return StateLine(text: text, dot: .alert)
         case .calibrationNeeded:
             return StateLine(text: "CALIBRATION NEEDED", dot: .alert)
         case .calibrationRejected:
@@ -163,6 +169,7 @@ enum SensorStatusText {
         case .failed(let failure):
             if failure.requiresSensorReplacement { return "replace sensor" }
             if failure.requiresPairing { return "pair again" }
+            if failure.raisesSensorAlert { return "sensor problem" }
             return "readings interrupted"
         case .error(let code, _): return "sensor error \(code)"
         case .calibrationNeeded: return "calibration needed"

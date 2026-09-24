@@ -7,7 +7,10 @@ import SwiftUI
 import WidgetCore
 
 struct SettingsActions {
+    /// Pair a new sensor (new-sensor flow).
     var pair: @MainActor (_ code: String) -> Void
+    /// Pair the worn sensor again (G7Kit `pairAgain(code:)`, review M1).
+    var pairAgain: @MainActor (_ code: String) -> Void
     var stopSession: @MainActor () -> Void
     var openCalibration: @MainActor () -> Void
     var setTrioEnabled: @MainActor (Bool) -> Void
@@ -27,7 +30,7 @@ struct SettingsActions {
     var setRetention: @MainActor (DataRetention) -> Void
 
     static var noop: SettingsActions {
-        SettingsActions(pair: { _ in }, stopSession: {}, openCalibration: {}, setTrioEnabled: { _ in }, saveNightscout: { _, _ in },
+        SettingsActions(pair: { _ in }, pairAgain: { _ in }, stopSession: {}, openCalibration: {}, setTrioEnabled: { _ in }, saveNightscout: { _, _ in },
                         setNightscoutUpload: { _ in }, setShareEnabled: { _ in }, saveShareCredentials: { _, _ in }, setShareRegion: { _ in },
                         openSystemSettings: {}, startImport: {}, exportCSV: {}, exportDiagnostics: {}, setAccent: { _ in }, setAppearance: { _ in },
                         setRetention: { _ in })

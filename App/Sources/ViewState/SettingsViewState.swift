@@ -30,6 +30,9 @@ struct SensorSettings: Equatable, Sendable {
     var state: SensorState
     /// Serial of the paired sensor, if known.
     var serial: String?
+    /// When the current `.failed` state began (Phase 2 fills it); used to offer "Pair again" for a
+    /// `credentialsUnavailable` that persists (`PairingGuidance.credentialsRetryWindow`).
+    var failureSince: Date? = nil
 }
 
 struct TrioSettings: Equatable, Sendable {

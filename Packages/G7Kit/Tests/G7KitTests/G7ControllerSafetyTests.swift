@@ -322,6 +322,167 @@ final class G7ControllerSafetyTests: XCTestCase {
         XCTAssertEqual(relaunched.record?.sessionEnd, .sensorFailed, "a real end latches at the next wake")
     }
 
+    // MARK: - D37 M1: pair again
+
+    /// The sensor refused this phone (another device took the slot); "Pair again" with the code runs
+    /// a full J-PAKE against the same sensor, keeps its serial and session, replaces the key, and
+    /// readings resume.
+    func test_S5_pairAgainReconnectsToTheSameSensor() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        let before = try XCTUnwrap(harness.record)
+        let session = try XCTUnwrap(harness.controller.currentSession)
+        harness.sensor.confirmedKeys[0x02] = G7Random.bytes(16)
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(121))
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.savedKeyRejected))
+        XCTAssertEqual(harness.record?.requiresNewPairing, true)
+
+        let connectsBefore = harness.central.connectRequests.count
+        try harness.controller.pairAgain(pairingCode: "1234")
+        XCTAssertEqual(harness.central.connectRequests.dropFirst(connectsBefore).last, harness.identifier, "a connect to the stored sensor")
+        XCTAssertEqual(harness.states.last, .searching, "progress is shown again")
+        XCTAssertNil(harness.record?.sharedKey, "the next connection runs the full J-PAKE")
+        harness.clock.advance(300)
+        let link = harness.connection(glucose: harness.currentGlucose(122))
+        XCTAssertTrue(link.allWrites.contains { $0.characteristic == .receiveAuthentication && $0.data.first == 0x0A }, "full J-PAKE")
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(122)])
+        if case .active = harness.states.last {} else { XCTFail("\(harness.states)") }
+        let after = try XCTUnwrap(harness.record)
+        XCTAssertEqual(after.serial, before.serial)
+        XCTAssertEqual(after.sessionStart, before.sessionStart)
+        XCTAssertFalse(after.requiresNewPairing)
+        XCTAssertNotNil(after.sharedKey)
+        XCTAssertNotEqual(after.sharedKey, before.sharedKey, "a new key")
+        XCTAssertEqual(harness.controller.currentSession, session)
+
+        // Found again by name (iOS could not reconnect by identifier): the same sensor is accepted.
+        harness.sensor.confirmedKeys[0x02] = G7Random.bytes(16)
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(123))
+        try harness.controller.pairAgain(pairingCode: "1234")
+        let connects = harness.central.connectRequests.count
+        harness.controller.didDiscover(name: harness.sensorName, identifier: harness.identifier)
+        XCTAssertEqual(harness.central.connectRequests.count, connects + 1, "rediscovering the same sensor connects")
+    }
+
+    /// Coordinator decision after D37: during a new-sensor pairing, the previous (still running)
+    /// sensor refusing the new code is expected — logged, excluded, scanning continues, and no
+    /// `.failed(pairingCodeRejected)` (it would raise a false sensor alert). The previous sensor keeps
+    /// its own pairing and nothing is published from it; another sensor refusing still surfaces, and
+    /// the new sensor then pairs.
+    func test_S5_previousSensorRefusingANewCodeIsSilentlySkipped() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        let previousKey = harness.sensor.confirmedKeys[0x02]
+        let statesBefore = harness.states.count
+
+        try harness.controller.start(pairingCode: "5678")
+        harness.controller.didDiscover(name: harness.sensorName, identifier: harness.identifier)
+        harness.clock.advance(60)
+        let refused = harness.connection(glucose: harness.currentGlucose(121))
+        XCTAssertEqual(refused.disconnectCount, 1)
+        XCTAssertFalse(harness.states[statesBefore...].contains(.failed(G7FailureReason.pairingCodeRejected)), "\(harness.states)")
+        XCTAssertFalse(harness.states[statesBefore...].contains { if case .failed = $0 { return true } else { return false } })
+        XCTAssertTrue(harness.log.messages.contains { $0.contains("previous sensor \(harness.sensorName) did not accept the new code") })
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120)], "nothing from the previous sensor")
+        XCTAssertEqual(harness.sensor.confirmedKeys[0x02], previousKey, "the previous sensor's own pairing is untouched")
+        XCTAssertNil(harness.record?.serial)
+        XCTAssertNil(harness.record?.sessionEnd)
+        let connects = harness.central.connectRequests.count
+        harness.controller.didDiscover(name: harness.sensorName, identifier: harness.identifier)
+        XCTAssertEqual(harness.central.connectRequests.count, connects, "excluded for the rest of this pairing")
+
+        // Any other sensor refusing the code still surfaces.
+        let stranger = G7SensorSimulator(pairingCode: "0000")
+        let strangerID = UUID()
+        harness.controller.didDiscover(name: "DXCM2Z", identifier: strangerID)
+        harness.connection(glucose: nil, peripheral: strangerID, sensor: stranger)
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.pairingCodeRejected))
+
+        // The new sensor pairs and publishes.
+        let newSensor = G7SensorSimulator(pairingCode: "5678")
+        let newID = UUID(uuidString: "7A7B7C7D-0000-4000-8000-000000000002")!
+        harness.controller.didDiscover(name: "DXCM7Q", identifier: newID)
+        harness.connection(glucose: Fixture.glucose(sensorClock: 3 * 86_400, age: 5, glucose: 131, state: 0x06), peripheral: newID, sensor: newSensor)
+        XCTAssertEqual(harness.record?.serial, "DXCM7Q-7A7B7C7D")
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(131)])
+        if case .active = harness.states.last {} else { XCTFail("\(harness.states)") }
+    }
+
+    /// Pair again: a wrong code is reported and the sensor stays refused until the right code; without
+    /// a sensor this phone ever connected to, or with an invalid code, nothing starts.
+    func test_S5_pairAgainWithAWrongCodeOrNoSensor() throws {
+        let fresh = ControllerHarness()
+        XCTAssertThrowsError(try fresh.controller.pairAgain(pairingCode: "1234")) { XCTAssertEqual($0 as? G7StartError, .noSensorToPairAgain) }
+
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        XCTAssertThrowsError(try harness.controller.pairAgain(pairingCode: "12a4")) { XCTAssertEqual($0 as? G7StartError, .invalidPairingCode) }
+        try harness.controller.pairAgain(pairingCode: "9999")
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(121))
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.pairingCodeRejected))
+        XCTAssertEqual(harness.record?.requiresNewPairing, true)
+        XCTAssertEqual(harness.readings.count, 1)
+        try harness.controller.pairAgain(pairingCode: "1234")
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(122))
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(122)])
+    }
+
+    /// M1: a new-sensor pairing may connect to the previous sensor while its session is running, but
+    /// ignores it once its session has ended or when it was unsupported.
+    func test_newSensorPairingIgnoresOnlyAnEndedOrUnsupportedPreviousSensor() throws {
+        func connectsToPrevious(_ harness: ControllerHarness) throws -> Bool {
+            try harness.controller.start(pairingCode: "5678")
+            let before = harness.central.connectRequests.count
+            harness.controller.didDiscover(name: harness.sensorName, identifier: harness.identifier)
+            return harness.central.connectRequests.count > before
+        }
+        let running = ControllerHarness()
+        try running.pair(glucose: running.currentGlucose(120))
+        XCTAssertTrue(try connectsToPrevious(running), "a running previous sensor may be the one being paired")
+
+        let ended = ControllerHarness()
+        try ended.pair(glucose: ended.currentGlucose(120))
+        for _ in 0..<2 {
+            ended.clock.advance(300)
+            ended.connection(glucose: ended.currentGlucose(nil, state: 0x19))
+        }
+        XCTAssertEqual(ended.record?.sessionEnd, .sensorFailed)
+        XCTAssertFalse(try connectsToPrevious(ended))
+
+        let unsupported = ControllerHarness()
+        unsupported.sensor.extendedVersionResponse = Fixture.fifteenDayExtendedVersion
+        try unsupported.pair(glucose: unsupported.currentGlucose(120))
+        XCTAssertEqual(unsupported.record?.isUnsupportedSensor, true)
+        XCTAssertFalse(try connectsToPrevious(unsupported))
+        let before = unsupported.central.connectRequests.count
+        unsupported.controller.didDiscover(name: "DXCM7Q", identifier: UUID())
+        XCTAssertEqual(unsupported.central.connectRequests.count, before + 1, "another sensor is still found")
+    }
+
+    // MARK: - D37 minor: calibration during a clock mismatch
+
+    /// While the last surfaced failure is a clock mismatch, the fingerstick → sensor-time conversion
+    /// is not trusted: calibration is refused with `invalidTime`; once the clocks agree it is accepted.
+    func test_S3_calibrationRefusedDuringClockMismatch() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        harness.clock.advance(300)
+        harness.connection(glucose: Fixture.glucose(sensorClock: harness.sensorClock + 3_600, age: 5, glucose: 121, state: 0x06))
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.sensorClockMismatch))
+        XCTAssertThrowsError(try harness.controller.submitCalibration(CalibrationRequest(mgdl: 120, takenAt: harness.clock.now))) {
+            XCTAssertEqual($0 as? CalibrationRefusal, .invalidTime)
+        }
+        XCTAssertTrue(harness.calibrations.isEmpty)
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(122))
+        if case .active = harness.states.last {} else { XCTFail("\(harness.states)") }
+        XCTAssertNoThrow(try harness.controller.submitCalibration(CalibrationRequest(mgdl: 120, takenAt: harness.clock.now)))
+    }
+
     // MARK: - Save failures
 
     /// Follow-up 2: repeated failures to save the pairing record are surfaced (S5), not only logged;

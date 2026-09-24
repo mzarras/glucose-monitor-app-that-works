@@ -49,7 +49,7 @@ public struct SensorFailure: Sendable, Equatable, Hashable, Codable {
         case noGlucoseValue
         case sessionLengthUnknown
         case credentialsUnavailable
-        /// Anything a source cannot classify; treated as transient.
+        /// Anything a source cannot classify. Fails loud (S5): it raises the sensor alert.
         case other
     }
 
@@ -77,9 +77,11 @@ public struct SensorFailure: Sendable, Equatable, Hashable, Codable {
         }
     }
 
-    /// Whether the alert engine raises the sensor alert (S5). Transient kinds surface as banners;
-    /// if they stop readings for long, the missed-readings alert covers them.
-    public var raisesSensorAlert: Bool { requiresSensorReplacement || requiresPairing }
+    /// Whether the alert engine raises the sensor alert (S5): an ended sensor, a lost pairing, or a
+    /// failure the source could not classify. Transient kinds surface as banners; if they stop
+    /// readings for long, the missed-readings alert covers them — including after warm-up has
+    /// ended without any reading (the alert engine must not stay in warm-up suppression).
+    public var raisesSensorAlert: Bool { requiresSensorReplacement || requiresPairing || kind == .other }
 }
 
 /// Why Bluetooth cannot be used (maps from `CBManagerState`).

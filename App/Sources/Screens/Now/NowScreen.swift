@@ -17,12 +17,15 @@ struct NowActions {
     var openSensorSettings: @MainActor () -> Void
     var openCalibration: @MainActor () -> Void
     var exportDiagnostics: @MainActor () -> Void
+    /// Pair a new sensor (new-sensor flow).
     var pairSensor: @MainActor () -> Void
+    /// Pair the worn sensor again (Settings › Sensor → `pairAgain(code:)`).
+    var pairAgain: @MainActor () -> Void
     var performBannerAction: @MainActor (AppBanner.Action) -> Void
 
     static var noop: NowActions {
         NowActions(selectChartWindow: { _ in }, openAlerts: {}, openSensorSettings: {}, openCalibration: {},
-                   exportDiagnostics: {}, pairSensor: {}, performBannerAction: { _ in })
+                   exportDiagnostics: {}, pairSensor: {}, pairAgain: {}, performBannerAction: { _ in })
     }
 }
 
@@ -62,7 +65,7 @@ struct NowContent: View {
                 }
             }
             NowHeroView(hero: NowHero.make(display, now: now, context: context), now: now,
-                        pairSensor: actions.pairSensor, calibrate: actions.openCalibration)
+                        pairSensor: actions.pairSensor, pairAgain: actions.pairAgain, calibrate: actions.openCalibration)
             stateLine(display)
             chartSection
             TodaySoFarView(today: state.today)
@@ -247,6 +250,7 @@ struct NowHeroView: View {
     let hero: NowHero
     let now: Date
     let pairSensor: @MainActor () -> Void
+    var pairAgain: @MainActor () -> Void = {}
     var calibrate: @MainActor () -> Void = {}
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -267,7 +271,8 @@ struct NowHeroView: View {
                 if let action {
                     Button(action.title) {
                         switch action {
-                        case .pairSensor, .pairAgain: pairSensor()
+                        case .pairSensor: pairSensor()
+                        case .pairAgain: pairAgain()
                         case .calibrate: calibrate()
                         }
                     }

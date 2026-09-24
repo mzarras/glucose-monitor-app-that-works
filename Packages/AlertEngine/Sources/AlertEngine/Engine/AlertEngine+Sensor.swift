@@ -11,7 +11,16 @@ import GlucoseCore
 extension AlertEngine {
     mutating func receive(_ state: SensorState, now: Date) -> [AlertAction] {
         snapshot.lastReportedSensorState = state
-        guard StatusConditions.isSettled(state) else { return [] }
+        guard StatusConditions.isSettled(state) else {
+            // A transient failure means a pairing exists, so "not paired" no longer holds: stop
+            // suppressing missed readings and start its window now (safety review D36 B1). With
+            // no settled state at all there is no suppression to end.
+            if case .failed = state, snapshot.settledSensorState == .notPaired {
+                snapshot.settledSensorState = nil
+                snapshot.missedReadingsReference = max(snapshot.missedReadingsReference, now)
+            }
+            return []
+        }
         let previous = snapshot.settledSensorState
         snapshot.settledSensorState = state
 
@@ -20,9 +29,17 @@ extension AlertEngine {
             actions += announce(.sensorWarmUpComplete, sessionDate: warmUpEnd, now: now)
         }
         // Leaving a state in which no readings were expected starts the missed-readings window
-        // afresh, so a new sensor does not inherit the previous sensor's last reading time.
-        if StatusConditions.suppressesMissedReadings(previous), !StatusConditions.suppressesMissedReadings(state) {
+        // afresh, so a new sensor does not inherit the previous sensor's last reading time: from
+        // now after "not paired"; from the end of warm-up (or now, if the sensor finished early).
+        switch (previous, state) {
+        case (.notPaired, .notPaired), (.warmingUp, .warmingUp), (.warmingUp, .notPaired):
+            break
+        case (.notPaired, _):
             snapshot.missedReadingsReference = max(snapshot.missedReadingsReference, now)
+        case (.warmingUp(let endsAt), _):
+            snapshot.missedReadingsReference = max(snapshot.missedReadingsReference, min(now, endsAt))
+        default:
+            break
         }
         return actions
     }

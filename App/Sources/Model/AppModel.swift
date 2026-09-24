@@ -101,6 +101,7 @@ final class AppModel {
         case .openAlertDeliverySettings: openSettings(.alertDelivery)
         case .dismissForceQuitNotice: now.health.forceQuitGap = nil
         case .pairSensor: onboarding = { var state = OnboardingState.initial; state.step = .pairing; return state }()
+        case .pairAgain: openSettings(.sensor)
         case .openCalibration: isCalibrationPresented = true
         }
     }
