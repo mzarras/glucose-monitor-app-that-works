@@ -43,12 +43,12 @@ tests build their own pipelines. `-replayScenario <name>` starts a DEBUG replay 
  (every ~5 min: live + backfill)  └─ state ─────┤  one ordered queue per source (ReadingPipeline)
                                                 │  held while inactive or while the store is closed
                                                 v
+                              LiveReadingGate.validate(reading, session: source.currentSession, now:)
+                                                │ passed                       └─ refused: diagnostic + counter,
+                                                v                                 never stored (D38)
                                    GlucoseStore.insert (dedupe by id, ±150 s import rule,
                                    refuses implausible / future / non-finite / wrong role)
                                                 │ newly stored readings only
-                                                v
-                              LiveReadingGate.validate(reading, session: source.currentSession, now:)
-                                                │ passed                       └─ refused: diagnostic + counter
                      ┌──────────────────────────┼───────────────────────────┬──────────────────┐
                      v                          v                           v                  v
            TrioBridge.publish         AlertService .reading       uploaders submit     widget snapshot,
@@ -142,7 +142,7 @@ exists in Release.
 | Rule | Where | Proven by |
 |---|---|---|
 | S1 never fabricate | The pipeline only moves readings the source delivered; the facade returns stored readings only; the clock-mismatch latch keeps a future-dated latest reading from looking current; missed readings counts from a clock rollback | `ReadingPipelineTests.test_S1_futureDatedNewestReadingIsNotCurrent`, `test_S1_clockChangeBetweenWakesLatchesTheLatestReading` |
-| S2 only valid readings | `ReadingPipeline` gates every newly stored reading with the source's current session before any consumer (the source gates first; each consumer gates again); a store refusal in a batch keeps the valid readings | `test_S2_pipelineGatesEveryNewReadingBeforeConsumers`, `test_S2_storeRefusalInABatchKeepsTheValidReadings` |
+| S2 only valid readings | `ReadingPipeline` gates every delivered reading with the source's current session **before it is stored** (D38) and so before any consumer (the source gates first; each consumer gates again); a refused reading is never stored; one refusal in a batch (gate or store) keeps the valid readings | `test_S2_pipelineGatesEveryNewReadingBeforeConsumers`, `test_S2_gateRefusedReadingIsNeverStored`, `test_S2_refusalInABatchKeepsTheValidReadings`, `test_S2_storeRefusalInABatchKeepsTheValidReadings` |
 | S3 dedupe / timestamps | Only readings `insert` returns go further, so a re-delivery or backfill copy is published once; backfill keeps its flag and date | `test_S3_redeliveredReadingIsPublishedOnce`, `ReplayScenarioTests.test_signalGapWithBackfill_…` |
 | S4 LOW/HIGH | Flags pass through untouched; Trio gets 39/401 only through the D21 policy line in `TrioCoordinator` | `ReplayScenarioTests` (LOW/HIGH scenarios), TrioBridge's own `test_S4_*` |
 | S5 fail loud | Held readings and store failures in `storage.availability`; Trio failures/starvation → Trio bridge alert; uploader `QueueFileInUse` → setup error; force-quit gap; missed readings in replay | `test_S5_storeClosedBeforeFirstUnlockSurfacesAndRecovers`, `test_S5_replacingAnUploaderReleasesTheQueueFileFirst`, `test_S5_forceQuitGapIsReportedOnlyForASilenceWithAnActiveSensor`, `ReplayScenarioTests` |
@@ -152,8 +152,8 @@ exists in Release.
 
 ## Known limits (for the on-device checks, HANDOFF §11)
 
-- The simulator Keychain needs a signed host; `KeychainCredentialStoreTests` skip (loudly) under an
-  unsigned build (`CODE_SIGNING_ALLOWED=NO`) and pass with simulator signing.
+- The simulator Keychain needs a signed host: `scripts/check.sh` signs simulator test runs ad hoc
+  (D40); `KeychainCredentialStoreTests` fail, not skip, on an unsigned host.
 - File protection, state restoration, background wakes, AlarmKit and real Trio consumption can only be
   verified on a device.
 - The force-quit heuristic can report a gap after an iOS memory termination if the user opens the app

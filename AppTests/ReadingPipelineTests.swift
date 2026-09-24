@@ -74,9 +74,10 @@ final class ReadingPipelineTests: XCTestCase {
 
     // MARK: - S2
 
-    /// Every newly stored reading passes LiveReadingGate in the pipeline, with the source's current
-    /// session and the pipeline clock, before Trio, alerts or uploads see it. Consumers gate again
-    /// themselves; their own refusal counters staying at zero proves the pipeline's gate ran first.
+    /// Every delivered reading passes LiveReadingGate in the pipeline, with the source's current
+    /// session and the pipeline clock, before it is stored (D38) and before Trio, alerts or uploads
+    /// see it. Consumers gate again themselves; their own refusal counters staying at zero proves
+    /// the pipeline's gate ran first.
     func test_S2_pipelineGatesEveryNewReadingBeforeConsumers() async throws {
         let harness = try await makeHarness()
         let now = PipelineFixtures.start
@@ -92,9 +93,9 @@ final class ReadingPipelineTests: XCTestCase {
         }
         await settle(harness, readings: 5)
 
-        // Stored as history (the source is the first gate), but refused for the consumers.
+        // Only the two that passed are stored (D38).
         let stored = try await harness.store.readings(from: .distantPast, to: .distantFuture)
-        XCTAssertEqual(Set(stored.map(\.id)), Set([otherSensor, beforeSession, duringWarmUp, valid, nearFuture].map(\.id)))
+        XCTAssertEqual(stored.map(\.id), [valid.id, nearFuture.id])
         XCTAssertEqual(harness.pipeline.gateRefusalCount, 3)
 
         // Trio has exactly the two that passed, and never saw the others.
@@ -113,18 +114,58 @@ final class ReadingPipelineTests: XCTestCase {
         XCTAssertEqual(harness.alerts.engine.currentReading(at: harness.clock.now)?.date, nearFuture.date)
 
         // Each refusal is a diagnostic, never silent.
-        let refusals = harness.diagnostics.messages.filter { $0.contains("gate refused stored reading") }
+        let refusals = harness.diagnostics.messages.filter { $0.contains("gate refused reading") }
         XCTAssertEqual(refusals.count, 3)
     }
 
-    /// A reading refused by the store (here: dated beyond the future tolerance) does not keep the
-    /// valid readings of the same delivery out, and never reaches a consumer.
-    func test_S2_storeRefusalInABatchKeepsTheValidReadings() async throws {
+    /// D38: a reading the gate refuses is never stored — not in history, charts or the current
+    /// value. Examples: the old sensor's late reading after a new sensor was paired (serial
+    /// mismatch), and a reading dated after the session's grace period ended.
+    func test_S2_gateRefusedReadingIsNeverStored() async throws {
+        let harness = try await makeHarness()
+        let now = PipelineFixtures.start
+        let current = PipelineFixtures.reading(.mgdl(118), at: now.addingTimeInterval(-300))
+        harness.source.deliver(current)
+        await settle(harness, readings: 1)
+
+        // A new sensor was paired; the old one's reading arrives late.
+        let oldSensorLate = PipelineFixtures.reading(.mgdl(54), at: now.addingTimeInterval(-60), serial: "OLDG7-0BADF00D")
+        harness.source.deliver(oldSensorLate)
+        await settle(harness, readings: 2)
+
+        // The session's grace period has ended; a reading dated after it arrives.
+        let graceEnd: Date = now.addingTimeInterval(-600)
+        let expiry: Date = graceEnd.addingTimeInterval(-12 * 3_600)
+        let sessionStart: Date = expiry.addingTimeInterval(-10 * 86_400)
+        let ended = SensorSession(
+            serial: PipelineFixtures.serial, start: sessionStart, warmUpEndsAt: sessionStart.addingTimeInterval(27 * 60),
+            expiresAt: expiry, gracePeriodEndsAt: graceEnd
+        )
+        harness.source.setSession(ended)
+        let afterGrace = PipelineFixtures.reading(.belowRange, at: now.addingTimeInterval(-120))
+        harness.source.deliver(afterGrace)
+        await settle(harness, readings: 3)
+
+        XCTAssertEqual(harness.pipeline.gateRefusalCount, 2)
+        let stored = try await harness.store.readings(from: .distantPast, to: .distantFuture)
+        XCTAssertEqual(stored.map(\.id), [current.id], "refused readings must not be stored")
+        let latest = try await harness.store.latestLiveReading()
+        XCTAssertEqual(latest?.id, current.id)
+        XCTAssertEqual(harness.pipeline.latestLiveReading?.id, current.id, "a refused reading must never be the current value")
+        XCTAssertEqual(harness.trioStore.payload.count, 1)
+        XCTAssertTrue(harness.center.posted("urgentLow").isEmpty, "a refused 54 or LOW must not alert")
+        let uploadStatus = await harness.uploader.status
+        XCTAssertEqual(uploadStatus.queueDepth, 1)
+    }
+
+    /// One refused reading in a delivery does not keep the valid readings of the same delivery out,
+    /// whether the gate refuses it (here: dated beyond the future tolerance) or the store does.
+    func test_S2_refusalInABatchKeepsTheValidReadings() async throws {
         let harness = try await makeHarness()
         let now = PipelineFixtures.start
         let valid = PipelineFixtures.reading(.mgdl(120), at: now.addingTimeInterval(-300))
         let farFuture = PipelineFixtures.reading(.mgdl(121), at: now.addingTimeInterval(600))
-        // Held until the store is attached so both arrive in one batch.
+        // Held until activation so both arrive in one batch.
         harness.pipeline.deactivate()
         harness.source.deliver(valid)
         harness.source.deliver(farFuture)
@@ -134,10 +175,42 @@ final class ReadingPipelineTests: XCTestCase {
 
         let stored = try await harness.store.readings(from: .distantPast, to: .distantFuture)
         XCTAssertEqual(stored.map(\.id), [valid.id])
-        XCTAssertEqual(harness.pipeline.storeRefusalCount, 1)
+        XCTAssertEqual(harness.pipeline.gateRefusalCount, 1)
         XCTAssertEqual(harness.trioStore.payload.count, 1)
         let uploadStatus = await harness.uploader.status
         XCTAssertEqual(uploadStatus.queueDepth, 1)
+    }
+
+    /// Defence in depth: if the store refuses a reading the gate passed (its clock is behind the
+    /// pipeline's here, so it sees a future date), the batch falls back to one reading at a time and
+    /// the valid readings are still stored and published.
+    func test_S2_storeRefusalInABatchKeepsTheValidReadings() async throws {
+        let clock = PipelineTestClock(PipelineFixtures.start)
+        let storeClock = PipelineTestClock(PipelineFixtures.start.addingTimeInterval(-300))
+        let diagnostics = CollectingDiagnosticLog()
+        let source = ScriptedCGMSource(session: PipelineFixtures.session)
+        let store = try GlucoseStore.productionInMemory(diagnostics: diagnostics, now: storeClock.closure)
+        let pipeline = ReadingPipeline(name: "skewed", source: source, diagnostics: diagnostics, now: clock.closure)
+        defer { pipeline.stopConsuming() }
+        let trioStore = RecordingTrioStore()
+        let trio = TrioCoordinator(appGroupID: "group.org.nightscout.ABCDE12345.trio.trio-app-group", store: trioStore, diagnostics: diagnostics, clock: clock.closure)
+        trio.configure(enabled: true, liveOutputsAllowed: true)
+        pipeline.outputs.trio = trio.activeBridge
+        pipeline.startConsuming()
+        pipeline.attach(store: store)
+
+        let valid = PipelineFixtures.reading(.mgdl(120), at: PipelineFixtures.start.addingTimeInterval(-600))
+        let aheadOfStore = PipelineFixtures.reading(.mgdl(121), at: PipelineFixtures.start.addingTimeInterval(-60))
+        source.deliver(valid)
+        source.deliver(aheadOfStore)
+        await waitUntil("both received") { pipeline.receivedReadingCount == 2 }
+        pipeline.activate()
+        await waitUntil("processed") { pipeline.isIdle && pipeline.storedReadingCount + pipeline.storeRefusalCount == 2 }
+
+        let stored = try await store.readings(from: .distantPast, to: .distantFuture)
+        XCTAssertEqual(stored.map(\.id), [valid.id])
+        XCTAssertEqual(pipeline.storeRefusalCount, 1)
+        XCTAssertEqual(trioStore.payload.count, 1)
     }
 
     // MARK: - S3
@@ -185,6 +258,8 @@ final class ReadingPipelineTests: XCTestCase {
         await settle(harness, readings: 1)
 
         XCTAssertEqual(harness.pipeline.gateRefusalCount, 1)
+        let allStored = try await harness.store.readings(from: .distantPast, to: .distantFuture)
+        XCTAssertEqual(allStored.count, 12, "the imported reading a source delivered is refused before the store (D38)")
         XCTAssertEqual(harness.trioStore.writesOfReadings, 0)
         XCTAssertTrue(harness.trioStore.payload.isEmpty)
         let uploadStatus = await harness.uploader.status
@@ -276,7 +351,9 @@ final class ReadingPipelineTests: XCTestCase {
         let ahead = PipelineFixtures.reading(.mgdl(52), at: t.addingTimeInterval(300))
         harness.source.deliver(ahead)
         await settle(harness, readings: 2)
-        XCTAssertEqual(harness.pipeline.storeRefusalCount, 1)
+        XCTAssertEqual(harness.pipeline.gateRefusalCount, 1)
+        let stored = try await harness.store.readings(from: .distantPast, to: .distantFuture)
+        XCTAssertEqual(stored.map(\.id), [latest.id], "a reading dated ahead of the clock is never stored (D38)")
         XCTAssertEqual(harness.trioStore.payload.count, 1)
         XCTAssertTrue(harness.center.posted("urgentLow").isEmpty)
     }

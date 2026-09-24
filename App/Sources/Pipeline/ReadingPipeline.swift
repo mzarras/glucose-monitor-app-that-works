@@ -1,16 +1,18 @@
 // The reading pipeline: one CGM source → the store → the live consumers (HANDOFF §9.3 Phase 2).
 //
 //   source.readings ─┐                                          ┌─ TrioBridge.publish
-//                    ├─ one ordered queue ─ store.insert ─ gate ─┼─ AlertService .reading
+//                    ├─ one ordered queue ─ gate ─ store.insert ─┼─ AlertService .reading
 //   source.state  ───┘       (held while inactive               ├─ uploaders submit + flushIfDue
 //                             or the store is closed)            └─ widget snapshot, UI
 //
 // What this file guarantees (docs/architecture.md "Where each safety rule is enforced"):
+// - Every delivered reading passes `LiveReadingGate` here, against the source's current session
+//   and the pipeline clock, before it is stored (PROGRESS D38; S2 names storage) and so before any
+//   consumer sees it (S2, S6). A refused reading is never stored — not in history, charts or
+//   `latestLiveReading` — and is logged as a diagnostic and counted; nothing valid is dropped
+//   silently. The consumers gate again.
 // - Only readings `insert` returns — newly stored — go further, so a re-delivered reading is
 //   published once (S3). Imported history never enters: importers write to the store directly (S6).
-// - Every newly stored reading passes `LiveReadingGate` here, against the source's current session
-//   and the pipeline clock, before any consumer sees it (S2, S6). A refusal is logged as a
-//   diagnostic and counted; nothing valid is dropped silently. The consumers gate again.
 //   In a DEBUG replay run the gate is `validateAllowingReplay` (D11); the Trio bridge and the
 //   uploaders keep their own sensor-only gate, so replay can never reach them (S6).
 // - Events are processed strictly in arrival order, one batch at a time: consecutive readings are
@@ -240,9 +242,10 @@ final class ReadingPipeline {
                 switch await process(readings: readings) {
                 case .stored(let any):
                     readingsChanged = readingsChanged || any
-                case .storeFailed:
+                case .storeFailed(let held):
                     // Put them back at the head, in order, and stop until the next attempt (S5).
-                    pending.insert(contentsOf: batch, at: 0)
+                    // They are gated again then, against the session and clock of that moment.
+                    pending.insert(contentsOf: held.map(Event.reading), at: 0)
                     onChange?(.storage)
                     return
                 }
@@ -265,42 +268,49 @@ final class ReadingPipeline {
 
     private enum StoreOutcome {
         case stored(anyNew: Bool)
-        case storeFailed
+        /// The store is closed or failed: these readings (already gated) wait, in order.
+        case storeFailed(held: [GlucoseReading])
     }
 
     private func process(readings: [GlucoseReading]) async -> StoreOutcome {
-        guard let store else { return .storeFailed }
+        guard let store else { return .storeFailed(held: readings) }
+
+        // The gate comes before the store (D38, S2 "storage"): a refused reading is never stored,
+        // so it cannot appear in history, charts or `latestLiveReading`. Checked one by one, so one
+        // refused reading never keeps the valid ones of the same delivery out.
+        let session = await source.currentSession
+        sensorSession = session
+        let gateNow = now()
+        var passed: [GlucoseReading] = []
+        for reading in readings {
+            if let rejection = gateRejection(reading, session: session, now: gateNow) {
+                gateRefusalCount += 1
+                log(.sensor, "gate refused reading \(reading.id) at \(reading.date.ISO8601Format()); not stored, not published: \(rejection)")
+            } else {
+                passed.append(reading)
+            }
+        }
+        guard !passed.isEmpty else { return .stored(anyNew: false) }
+
         let stored: [GlucoseReading]
         do {
-            stored = try await insertKeepingValid(readings, into: store)
+            stored = try await insertKeepingValid(passed, into: store)
             if storeProblem != nil {
                 storeProblem = nil
                 onChange?(.storage)
             }
         } catch {
             storeProblem = String(describing: error)
-            log(.store, "insert of \(readings.count) reading(s) failed, holding them: \(error)")
-            return .storeFailed
+            log(.store, "insert of \(passed.count) reading(s) failed, holding them: \(error)")
+            return .storeFailed(held: passed)
         }
         storedReadingCount += stored.count
-        if stored.count < readings.count {
-            log(.store, "\(readings.count - stored.count) of \(readings.count) delivered reading(s) were already stored (re-delivery, S3) or refused")
+        if stored.count < passed.count {
+            log(.store, "\(passed.count - stored.count) of \(passed.count) reading(s) were already stored (re-delivery, S3) or refused by the store")
         }
+        // Consumers act on what `insert` returned: newly stored, already gated (S2, S3).
         guard !stored.isEmpty else { return .stored(anyNew: false) }
-
-        let session = await source.currentSession
-        sensorSession = session
-        let gateNow = now()
-        var accepted: [GlucoseReading] = []
-        for reading in stored {
-            if let rejection = gateRejection(reading, session: session, now: gateNow) {
-                gateRefusalCount += 1
-                log(.sensor, "gate refused stored reading \(reading.id) at \(reading.date.ISO8601Format()) for Trio, alerts and uploads: \(rejection)")
-            } else {
-                accepted.append(reading)
-            }
-        }
-        guard !accepted.isEmpty else { return .stored(anyNew: true) }
+        let accepted = stored
 
         // 1. Trio first: its heartbeat reads at the sensor's disconnect (docs/trio-bridge.md).
         if let trio = outputs.trio {
@@ -309,7 +319,7 @@ final class ReadingPipeline {
                 log(.bridge, "Trio publish failed: \(error)")
             }
         }
-        // 2. Alerts: only readings the store newly accepted and the gate passed (docs/alerts.md §9).
+        // 2. Alerts: only readings the gate passed and the store newly accepted (docs/alerts.md §9).
         if let alerts = outputs.alerts {
             for reading in accepted {
                 await alerts.send(.reading(reading, session: session))
