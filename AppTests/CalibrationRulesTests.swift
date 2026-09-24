@@ -171,6 +171,26 @@ final class CalibrationRulesTests: XCTestCase {
         }
     }
 
+    /// Review minor 2: an `invalidTime` refusal during a clock mismatch is explained as the clock
+    /// problem (G7Kit refuses with `invalidTime` then), not as an old fingerstick.
+    func test_invalidTimeDuringClockMismatchShowsTheClockReason() {
+        let refused = CalibrationSubmission.Outcome.refused(.invalidTime)
+        let clockFailure = CalibrationViewState(sensorState: .failed(SensorFailure(kind: .clockMismatch, message: "m")),
+                                                latestLiveReading: nil, acceptedRange: 40...400, lastSubmission: nil)
+        XCTAssertEqual(CalibrationRules.outcomeText(refused, state: clockFailure, now: t0).detail, CalibrationRules.clockMismatchReason)
+        // Latched mismatch, or a reading dated ahead of the phone's clock.
+        let ahead = latest(.mgdl(105), ageMinutes: -30)
+        let latched = CalibrationViewState(sensorState: activeSensor, latestLiveReading: ahead, acceptedRange: 40...400, lastSubmission: nil, clockMismatchLatchedFor: ahead.date)
+        XCTAssertEqual(CalibrationRules.outcomeText(refused, state: latched, now: t0).detail, CalibrationRules.clockMismatchReason)
+        let unlatched = CalibrationViewState(sensorState: activeSensor, latestLiveReading: ahead, acceptedRange: 40...400, lastSubmission: nil)
+        XCTAssertEqual(CalibrationRules.outcomeText(refused, state: unlatched, now: t0).detail, CalibrationRules.clockMismatchReason)
+        // Otherwise it is about the fingerstick's age.
+        let normal = CalibrationViewState(sensorState: activeSensor, latestLiveReading: latest(.mgdl(105), ageMinutes: 3), acceptedRange: 40...400, lastSubmission: nil)
+        XCTAssertEqual(CalibrationRules.outcomeText(refused, state: normal, now: t0).detail, "Use a fingerstick taken in the last 5 minutes.")
+        // Other outcomes are unchanged by the context.
+        XCTAssertEqual(CalibrationRules.outcomeText(.status(.accepted), state: clockFailure, now: t0).title, "Accepted")
+    }
+
     func test_outcomeText() {
         XCTAssertEqual(CalibrationRules.outcomeText(.status(.queued)).title, "Waiting for sensor")
         XCTAssertTrue(CalibrationRules.outcomeText(.status(.queued)).detail.contains("5 minutes"))

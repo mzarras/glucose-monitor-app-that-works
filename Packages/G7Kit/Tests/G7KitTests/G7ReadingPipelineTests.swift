@@ -717,6 +717,7 @@ final class G7SensorStatusTests: XCTestCase {
             (G7FailureReason.credentialsUnavailable, .credentialsUnavailable),
         ]
         for (failure, kind) in expected { XCTAssertEqual(failure.kind, kind, failure.message) }
+        XCTAssertEqual(G7FailureReason.previousSensorRejectedCode(sensorName: "DXCM4F").kind, .pairingRejected)
         XCTAssertEqual(Set(expected.map(\.0.message)).count, expected.count)
         XCTAssertTrue(expected.allSatisfy { !$0.0.message.isEmpty })
         let alerting = Set(expected.filter { $0.0.raisesSensorAlert }.map(\.1))

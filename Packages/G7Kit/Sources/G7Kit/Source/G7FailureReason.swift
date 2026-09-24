@@ -11,6 +11,15 @@ public enum G7FailureReason {
         kind: .pairingRejected,
         message: "The sensor did not accept the pairing code. Check the 4-digit code on the applicator and pair again."
     )
+    /// During a new pairing, the previous (stored) sensor refused the new code and no sensor
+    /// accepted it within `G7Controller.previousSensorSkipLimit` (re-review N1): either the person is
+    /// re-pairing the sensor they wear with a mistyped code, or the new sensor's code is wrong.
+    public static func previousSensorRejectedCode(sensorName: String) -> SensorFailure {
+        SensorFailure(
+            kind: .pairingRejected,
+            message: "The sensor \(sensorName) did not accept this code, and no other sensor did either. If you are still wearing \(sensorName), use Pair again and enter its 4-digit code. If you are pairing a new sensor, check the code on its applicator and try again."
+        )
+    }
     /// The confirmed key was refused on a later connection: another device probably paired into the
     /// same slot. Automatic reconnection stops, as in xDrip4iOS (CGMG7Transmitter.swift:969-979).
     public static let savedKeyRejected = SensorFailure(

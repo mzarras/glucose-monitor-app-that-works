@@ -186,7 +186,8 @@ struct CalibrationContent: View {
 
     private func submitted(_ request: CalibrationRequest) -> some View {
         let outcome = state.lastSubmission.flatMap { $0.request.id == request.id ? $0.outcome : nil }
-        let text: (title: String, detail: String) = outcome.map(CalibrationRules.outcomeText) ?? (title: "Sending", detail: "Handing the calibration to the sensor connection.")
+        let text: (title: String, detail: String) = outcome.map { CalibrationRules.outcomeText($0, state: state, now: now) }
+            ?? (title: "Sending", detail: "Handing the calibration to the sensor connection.")
         return VStack(alignment: .leading, spacing: 14) {
             FingerstickFigure(value: request.mgdl, takenAt: request.takenAt)
             HStack(alignment: .top, spacing: 10) {

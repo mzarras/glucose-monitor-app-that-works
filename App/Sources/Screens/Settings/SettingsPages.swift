@@ -11,6 +11,9 @@ struct SensorSettingsView: View {
     let sensor: SensorSettings
     let calibration: CalibrationViewState
     let actions: SettingsActions
+    /// G7Kit `hasStoredSensor` (review N2). Chooses `pairAgain(code:)` vs `pair(code:)`; false
+    /// (the safe fallback: `pair(code:)` always works) until Phase 2 passes the real value.
+    var hasStoredSensor = false
     @State private var confirmingStop = false
 
     var body: some View {
@@ -22,11 +25,12 @@ struct SensorSettingsView: View {
                     SettingsValueRow(title: "Serial", value: serial)
                 }
                 calibrateRow
-                if let offer = PairingGuidance.settingsOffer(for: sensor.state, failureSince: sensor.failureSince, now: Date()) {
+                if let offer = PairingGuidance.settingsOffer(for: sensor.state, failureSince: sensor.failureSince,
+                                                             hasStoredSensor: hasStoredSensor, now: Date()) {
                     if case .failed(let failure) = sensor.state {
                         FieldMessage(text: failure.message)
                     }
-                    PairingOfferView(offer: offer, pairNew: actions.pair, pairAgain: actions.pairAgain)
+                    PairingOfferView(offer: offer, pair: actions.pair, pairAgain: actions.pairAgain)
                 } else {
                     Button("Stop sensor session") { confirmingStop = true }
                         .buttonStyle(SecondaryButtonStyle())
@@ -52,7 +56,7 @@ struct SensorSettingsView: View {
                 Text(verbatim: reason).font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
             }
             if let submission = calibration.lastSubmission {
-                let text = CalibrationRules.outcomeText(submission.outcome)
+                let text = CalibrationRules.outcomeText(submission.outcome, state: calibration, now: Date())
                 Text(verbatim: "Last calibration \(submission.request.mgdl) mg/dL at \(TimeText.time(submission.request.takenAt)): \(text.title.lowercased()).")
                     .font(Typography.body(size: 12))
                     .foregroundStyle(Theme.muted)
@@ -61,38 +65,31 @@ struct SensorSettingsView: View {
     }
 }
 
-/// The pairing recovery for a failure (PairingGuidance): numbered steps and the right code entry.
+/// The pairing recovery for a failure (PairingGuidance): numbered steps and a code entry wired
+/// to the call the recovery names — `pair(code:)` or `pairAgain(code:)` (review N2).
 struct PairingOfferView: View {
     let offer: PairingRecovery
-    let pairNew: @MainActor (String) -> Void
+    let pair: @MainActor (String) -> Void
     let pairAgain: @MainActor (String) -> Void
 
     var body: some View {
         switch offer {
-        case .pairAgain(let steps):
+        case .enterCode(let steps, let buttonTitle, let action):
             VStack(alignment: .leading, spacing: 10) {
-                SectionLabel("PAIR AGAIN")
                 ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(verbatim: "\(index + 1).").font(Typography.label(size: 12, medium: true))
+                        if steps.count > 1 {
+                            Text(verbatim: "\(index + 1).").font(Typography.label(size: 12, medium: true))
+                        }
                         Text(verbatim: step).font(Typography.body(size: 13)).fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                PairingCodeEntry(buttonTitle: "Pair again", showsIntro: false, pair: pairAgain)
+                PairingCodeEntry(buttonTitle: buttonTitle, showsIntro: steps.isEmpty, pair: action == .pairAgain ? pairAgain : pair)
             }
         case .acceptBluetoothPrompt(let instruction):
             Text(verbatim: instruction)
                 .font(Typography.body(size: 14))
                 .fixedSize(horizontal: false, vertical: true)
-        case .pairNewSensor(let instruction):
-            VStack(alignment: .leading, spacing: 10) {
-                Text(verbatim: instruction)
-                    .font(Typography.body(size: 13))
-                    .fixedSize(horizontal: false, vertical: true)
-                PairingCodeEntry(buttonTitle: "Pair a new sensor", pair: pairNew)
-            }
-        case .retryCode:
-            PairingCodeEntry(pair: pairNew)
         }
     }
 }

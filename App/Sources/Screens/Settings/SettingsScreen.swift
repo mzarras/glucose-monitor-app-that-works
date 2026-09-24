@@ -42,6 +42,8 @@ struct SettingsScreen: View {
     let calibration: CalibrationViewState
     @Binding var route: SettingsRoute?
     let actions: SettingsActions
+    /// G7Kit `hasStoredSensor` (review N2), passed to Settings › Sensor.
+    var hasStoredSensor = false
     @State private var path: [SettingsRoute] = []
 
     var body: some View {
@@ -54,7 +56,7 @@ struct SettingsScreen: View {
             .navigationDestination(for: SettingsRoute.self) { route in
                 Group {
                     switch route {
-                    case .sensor: SensorSettingsView(sensor: state.sensor, calibration: calibration, actions: actions)
+                    case .sensor: SensorSettingsView(sensor: state.sensor, calibration: calibration, actions: actions, hasStoredSensor: hasStoredSensor)
                     case .trio: TrioSettingsView(trio: state.trio, setEnabled: actions.setTrioEnabled)
                     case .sharing: SharingSettingsView(nightscout: state.nightscout, share: state.dexcomShare, actions: actions)
                     case .alertDelivery: AlertDeliveryView(delivery: state.delivery, openSystemSettings: actions.openSystemSettings)

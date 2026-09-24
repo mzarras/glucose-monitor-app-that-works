@@ -33,6 +33,9 @@ struct OnboardingFlowView: View {
     let actions: OnboardingActions
     /// DEBUG only: the active replay scenario, named in the build banner.
     var replayScenario: String? = nil
+    /// Review N2 / N1 item 3: a new pairing; Phase 2 sets `authenticatedInThisPairing` once the
+    /// sensor has authenticated in this flow.
+    var pairingContext: PairingContext = .newPairing
 
     /// Drawn on top in every DEBUG build (D19): pairing a real sensor from a DEBUG build must be
     /// unmistakable (review M3). Computed here, not passed in, so no caller can hide it (n3).
@@ -44,7 +47,7 @@ struct OnboardingFlowView: View {
                 BuildBannerView(banner: buildBanner)
             }
             TimelineView(.periodic(from: .now, by: 30)) { timeline in
-                OnboardingContent(state: state, actions: actions, now: timeline.date)
+                OnboardingContent(state: state, actions: actions, now: timeline.date, pairingContext: pairingContext)
             }
         }
         .editorialScreen()
@@ -55,6 +58,7 @@ struct OnboardingContent: View {
     let state: OnboardingState
     let actions: OnboardingActions
     let now: Date
+    var pairingContext: PairingContext = .newPairing
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -77,7 +81,7 @@ struct OnboardingContent: View {
                     case .removeDexcomApp: RemoveDexcomAppStep(state: state, actions: actions)
                     case .permissions: PermissionsStep(state: state, actions: actions)
                     case .alarms: AlarmsStep(state: state, actions: actions)
-                    case .pairing: PairingStep(state: state, actions: actions)
+                    case .pairing: PairingStep(state: state, actions: actions, context: pairingContext)
                     case .warmUp: WarmUpStep(state: state, now: now, finish: actions.finish)
                     }
                 }
@@ -345,6 +349,7 @@ struct AlarmsStep: View {
 struct PairingStep: View {
     let state: OnboardingState
     let actions: OnboardingActions
+    var context: PairingContext = .newPairing
 
     var body: some View {
         StepTitle(title: "Pair your sensor", lead: "Apply the sensor first. iOS will ask to pair with it; tap Pair.")
@@ -368,7 +373,8 @@ struct PairingStep: View {
             .accessibilityElement(children: .combine)
             // Review M1 / minor 6: the recovery depends on the kind — pair the worn sensor again,
             // accept the iOS prompt, or pair a new sensor. Never a dead end.
-            PairingOfferView(offer: PairingGuidance.recovery(for: failure), pairNew: actions.submitPairingCode, pairAgain: actions.pairAgain)
+            PairingOfferView(offer: PairingGuidance.recovery(for: failure, context: context),
+                             pair: actions.submitPairingCode, pairAgain: actions.pairAgain)
         case .paired:
             Text(verbatim: "Paired.").font(Typography.body(size: 15, weight: .semibold))
             Button("Continue") { actions.goTo(.warmUp) }.buttonStyle(PrimaryButtonStyle())
