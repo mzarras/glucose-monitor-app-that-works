@@ -42,6 +42,12 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// per sensor wake, so three means the problem has lasted about one to three wakes.
     static let saveFailuresBeforeSurfacing = 3
 
+    /// Sensor policy (re-review N1): during a new pairing, the previous sensor's refusal of the new
+    /// code is skipped silently only this long after the pairing started. The G7 wakes about every
+    /// 5 minutes, so 10 minutes gives the new sensor two chances to advertise. If by then no sensor
+    /// has authenticated, the skipped refusal is reported (`previousSensorRejectedCode`).
+    static let previousSensorSkipLimit: TimeInterval = 10 * 60
+
     private let store: G7CredentialStore
     private let diagnostics: DiagnosticLog
     private let now: () -> Date
@@ -59,11 +65,18 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// Latest state the sensor itself reported (warm-up/active/…); Bluetooth and failure states excluded.
     private(set) var lastSensorState: SensorState?
     private var lastEmittedState: SensorState?
-    /// During a new pairing: the previous sensor and any sensor that rejected the code or timed out.
-    private var excludedSensorNames: Set<String> = []
-    /// During a new pairing: the stored sensor it replaces. Its refusal of the new code is expected
-    /// and is skipped silently (coordinator decision after D37).
-    private var previousSensorName: String?
+    /// During a new pairing: the CoreBluetooth identifiers of the previous sensor (when finished) and
+    /// of every sensor that rejected the code or did not connect. Identifiers, not names: G7 names are
+    /// "DXCM" + 2 characters and repeat across sensors (re-review N1).
+    private var excludedIdentifiers: Set<UUID> = []
+    /// During a new pairing: the stored sensor it replaces, by its CoreBluetooth identifier. Its
+    /// refusal of the new code is expected and is skipped silently within `previousSensorSkipLimit`
+    /// (coordinator decision after D37; re-review N1).
+    private var previousSensor: (name: String, identifier: UUID)?
+    private var pairingStartedAt: Date?
+    private var skippedPreviousSensorRefusal = false
+    /// Bumped by every new pairing, pair-again and forget, so a timer from an earlier one does nothing.
+    private var pairingGeneration = 0
     /// The advertised sensor being connected to: a new-pairing candidate, or the paired sensor found
     /// again under a new iOS identifier.
     private var candidate: (name: String, identifier: UUID)?
@@ -136,6 +149,12 @@ final class G7Controller: G7ConnectionCycleDelegate {
         return now() <= session.gracePeriodEndsAt ? session : nil
     }
 
+    /// A sensor this phone has authenticated to is stored, so `pairAgain(pairingCode:)` can target it.
+    var hasStoredSensor: Bool { record?.serial != nil && record?.peripheralIdentifier != nil }
+
+    /// The stored sensor's serial (`G7SensorSerial`), once this phone has authenticated to it.
+    var storedSensorSerial: String? { hasStoredSensor ? record?.serial : nil }
+
     /// Only for a sensor this app has authenticated to (serial fixed) and still may use.
     var heartbeatTarget: G7HeartbeatTarget? {
         guard let record, record.serial != nil, !record.requiresNewPairing,
@@ -168,8 +187,15 @@ final class G7Controller: G7ConnectionCycleDelegate {
             pipeline = nil
             lastSensorState = nil
             resetConnectionHistory()
-            excludedSensorNames = previousIsFinished ? Set([previous?.sensorName].compactMap { $0 }) : []
-            previousSensorName = previous?.sensorName
+            excludedIdentifiers = previousIsFinished ? Set([previous?.peripheralIdentifier].compactMap { $0 }) : []
+            if !previousIsFinished, let previous, let identifier = previous.peripheralIdentifier {
+                previousSensor = (previous.sensorName ?? "G7", identifier)
+            }
+            pairingStartedAt = now()
+            let generation = pairingGeneration
+            central?.schedule(after: Self.previousSensorSkipLimit) { [weak self] in
+                self?.previousSensorSkipLimitReached(generation: generation)
+            }
             log(.sensor, "pairing a new sensor in slot \(slot.rawValue)")
         } else {
             switch loadRecord() {
@@ -214,7 +240,6 @@ final class G7Controller: G7ConnectionCycleDelegate {
         record = updated
         lastSensorState = updated.sessionEnd?.state // show progress (searching, authenticating) again
         resetConnectionHistory()
-        excludedSensorNames = []
         log(.sensor, "pairing \(updated.sensorName ?? "the sensor") again in slot \(updated.slot.rawValue)")
         resume()
     }
@@ -224,7 +249,11 @@ final class G7Controller: G7ConnectionCycleDelegate {
         rejectionAfterAuthenticationStreak = 0
         lastPipelineFailure = nil
         candidate = nil
-        previousSensorName = nil
+        excludedIdentifiers = []
+        previousSensor = nil
+        pairingStartedAt = nil
+        skippedPreviousSensorRefusal = false
+        pairingGeneration += 1
     }
 
     /// The common tail of `start` and `pairAgain`: run with the current record.
@@ -266,7 +295,6 @@ final class G7Controller: G7ConnectionCycleDelegate {
         pipeline = nil
         lastSensorState = nil
         resetConnectionHistory()
-        excludedSensorNames = []
         log(.sensor, "sensor forgotten")
         emit(.notPaired)
     }
@@ -311,7 +339,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
             guard name == knownName else { return }
         } else {
             // New pairing: any G7 10-day sensor except the old one and ones that refused the code.
-            guard name.hasPrefix(G7GATT.sensorNamePrefix), !excludedSensorNames.contains(name) else { return }
+            guard name.hasPrefix(G7GATT.sensorNamePrefix), !excludedIdentifiers.contains(identifier) else { return }
         }
         candidate = (name, identifier)
         candidateAttempt += 1
@@ -403,8 +431,9 @@ final class G7Controller: G7ConnectionCycleDelegate {
             let name = candidate?.name ?? current.sensorName ?? link.peripheralName ?? "G7"
             current.sensorName = name
             current.serial = G7SensorSerial.make(sensorName: name, peripheralIdentifier: link.peripheralIdentifier)
-            excludedSensorNames = []
-            previousSensorName = nil
+            excludedIdentifiers = []
+            previousSensor = nil
+            skippedPreviousSensorRefusal = false
             log(.sensor, "paired with \(name), serial \(current.serial ?? "?")")
         }
         candidate = nil
@@ -476,12 +505,19 @@ final class G7Controller: G7ConnectionCycleDelegate {
         switch failure {
         case .pairingCodeRejected:
             if let candidate, record?.peripheralIdentifier == nil {
-                excludedSensorNames.insert(candidate.name)
-                if candidate.name == previousSensorName {
-                    // The user is pairing a new sensor and the previous, still running one answered
-                    // first: its refusal of the new code is expected. `.failed(pairingCodeRejected)`
-                    // would raise the sensor alert (kind pairingRejected), a false alarm here.
-                    log(.sensor, "the previous sensor \(candidate.name) did not accept the new code; skipped, still looking for the new sensor")
+                excludedIdentifiers.insert(candidate.identifier)
+                if let previousSensor, candidate.identifier == previousSensor.identifier {
+                    // The user is pairing a new sensor and the previous, still running one (same
+                    // CoreBluetooth identifier, never just the same name) answered first: its refusal
+                    // of the new code is expected. `.failed(pairingCodeRejected)` would raise the
+                    // sensor alert, a false alarm here, so it is skipped within the time limit.
+                    if let started = pairingStartedAt, now().timeIntervalSince(started) < Self.previousSensorSkipLimit {
+                        skippedPreviousSensorRefusal = true
+                        log(.sensor, "the previous sensor \(previousSensor.name) did not accept the new code; skipped, still looking for the new sensor")
+                    } else {
+                        log(.sensor, "the previous sensor \(previousSensor.name) did not accept the new code after the skip limit")
+                        emit(.failed(G7FailureReason.previousSensorRejectedCode(sensorName: previousSensor.name)))
+                    }
                     cycle?.link.disconnect()
                     return
                 }
@@ -601,11 +637,20 @@ final class G7Controller: G7ConnectionCycleDelegate {
     private func candidateTimedOut(attempt: Int) {
         guard attempt == candidateAttempt, cycle == nil, let timedOut = candidate else { return }
         candidate = nil
-        if record?.sensorName == nil { excludedSensorNames.insert(timedOut.name) }
+        if record?.sensorName == nil { excludedIdentifiers.insert(timedOut.identifier) }
         central?.cancelConnection(peripheralIdentifier: timedOut.identifier)
         log(.ble, "\(timedOut.name) did not connect within \(Int(Self.candidateConnectTimeout)) s; scanning again")
         guard isRunning else { return }
         connectIfPossible()
+    }
+
+    /// Re-review N1: a skipped refusal by the previous sensor must not stay hidden. If no sensor has
+    /// authenticated in this pairing by the limit, it is reported, naming the previous sensor.
+    private func previousSensorSkipLimitReached(generation: Int) {
+        guard generation == pairingGeneration, isRunning, record?.serial == nil,
+              skippedPreviousSensorRefusal, let previousSensor else { return }
+        log(.sensor, "no sensor accepted the code within \(Int(Self.previousSensorSkipLimit)) s; \(previousSensor.name) refused it")
+        emit(.failed(G7FailureReason.previousSensorRejectedCode(sensorName: previousSensor.name)))
     }
 
     /// Events about peripherals other than the paired sensor or the current candidate are ignored.

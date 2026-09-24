@@ -119,6 +119,8 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Clock-mismatch latch in the app (WS5 final check): update it on every reading/store change incl. background BLE wakes and at launch/foreground, persist it, and add a memoryless check (store wall clock + uptime at each ingest; wall-clock delta ≠ uptime delta by > 60 s → latch). A future-dated newest stored reading must count as stale for missed-readings logic in both app and AlertEngine (WS1 final check).
 - Onboarding/diagnostics: flag other G7 apps (D35).
 
+- Tooling note: `actool` (asset catalog) failed once with no message during a Release build while three other builds ran in parallel; an immediate re-run passed. Treat as a known flake under load; if it recurs, add a single retry of the build step in `check.sh` for `CompileAssetCatalog` failures only.
+
 ## §11 on-device checklist additions (collected from reviews; goes into docs/setup.md in Phase 3)
 
 - Capture raw G7 packets for a real LOW and HIGH (D31) before relying on HIGH→401 in closed loop.
