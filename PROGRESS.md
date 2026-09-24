@@ -8,7 +8,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 |---|---|
 | 0 — Bootstrap | done (2026-09-23) |
 | 1 — Parallel build | done (2026-09-23): all 7 workstreams merged into `integration`; gates 1–3 PASS |
-| 2 — Integration | in progress (step 1: contract adoption on `p2-contract`) |
+| 2 — Integration | in progress: contract D36/D37 adopted on `p2-adopt` (review fixes merged, re-review running); Integrator A (`p2-services`, services + pipeline) and B (`p2-app`, app model + flows, from A's facade 484196c) running |
 | 3 — Hardening | not started |
 | 4 — Device build | not started |
 
