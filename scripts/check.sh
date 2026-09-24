@@ -37,6 +37,9 @@ LOGS="$ROOT/.build-logs/$STAMP"
 BUILD_DD="$LOGS/dd"
 SIM_DD="$ROOT/.derived/sim"
 SPM_CHECKOUTS="$ROOT/.derived/SourcePackages"
+# Simulator test runs are signed ad hoc ("Sign to Run Locally") so entitlements such as Keychain
+# access apply to the hosted tests; no team or provisioning profile is needed for the simulator.
+SIM_SIGNING="CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= CODE_SIGNING_REQUIRED=YES CODE_SIGNING_ALLOWED=YES"
 mkdir -p "$LOGS"
 
 # Fresh build trees are ~0.5–1 GB per run; keep only the logs unless asked (KEEP_BUILD_DIRS=1).
@@ -195,7 +198,7 @@ app_tests() {
     xcodebuild test -project Sensor.xcodeproj -scheme Sensor -destination "$SIM_DEST" \
         -derivedDataPath "$SIM_DD" -clonedSourcePackagesDirPath "$SPM_CHECKOUTS" \
         -only-testing:SensorTests -skip-testing:SensorTests/ReplayScenarioTests \
-        CODE_SIGNING_ALLOWED=NO > "$log" 2>&1
+        $SIM_SIGNING > "$log" 2>&1
     status=$?
     count="$(executed_count "$log")"
     if [ $status -ne 0 ]; then
@@ -203,8 +206,10 @@ app_tests() {
         grep -E "error:|failed" "$log" | head -20
     elif [ -z "$count" ] || [ "$count" = "0" ]; then
         fail "app unit tests executed no tests"
+    elif grep -qE "Test Case .*' skipped" "$log"; then
+        fail "app unit tests: skipped tests (hosted tests must run): $(grep -E "Test Case .*' skipped" "$log" | sed -E "s/.*\\[(.*)\\]' skipped.*/\\1/" | tr '\\n' ' ')"
     else
-        pass "app unit tests — $count executed, 0 failures"
+        pass "app unit tests — $count executed, 0 failures, 0 skipped"
     fi
 }
 
@@ -327,7 +332,7 @@ gate_replay() {
     xcodebuild test -project Sensor.xcodeproj -scheme Sensor -destination "$SIM_DEST" \
         -derivedDataPath "$SIM_DD" -clonedSourcePackagesDirPath "$SPM_CHECKOUTS" \
         -only-testing:SensorUITests -only-testing:SensorTests/ReplayScenarioTests \
-        CODE_SIGNING_ALLOWED=NO > "$log" 2>&1
+        $SIM_SIGNING > "$log" 2>&1
     status=$?
     if [ $status -ne 0 ]; then
         fail "replay run (exit $status, see $log)"
