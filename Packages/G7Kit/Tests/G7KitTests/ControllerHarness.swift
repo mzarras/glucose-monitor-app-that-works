@@ -66,9 +66,10 @@ final class ControllerHarness {
     /// One sensor wake: connect, exchange everything, disconnect. Returns the link for inspection.
     @discardableResult
     func connection(glucose: Data?, backfill: [Data] = [], failingNotify: [G7Characteristic: G7LinkError] = [:],
-                    peripheral: UUID? = nil, disconnect: Bool = true,
+                    peripheral: UUID? = nil, disconnect: Bool = true, sensor other: G7SensorSimulator? = nil,
                     afterWrite: ((Data, G7Characteristic) -> Void)? = nil) -> FakeLink {
         let peripheral = peripheral ?? identifier
+        let sensor = other ?? self.sensor
         sensor.beginConnection()
         sensor.glucoseResponse = glucose
         sensor.backfillFrames = backfill
