@@ -57,6 +57,9 @@ final class AppModel {
     @ObservationIgnored private var recentGeneration = 0
     @ObservationIgnored private var trendsGeneration = 0
     @ObservationIgnored private var trendsStale = true
+    /// Statistics have been shown for the selected period (a recompute keeps them until the new ones
+    /// are ready; the first computation shows progress instead of "no readings").
+    @ObservationIgnored private var trendsComputed = false
     /// The model's own memoryless clock-mismatch check (defence in depth next to the facade's).
     @ObservationIgnored private var localClockLatch: Date?
     /// Local midnight of the day "Today so far" was last computed for.
@@ -68,6 +71,9 @@ final class AppModel {
     /// Alert settings sent to the facade and not yet confirmed by a `.alertSettings` change; the next
     /// edit builds on them (AppModel+Actions `editAlert`).
     @ObservationIgnored var alertSettingsDraft: AlertSettings?
+    /// The last `updateAlertSettings` call in flight: each waits for the one before, so the engine
+    /// ends up with the last edit whatever order the calls would otherwise finish in.
+    @ObservationIgnored var alertUpdate: Task<Void, Never>?
     /// Pre-integration fixture launch only: alert edits apply here.
     @ObservationIgnored var legacyAlertSettings = AlertSettings.defaults
 
@@ -390,6 +396,7 @@ final class AppModel {
 
     func presentOnboarding(at step: OnboardingStep) {
         onboarding = freshOnboardingState(at: step)
+        hadStoredSensorAtPairingStart = nil
         refreshOnboardingPermissions()
     }
 
@@ -450,16 +457,14 @@ final class AppModel {
             return
         }
         guard period != trends.period || trends.loadError != nil else { return }
-        var computing = TrendsViewState.empty(period: period)
-        computing.isComputing = true
-        trends = computing
+        trends = .empty(period: period)
+        trendsComputed = false
         refreshTrends()
     }
 
     func selectTab(_ tab: AppTab) {
         selectedTab = tab
         if tab == .trends, trendsStale { refreshTrends() }
-        if tab == .settings { refreshSettingsSummaries() }
     }
 
     /// Statistics for the selected period, from the store, computed off the main actor. The
@@ -474,6 +479,7 @@ final class AppModel {
         let time = clock()
         let calendar = self.calendar
         let interval = TrendsMapping.fetchInterval(period: period, now: time, calendar: calendar)
+        if !trendsComputed { trends.isComputing = true }
         track { [weak self] in
             let result: TrendsViewState
             do {
@@ -488,6 +494,7 @@ final class AppModel {
             }
             guard let self, generation == self.trendsGeneration else { return }
             self.trends = result
+            self.trendsComputed = result.loadError == nil
         }
     }
 
@@ -495,13 +502,16 @@ final class AppModel {
 
     /// Runs `work` on the main actor and remembers it until it finishes, so tests can wait for it
     /// (`settle()`).
-    func track(_ work: @escaping @MainActor () async -> Void) {
+    @discardableResult
+    func track(_ work: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
         let id = UUID()
         // Registered before the task can run: it runs on the main actor after this returns.
-        pendingWork[id] = Task { @MainActor [weak self] in
+        let task = Task { @MainActor [weak self] in
             await work()
             self?.pendingWork[id] = nil
         }
+        pendingWork[id] = task
+        return task
     }
 
     /// Waits for every piece of async work the model started, including work started meanwhile.

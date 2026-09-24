@@ -57,7 +57,9 @@ extension AppModel {
         let updated = AlertsMapping.apply(edit, to: alertSettingsDraft ?? services.alertSettings)
         alertSettingsDraft = updated
         alerts = AlertsMapping.make(updated)
-        track { [weak self] in
+        let previous = alertUpdate
+        alertUpdate = track { [weak self] in
+            await previous?.value
             await services.updateAlertSettings(updated)
             guard let self, self.alertSettingsDraft == updated else { return }
             self.alertSettingsDraft = nil

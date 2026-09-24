@@ -110,7 +110,7 @@ struct SettingsContent: View {
                 Hairline().padding(.top, 6)
             }
             SettingsGroup("SENSOR") {
-                SettingsLinkRow(title: "G7 sensor", value: SensorStatusText.row(state.sensor.state, now: now, context: context), route: .sensor)
+                SettingsLinkRow(title: "G7 sensor", value: SensorStatusText.row(state.sensor.state, session: state.sensor.session, now: now, context: context), route: .sensor)
                     .accessibilityIdentifier("settings.sensor")
             }
             SettingsGroup("TRIO") {
