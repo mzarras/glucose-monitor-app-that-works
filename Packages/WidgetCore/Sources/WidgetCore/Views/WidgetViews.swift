@@ -129,6 +129,8 @@ public enum InlineAccessoryText {
             return Text("Sensor expired")
         case .sensorError:
             return Text("Sensor error")
+        case .sensorFailed, .calibrationNeeded, .calibrationRejected:
+            return Text(verbatim: WidgetStyle.title(content.display))
         case .notPaired:
             return Text("No sensor paired")
         case .clockMismatch:
@@ -219,6 +221,12 @@ struct WidgetDetailText: View {
                 Text(verbatim: "Start a new sensor")
             case .sensorError(let message, _):
                 Text(verbatim: message)
+            case .sensorFailed(let failure, _):
+                Text(verbatim: failure.message)
+            case .calibrationNeeded:
+                Text(verbatim: "Enter a fingerstick in the app")
+            case .calibrationRejected:
+                Text(verbatim: "Enter a new fingerstick in the app")
             case .notPaired:
                 Text(verbatim: "Pair a sensor in the app")
             case .clockMismatch:
@@ -260,6 +268,9 @@ public enum WidgetStyle {
         case .warmingUp: return "Warming up"
         case .sensorExpired: return "Sensor expired"
         case .sensorError: return "Sensor error"
+        case .sensorFailed(let failure, _): return failure.requiresPairing ? "Pair again" : "Replace sensor"
+        case .calibrationNeeded: return "Calibrate sensor"
+        case .calibrationRejected: return "Calibration not accepted"
         case .notPaired: return "No sensor"
         case .clockMismatch: return "Check phone clock"
         }

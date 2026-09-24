@@ -15,6 +15,18 @@ enum NowHero: Equatable, Sendable {
 
     enum HeroAction: Equatable, Sendable {
         case pairSensor
+        /// The sensor no longer accepts this phone (D36): pair again.
+        case pairAgain
+        /// The sensor asks for a calibration (D36).
+        case calibrate
+
+        var title: String {
+            switch self {
+            case .pairSensor: return "Pair a sensor"
+            case .pairAgain: return "Pair again"
+            case .calibrate: return "Calibrate"
+            }
+        }
     }
 
     static func make(_ display: GlucoseDisplayState, now: Date, context: DisplayContext = .current) -> NowHero {
@@ -45,6 +57,22 @@ enum NowHero: Equatable, Sendable {
             return .message(title: "Sensor expired", detail: "This sensor has stopped sending readings. Start a new sensor.", action: .pairSensor)
         case .sensorError(let message, _):
             return .message(title: "Sensor error", detail: "\(message). Readings are paused.", action: nil)
+        case .sensorFailed(let failure, _):
+            // The source's own words (D36); the title and the action come from the kind.
+            if failure.requiresPairing {
+                return .message(title: "Pair the sensor again", detail: failure.message, action: .pairAgain)
+            }
+            return .message(title: "Replace the sensor", detail: failure.message, action: .pairSensor)
+        case .calibrationNeeded:
+            return .message(
+                title: "Calibrate the sensor",
+                detail: "The sensor needs a fingerstick calibration before it sends readings again. Use a fresh fingerstick from washed, dry hands.",
+                action: .calibrate)
+        case .calibrationRejected:
+            return .message(
+                title: "Calibration not accepted",
+                detail: "The sensor couldn't use the last calibration and is withholding readings. Enter a new fingerstick.",
+                action: .calibrate)
         case .notPaired:
             return .message(title: "No sensor paired", detail: "Pair a G7 sensor to start receiving readings.", action: .pairSensor)
         case .clockMismatch(let latest):
@@ -84,6 +112,12 @@ struct StateLine: Equatable, Sendable {
             return StateLine(text: "SENSOR EXPIRED", dot: .alert)
         case .sensorError:
             return StateLine(text: "SENSOR ERROR", dot: .alert)
+        case .sensorFailed(let failure, _):
+            return StateLine(text: failure.requiresPairing ? "PAIR THE SENSOR AGAIN" : "REPLACE THE SENSOR", dot: .alert)
+        case .calibrationNeeded:
+            return StateLine(text: "CALIBRATION NEEDED", dot: .alert)
+        case .calibrationRejected:
+            return StateLine(text: "CALIBRATION NOT ACCEPTED", dot: .alert)
         case .notPaired:
             return StateLine(text: "NO SENSOR PAIRED", dot: .muted)
         case .clockMismatch:
@@ -110,7 +144,7 @@ enum SensorStatusText {
             return now < endsAt ? "grace period · \(TimeText.duration(endsAt.timeIntervalSince(now))) left" : "expired"
         case .expired:
             return "expired"
-        case .notPaired, .searching, .connecting, .authenticating, .failed, .error, .bluetoothUnavailable:
+        case .notPaired, .searching, .connecting, .authenticating, .failed, .error, .calibrationNeeded, .calibrationError, .bluetoothUnavailable:
             return connection(state)
         }
     }
@@ -126,8 +160,13 @@ enum SensorStatusText {
         case .active: return "waiting for sensor"
         case .gracePeriod: return "grace period"
         case .expired: return "sensor expired"
-        case .failed: return "sensor failed"
+        case .failed(let failure):
+            if failure.requiresSensorReplacement { return "replace sensor" }
+            if failure.requiresPairing { return "pair again" }
+            return "readings interrupted"
         case .error(let code, _): return "sensor error \(code)"
+        case .calibrationNeeded: return "calibration needed"
+        case .calibrationError: return "calibration not accepted"
         case .bluetoothUnavailable(.poweredOff): return "Bluetooth off"
         case .bluetoothUnavailable(.unauthorized): return "Bluetooth not allowed"
         case .bluetoothUnavailable(.unsupported): return "Bluetooth unsupported"

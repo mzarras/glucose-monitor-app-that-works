@@ -7,7 +7,7 @@ import GlucoseCore
 
 public enum WidgetSamples {
     public enum State: String, CaseIterable, Identifiable, Sendable {
-        case normal, low, high, lowFlag, highFlag, stale, noData, warmingUp, expired, sensorError, notPaired, clockMismatch
+        case normal, low, high, lowFlag, highFlag, stale, noData, warmingUp, expired, sensorError, pairingRejected, calibrationNeeded, notPaired, clockMismatch
         public var id: String { rawValue }
     }
 
@@ -55,6 +55,10 @@ public enum WidgetSamples {
             sensor = .expired; age = 25
         case .sensorError:
             sensor = .error(code: 7, description: "Sensor signal error")
+        case .pairingRejected:
+            sensor = .failed(SensorFailure(kind: .pairingRejected, message: "The sensor didn't accept this phone. Pair it again with the code on the applicator."))
+        case .calibrationNeeded:
+            sensor = .calibrationNeeded(code: 4); age = 7
         case .notPaired:
             sensor = .notPaired; hasReading = false
         case .clockMismatch:

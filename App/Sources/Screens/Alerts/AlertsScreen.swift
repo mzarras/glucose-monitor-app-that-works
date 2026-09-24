@@ -224,7 +224,9 @@ struct AlertDetailView: View {
                     Hairline()
                 }
                 if let repeatMinutes = row.repeatMinutes {
-                    Text(verbatim: "Repeats every \(repeatMinutes) min until acknowledged.")
+                    Text(verbatim: row.kind == .urgentLow
+                         ? "Repeats every \(repeatMinutes) min until acknowledged."
+                         : "Repeats every \(repeatMinutes) min while it lasts.")
                         .font(Typography.body(size: 13))
                         .foregroundStyle(Theme.muted)
                 }

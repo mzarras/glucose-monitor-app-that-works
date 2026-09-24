@@ -13,6 +13,14 @@ struct AppBanner: Equatable, Identifiable, Sendable {
         case bluetoothUnauthorized
         case bluetoothUnavailable
         case sensorError
+        /// D36: the sensor has ended — replace it.
+        case sensorNeedsReplacement
+        /// D36: the sensor no longer accepts this phone — pair again.
+        case sensorNeedsPairing
+        /// D36: transient; readings may be withheld for a while.
+        case sensorInterrupted
+        /// D36: the sensor withholds readings until calibrated (or rejected a calibration).
+        case calibrationNeeded
         case sensorExpired
         case sensorExpiring
         case trioBridgeFailing
@@ -37,6 +45,9 @@ struct AppBanner: Equatable, Identifiable, Sendable {
         case openSharingSettings
         case openAlertDeliverySettings
         case dismissForceQuitNotice
+        /// Start pairing (a new sensor, or the same one again).
+        case pairSensor
+        case openCalibration
     }
 
     let kind: Kind
@@ -147,8 +158,12 @@ enum AppBanners {
     /// sensor is paired, during warm-up, or when the sensor has ended (those have their own banner).
     static func missedReadings(sensorState: SensorState, latest: Date?, now: Date, clockMismatchLatched: Bool = false, context: DisplayContext = .current) -> AppBanner? {
         switch sensorState {
-        case .notPaired, .expired, .failed, .error:
+        case .notPaired, .expired, .error, .calibrationNeeded, .calibrationError:
             return nil
+        case .failed(let failure) where failure.raisesSensorAlert:
+            return nil // its own critical banner
+        case .failed:
+            break // transient (D36): if readings stop for long, this banner covers it
         case .warmingUp(let endsAt) where now < endsAt:
             return nil
         case .warmingUp, .searching, .connecting, .authenticating, .active, .gracePeriod, .bluetoothUnavailable:
@@ -212,12 +227,41 @@ enum AppBanners {
                 title: "Sensor error",
                 detail: "\(description) (code \(code)). Readings are paused.",
                 action: .openSensorSettings, actionTitle: "Sensor")]
-        case .failed(let reason):
+        case .failed(let failure):
+            // Decisions from the kind, words from the source (D36).
+            if failure.requiresSensorReplacement {
+                return [AppBanner(
+                    kind: .sensorNeedsReplacement, severity: .critical,
+                    title: "Replace the sensor",
+                    detail: failure.message,
+                    action: .pairSensor, actionTitle: "Replace sensor")]
+            }
+            if failure.requiresPairing {
+                return [AppBanner(
+                    kind: .sensorNeedsPairing, severity: .critical,
+                    title: "Pair the sensor again",
+                    detail: failure.message,
+                    action: .pairSensor, actionTitle: "Pair again")]
+            }
+            let pairingDidNotFinish = failure.kind == .bluetoothPairingIncomplete
             return [AppBanner(
-                kind: .sensorError, severity: .critical,
-                title: "Sensor failed",
-                detail: "\(reason). Replace the sensor.",
-                action: .openSensorSettings, actionTitle: "Sensor")]
+                kind: .sensorInterrupted, severity: .warning,
+                title: pairingDidNotFinish ? "Pairing didn't finish" : "Readings interrupted",
+                detail: failure.message,
+                action: pairingDidNotFinish ? .pairSensor : .openSensorSettings,
+                actionTitle: pairingDidNotFinish ? "Pair again" : "Sensor")]
+        case .calibrationNeeded:
+            return [AppBanner(
+                kind: .calibrationNeeded, severity: .critical,
+                title: "Calibrate the sensor",
+                detail: "The sensor withholds readings until it gets a fingerstick calibration.",
+                action: .openCalibration, actionTitle: "Calibrate")]
+        case .calibrationError:
+            return [AppBanner(
+                kind: .calibrationNeeded, severity: .critical,
+                title: "Calibration not accepted",
+                detail: "The sensor couldn't use the last calibration and withholds readings. Enter a new fingerstick.",
+                action: .openCalibration, actionTitle: "Calibrate")]
         case .expired:
             return [AppBanner(
                 kind: .sensorExpired, severity: .critical,

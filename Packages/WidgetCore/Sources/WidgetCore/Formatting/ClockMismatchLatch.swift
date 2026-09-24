@@ -36,7 +36,7 @@ public enum ClockMismatchLatch {
         switch display {
         case .current, .stale, .noData, .clockMismatch:
             return .clockMismatch(latest: latest)
-        case .warmingUp, .sensorExpired, .sensorError, .notPaired:
+        case .warmingUp, .sensorExpired, .sensorError, .sensorFailed, .calibrationNeeded, .calibrationRejected, .notPaired:
             return display
         }
     }

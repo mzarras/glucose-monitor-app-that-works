@@ -80,6 +80,21 @@ final class AlertsViewTests: XCTestCase {
         XCTAssertEqual(AlertsText.time(TimeOfDay(hour: 7, minute: 5)), "7:05 AM")
     }
 
+    /// D36: "Calibration needed" is a configurable sensor alert with its own sound and
+    /// sound-on-silent setting.
+    @MainActor
+    func test_calibrationNeededAlertRow() {
+        XCTAssertEqual(AlertKind.calibrationNeeded.section, .sensor)
+        XCTAssertTrue(AlertKind.calibrationNeeded.canBeDisabled)
+        XCTAssertFalse(AlertKind.calibrationNeeded.soundOnSilentIsFixed)
+        let model = AppModel.launch(arguments: [])
+        XCTAssertEqual(model.alerts.row(.calibrationNeeded)?.soundID, "warble")
+        model.updateAlert(.calibrationNeeded) { $0.isEnabled = false; $0.soundOnSilent = false; $0.soundID = "sonar" }
+        XCTAssertEqual(model.alerts.row(.calibrationNeeded)?.isEnabled, false)
+        XCTAssertEqual(model.alerts.row(.calibrationNeeded)?.soundOnSilent, false)
+        XCTAssertEqual(model.alerts.row(.calibrationNeeded)?.soundID, "sonar")
+    }
+
     func test_everyAlertHasASection() {
         XCTAssertEqual(Set(AlertKind.allCases.map(\.section)), Set(AlertSection.allCases))
     }
