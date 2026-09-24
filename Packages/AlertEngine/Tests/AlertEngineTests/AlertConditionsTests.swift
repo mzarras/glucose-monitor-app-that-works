@@ -117,7 +117,11 @@ final class AlertConditionsTests: XCTestCase {
         XCTAssertTrue(StatusConditions.suppressesMissedReadings(.warmingUp(endsAt: warmUpEnd), now: Fixtures.t0))
         XCTAssertFalse(StatusConditions.suppressesMissedReadings(.warmingUp(endsAt: warmUpEnd), now: warmUpEnd),
                        "warm-up suppresses only until it ends by the clock")
-        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.expired, now: Fixtures.t0))
+        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.expired, now: Fixtures.t0), "D39: confirmed end")
+        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.failed(SensorFailure(kind: .sessionStopped, message: "")), now: Fixtures.t0))
+        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.failed(SensorFailure(kind: .bondRemoved, message: "")), now: Fixtures.t0))
+        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.failed(SensorFailure(kind: .other, message: "")), now: Fixtures.t0))
+        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.error(code: 1, description: ""), now: Fixtures.t0))
         XCTAssertFalse(StatusConditions.suppressesMissedReadings(nil, now: Fixtures.t0))
     }
 

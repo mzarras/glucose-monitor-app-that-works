@@ -30,16 +30,16 @@ extension AlertEngine {
         }
         // Leaving a state in which no readings were expected starts the missed-readings window
         // afresh, so a new sensor does not inherit the previous sensor's last reading time: from
-        // now after "not paired"; from the end of warm-up (or now, if the sensor finished early).
-        switch (previous, state) {
-        case (.notPaired, .notPaired), (.warmingUp, .warmingUp), (.warmingUp, .notPaired):
-            break
-        case (.notPaired, _):
+        // now after "not paired" or a confirmed session end (D39); from the end of warm-up (or now,
+        // if the sensor finished early).
+        let wasWithoutReadings = StatusConditions.sessionHasNoReadingsToMiss(previous)
+        let isWithoutReadings = StatusConditions.sessionHasNoReadingsToMiss(state)
+        if wasWithoutReadings, !isWithoutReadings {
             snapshot.missedReadingsReference = max(snapshot.missedReadingsReference, now)
-        case (.warmingUp(let endsAt), _):
-            snapshot.missedReadingsReference = max(snapshot.missedReadingsReference, min(now, endsAt))
-        default:
-            break
+        } else if case .warmingUp(let endsAt) = previous, !isWithoutReadings {
+            if case .warmingUp = state {} else {
+                snapshot.missedReadingsReference = max(snapshot.missedReadingsReference, min(now, endsAt))
+            }
         }
         return actions
     }

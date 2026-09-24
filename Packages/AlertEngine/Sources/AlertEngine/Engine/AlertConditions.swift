@@ -131,9 +131,19 @@ enum StatusConditions {
     /// that, readings are expected whether or not the source ever reports another state (the phone
     /// may be out of range when warm-up ends, or the source may report only a transient failure).
     static func suppressesMissedReadings(_ settled: SensorState?, now: Date) -> Bool {
+        if sessionHasNoReadingsToMiss(settled) { return true }
+        if case .warmingUp(let endsAt) = settled { return now < endsAt }
+        return false
+    }
+
+    /// No sensor, or a confirmed end of the session (D39): expired, or a failure that needs a new
+    /// sensor. The sensor alert says so and stays until a new sensor; missed readings every window
+    /// on top would add alarms but no information. A lost pairing or a transient failure does NOT
+    /// count: readings could resume, and the user must know they are missing.
+    static func sessionHasNoReadingsToMiss(_ settled: SensorState?) -> Bool {
         switch settled {
-        case .notPaired: return true
-        case .warmingUp(let endsAt): return now < endsAt
+        case .notPaired, .expired: return true
+        case .failed(let failure): return failure.requiresSensorReplacement
         default: return false
         }
     }
