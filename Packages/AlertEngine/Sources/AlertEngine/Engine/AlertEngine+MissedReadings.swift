@@ -19,10 +19,23 @@ import GlucoseCore
 extension AlertEngine {
     mutating func stepMissedReadings(now: Date) -> [AlertAction] {
         let kind = AlertKind.missedReadings
-        guard settings.isEnabled(kind), !StatusConditions.suppressesMissedReadings(snapshot.settledSensorState) else {
-            return resetMissedReadings()
-        }
+        guard settings.isEnabled(kind) else { return resetMissedReadings() }
         let window = missedReadingsWindow
+        switch snapshot.settledSensorState {
+        case .notPaired:
+            return resetMissedReadings()
+        case .warmingUp(let endsAt) where now < endsAt:
+            // No readings until warm-up ends. Keep the notifications pending from `endsAt + window`
+            // so a suspended app still gets them if no reading follows (safety review D36 B1).
+            let clearFirst = episode(kind) == .armed ? [] : clearMissedReadings()
+            return clearFirst + planMissedReadings(from: endsAt.addingTimeInterval(window), now: now)
+        case .warmingUp(let endsAt):
+            // Warm-up is over by the clock even if no state says so: readings are expected from
+            // `endsAt`, whatever the source reports next (or does not).
+            snapshot.missedReadingsReference = max(snapshot.missedReadingsReference, endsAt)
+        default:
+            break
+        }
         let reference = snapshot.missedReadingsReference
         let firstDueFromReference = reference.addingTimeInterval(window)
         let condition = StatusConditions.missedReadings(now: now, reference: reference, windowMinutes: settings.missedReadings.windowMinutes)

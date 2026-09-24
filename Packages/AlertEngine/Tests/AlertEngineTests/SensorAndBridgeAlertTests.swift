@@ -54,7 +54,7 @@ final class SensorAlertTests: XCTestCase {
         let transient = SensorFailure.Kind.allCases.filter { !SensorFailure(kind: $0, message: "").raisesSensorAlert }
         XCTAssertEqual(Set(transient), [.bluetoothPairingIncomplete, .authenticationFailed, .rejectedAfterAuthentication,
                                         .otherAppRejected, .clockMismatch, .noGlucoseValue, .sessionLengthUnknown,
-                                        .credentialsUnavailable, .other])
+                                        .credentialsUnavailable])
         for kind in transient {
             let h = EngineHarness()
             h.send(.sensorState(.active(sessionStart: Fixtures.session.start, expiresAt: Fixtures.session.expiresAt)))
@@ -71,6 +71,7 @@ final class SensorAlertTests: XCTestCase {
         let cases: [(SensorFailure.Kind, String)] = [
             (.sensorFailed, "Replace the sensor"), (.sessionStopped, "Replace the sensor"), (.unsupportedSensor, "Replace the sensor"),
             (.pairingRejected, "Pair the sensor again"), (.pairingCodeNeeded, "Pair the sensor again"), (.bondRemoved, "Pair the sensor again"),
+            (.other, "Sensor problem"),   // D37: unclassified failures fail loud, with the source's message
         ]
         for (kind, title) in cases {
             let h = EngineHarness()
@@ -146,6 +147,15 @@ final class SensorAlertTests: XCTestCase {
         XCTAssertNil(ready.firedNotice(.sensorWarmUpComplete)?.snoozeMinutes, "announcements have no Snooze action")
         h.send(.sensorState(.searching))
         XCTAssertEqual(h.send(.sensorState(.active(sessionStart: Fixtures.t0, expiresAt: Fixtures.t0.addingTimeInterval(10 * 86_400)))).fired, [])
+    }
+
+    func test_calibrationRightAfterWarmUpDoesNotAnnounceWarmUpComplete() {
+        let h = EngineHarness()
+        h.send(.sensorState(.warmingUp(endsAt: h.now.addingTimeInterval(minutes(30)))))
+        h.clock.advance(minutes: 30)
+        XCTAssertEqual(h.send(.sensorState(.calibrationNeeded(code: 1))).fired, [.calibrationNeeded], "the calibration alert instead")
+        let active = h.send(.sensorState(.active(sessionStart: Fixtures.t0, expiresAt: Fixtures.t0.addingTimeInterval(10 * 86_400))))
+        XCTAssertFalse(active.fired.contains(.sensorWarmUpComplete))
     }
 
     func test_expiringIn24HoursThenIn2Hours() {
