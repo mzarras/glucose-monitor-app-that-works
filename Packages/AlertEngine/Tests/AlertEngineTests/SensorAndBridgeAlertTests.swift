@@ -42,10 +42,76 @@ final class SensorAlertTests: XCTestCase {
 
     func test_S5_sensorFailedAlerts() {
         let h = EngineHarness()
-        let failed = h.send(.sensorState(.failed(reason: "sensor failure")))
+        let failed = h.send(.sensorState(.failed(SensorFailure(kind: .sensorFailed, message: "The sensor has failed."))))
         XCTAssertEqual(failed.fired, [.sensorFailed])
-        XCTAssertEqual(failed.firedNotice(.sensorFailed)?.body, "Readings have stopped. The sensor reported: sensor failure.")
+        XCTAssertEqual(failed.firedNotice(.sensorFailed)?.title, "Replace the sensor")
+        XCTAssertEqual(failed.firedNotice(.sensorFailed)?.body, "Readings have stopped. The sensor has failed.")
         XCTAssertEqual(h.send(.sensorState(.notPaired)).ignoringMissedReadings.cancelled, [.sensorFailed])
+    }
+
+    /// D36: only failures that need a new sensor or a new pairing raise the sensor alert.
+    func test_S5_transientSensorFailuresDoNotRaiseTheSensorAlert() {
+        let transient = SensorFailure.Kind.allCases.filter { !SensorFailure(kind: $0, message: "").raisesSensorAlert }
+        XCTAssertEqual(Set(transient), [.bluetoothPairingIncomplete, .authenticationFailed, .rejectedAfterAuthentication,
+                                        .otherAppRejected, .clockMismatch, .noGlucoseValue, .sessionLengthUnknown,
+                                        .credentialsUnavailable, .other])
+        for kind in transient {
+            let h = EngineHarness()
+            h.send(.sensorState(.active(sessionStart: Fixtures.session.start, expiresAt: Fixtures.session.expiresAt)))
+            h.send(.sensorState(.error(code: 7, description: "x")))                 // an alert already firing
+            let actions = h.send(.sensorState(.failed(SensorFailure(kind: kind, message: "transient"))))
+            XCTAssertEqual(actions.fired, [], "\(kind)")
+            XCTAssertEqual(actions.cancelled, [], "\(kind): does not clear other sensor alerts either")
+            XCTAssertEqual(h.phase(.sensorError), .firing(since: Fixtures.t0), "\(kind)")
+            XCTAssertEqual(h.phase(.sensorFailed), .armed, "\(kind)")
+        }
+    }
+
+    func test_S5_endedSensorAndLostPairingRaiseTheSensorAlert() {
+        let cases: [(SensorFailure.Kind, String)] = [
+            (.sensorFailed, "Replace the sensor"), (.sessionStopped, "Replace the sensor"), (.unsupportedSensor, "Replace the sensor"),
+            (.pairingRejected, "Pair the sensor again"), (.pairingCodeNeeded, "Pair the sensor again"), (.bondRemoved, "Pair the sensor again"),
+        ]
+        for (kind, title) in cases {
+            let h = EngineHarness()
+            let message = "Message for \(kind.rawValue)."
+            let actions = h.send(.sensorState(.failed(SensorFailure(kind: kind, message: message))))
+            XCTAssertEqual(actions.fired, [.sensorFailed], "\(kind)")
+            XCTAssertEqual(actions.firedNotice(.sensorFailed)?.title, title, "\(kind)")
+            XCTAssertEqual(actions.firedNotice(.sensorFailed)?.body, "Readings have stopped. \(message)", "\(kind)")
+            XCTAssertEqual(actions.firedNotice(.sensorFailed)?.soundsOnSilent, true)
+            XCTAssertEqual(h.send(.sensorState(.searching)).cancelled, [], "\(kind): the connection cycle does not clear it")
+            XCTAssertEqual(h.send(.sensorState(.failed(SensorFailure(kind: .clockMismatch, message: "")))).cancelled, [], "nor does a transient failure")
+            XCTAssertEqual(h.send(.sensorState(.warmingUp(endsAt: h.now.addingTimeInterval(1800)))).ignoringMissedReadings.cancelled,
+                           [.sensorFailed], "\(kind): a new sensor clears it")
+        }
+    }
+
+    func test_calibrationNeededAlertsAndClearsWhenActiveAgain() {
+        let h = EngineHarness()
+        h.send(.sensorState(.active(sessionStart: Fixtures.session.start, expiresAt: Fixtures.session.expiresAt)))
+        let needed = h.send(.sensorState(.calibrationNeeded(code: 3)))
+        XCTAssertEqual(needed.fired, [.calibrationNeeded])
+        XCTAssertEqual(needed.firedNotice(.calibrationNeeded)?.title, "Calibration needed")
+        XCTAssertEqual(needed.firedNotice(.calibrationNeeded)?.body, "The sensor needs a calibration (state 3). No readings until it is calibrated.")
+        XCTAssertEqual(needed.firedNotice(.calibrationNeeded)?.soundsOnSilent, true)
+        for transient: SensorState in [.searching, .connecting, .authenticating, .failed(SensorFailure(kind: .noGlucoseValue, message: ""))] {
+            XCTAssertEqual(h.send(.sensorState(transient)).cancelled, [], "\(transient)")
+        }
+        let rejected = h.send(.sensorState(.calibrationError(code: 5)))
+        XCTAssertEqual(rejected.cancelled, [], "still the same episode")
+        XCTAssertEqual(h.advance(minutes: 30).firedNotice(.calibrationNeeded)?.body,
+                       "The sensor could not use the calibration (state 5). No readings until it is calibrated again.",
+                       "re-alerts every 30 minutes by default, with the current text")
+        XCTAssertEqual(h.send(.sensorState(.active(sessionStart: Fixtures.session.start, expiresAt: Fixtures.session.expiresAt))).cancelled,
+                       [.calibrationNeeded])
+    }
+
+    func test_calibrationErrorAlertsAndCanBeTurnedOff() {
+        let h = EngineHarness()
+        XCTAssertEqual(h.send(.sensorState(.calibrationError(code: 1))).fired, [.calibrationNeeded])
+        XCTAssertEqual(h.settings { $0.calibrationNeeded.isEnabled = false }.cancelled, [.calibrationNeeded])
+        XCTAssertEqual(h.phase(.calibrationNeeded), .off)
     }
 
     func test_S5_sensorExpiredAlertsUntilANewSensor() {

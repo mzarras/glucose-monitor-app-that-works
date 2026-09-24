@@ -82,15 +82,24 @@ final class AlertConditionsTests: XCTestCase {
 
     func test_settledStates() {
         let settled: [SensorState] = [.notPaired, .warmingUp(endsAt: Fixtures.t0), .active(sessionStart: Fixtures.t0, expiresAt: Fixtures.t0),
-                                      .gracePeriod(endsAt: Fixtures.t0), .expired, .failed(reason: "x"), .error(code: 1, description: "x")]
-        let transient: [SensorState] = [.searching, .connecting, .authenticating, .bluetoothUnavailable(.poweredOff)]
+                                      .gracePeriod(endsAt: Fixtures.t0), .expired, .failed(SensorFailure(kind: .sensorFailed, message: "x")),
+                                      .failed(SensorFailure(kind: .bondRemoved, message: "x")), .error(code: 1, description: "x"),
+                                      .calibrationNeeded(code: 1), .calibrationError(code: 2)]
+        let transient: [SensorState] = [.searching, .connecting, .authenticating, .bluetoothUnavailable(.poweredOff),
+                                        .failed(SensorFailure(kind: .clockMismatch, message: "x")), .failed(SensorFailure(kind: .other, message: "x"))]
         for s in settled { XCTAssertTrue(StatusConditions.isSettled(s), "\(s)") }
         for s in transient { XCTAssertFalse(StatusConditions.isSettled(s), "\(s)") }
     }
 
     func test_sensorConditions() {
         XCTAssertEqual(StatusConditions.sensorFailed(nil), .holding)
-        XCTAssertEqual(StatusConditions.sensorFailed(.failed(reason: "x")), .met)
+        XCTAssertEqual(StatusConditions.sensorFailed(.failed(SensorFailure(kind: .sessionStopped, message: "x"))), .met)
+        XCTAssertEqual(StatusConditions.sensorFailed(.failed(SensorFailure(kind: .otherAppRejected, message: "x"))), .clear,
+                       "never settled in practice; if it were, a transient failure is not the sensor alert")
+        XCTAssertEqual(StatusConditions.calibrationNeeded(nil), .holding)
+        XCTAssertEqual(StatusConditions.calibrationNeeded(.calibrationNeeded(code: 1)), .met)
+        XCTAssertEqual(StatusConditions.calibrationNeeded(.calibrationError(code: 1)), .met)
+        XCTAssertEqual(StatusConditions.calibrationNeeded(.active(sessionStart: Fixtures.t0, expiresAt: Fixtures.t0)), .clear)
         XCTAssertEqual(StatusConditions.sensorFailed(.expired), .clear)
         XCTAssertEqual(StatusConditions.sensorError(nil), .holding)
         XCTAssertEqual(StatusConditions.sensorError(.error(code: 3, description: "x")), .met)

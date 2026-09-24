@@ -28,7 +28,7 @@ final class AlertSettingsTests: XCTestCase {
         XCTAssertEqual(s.missedReadings.windowMinutes, 15)
         for kind: AlertKind in [
             .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod,
-            .sensorFailed, .sensorError, .sensorExpired, .bluetoothUnavailable, .trioBridge,
+            .sensorFailed, .sensorError, .calibrationNeeded, .sensorExpired, .bluetoothUnavailable, .trioBridge,
         ] {
             XCTAssertTrue(s.isEnabled(kind), "\(kind) on by default")
         }
@@ -39,7 +39,7 @@ final class AlertSettingsTests: XCTestCase {
         let s = AlertSettings.defaults
         let on: [AlertKind] = [
             .urgentLow, .urgentLowSoon, .low, .high, .missedReadings,
-            .sensorFailed, .sensorError, .sensorExpired, .bluetoothUnavailable, .trioBridge,
+            .sensorFailed, .sensorError, .calibrationNeeded, .sensorExpired, .bluetoothUnavailable, .trioBridge,
         ]
         let off: [AlertKind] = [
             .fallingFast, .risingFast,
@@ -218,6 +218,7 @@ final class AlertSettingsTests: XCTestCase {
         s.sensorGracePeriod.soundsOnSilent = true
         s.sensorFailed = StatusAlertSettings(isEnabled: false, sound: .sonar, soundsOnSilent: false, snoozeMinutes: 15)
         s.sensorError.snoozeMinutes = 200
+        s.calibrationNeeded = StatusAlertSettings(isEnabled: false, sound: .doorbell, soundsOnSilent: false, snoozeMinutes: 45)
         s.sensorExpired.isEnabled = false
         s.bluetoothUnavailable.sound = .dusk
         s.trioBridge.soundsOnSilent = false

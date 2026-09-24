@@ -19,6 +19,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
     public var sensorGracePeriod: EventAlertSettings
     public var sensorFailed: StatusAlertSettings
     public var sensorError: StatusAlertSettings
+    public var calibrationNeeded: StatusAlertSettings
     public var sensorExpired: StatusAlertSettings
     public var bluetoothUnavailable: StatusAlertSettings
     public var trioBridge: StatusAlertSettings
@@ -39,6 +40,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         sensorGracePeriod = EventAlertSettings(sound: AlertSoundCatalog.defaultSound(for: .sensorGracePeriod))
         sensorFailed = .defaults(for: .sensorFailed)
         sensorError = .defaults(for: .sensorError)
+        calibrationNeeded = .defaults(for: .calibrationNeeded)
         sensorExpired = .defaults(for: .sensorExpired)
         bluetoothUnavailable = .defaults(for: .bluetoothUnavailable)
         trioBridge = .defaults(for: .trioBridge)
@@ -65,6 +67,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorGracePeriod: return sensorGracePeriod.isEnabled
         case .sensorFailed: return sensorFailed.isEnabled
         case .sensorError: return sensorError.isEnabled
+        case .calibrationNeeded: return calibrationNeeded.isEnabled
         case .sensorExpired: return sensorExpired.isEnabled
         case .bluetoothUnavailable: return bluetoothUnavailable.isEnabled
         case .trioBridge: return trioBridge.isEnabled
@@ -86,6 +89,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorGracePeriod: return sensorGracePeriod.sound
         case .sensorFailed: return sensorFailed.sound
         case .sensorError: return sensorError.sound
+        case .calibrationNeeded: return calibrationNeeded.sound
         case .sensorExpired: return sensorExpired.sound
         case .bluetoothUnavailable: return bluetoothUnavailable.sound
         case .trioBridge: return trioBridge.sound
@@ -108,6 +112,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorGracePeriod: return sensorGracePeriod.soundsOnSilent
         case .sensorFailed: return sensorFailed.soundsOnSilent
         case .sensorError: return sensorError.soundsOnSilent
+        case .calibrationNeeded: return calibrationNeeded.soundsOnSilent
         case .sensorExpired: return sensorExpired.soundsOnSilent
         case .bluetoothUnavailable: return bluetoothUnavailable.soundsOnSilent
         case .trioBridge: return trioBridge.soundsOnSilent
@@ -128,6 +133,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .missedReadings: return missedReadings.snoozeMinutes
         case .sensorFailed: return sensorFailed.snoozeMinutes
         case .sensorError: return sensorError.snoozeMinutes
+        case .calibrationNeeded: return calibrationNeeded.snoozeMinutes
         case .sensorExpired: return sensorExpired.snoozeMinutes
         case .bluetoothUnavailable: return bluetoothUnavailable.snoozeMinutes
         case .trioBridge: return trioBridge.snoozeMinutes
@@ -155,6 +161,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorGracePeriod: sensorGracePeriod.isEnabled = enabled
         case .sensorFailed: sensorFailed.isEnabled = enabled
         case .sensorError: sensorError.isEnabled = enabled
+        case .calibrationNeeded: calibrationNeeded.isEnabled = enabled
         case .sensorExpired: sensorExpired.isEnabled = enabled
         case .bluetoothUnavailable: bluetoothUnavailable.isEnabled = enabled
         case .trioBridge: trioBridge.isEnabled = enabled
@@ -177,6 +184,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorGracePeriod: sensorGracePeriod.sound = sound
         case .sensorFailed: sensorFailed.sound = sound
         case .sensorError: sensorError.sound = sound
+        case .calibrationNeeded: calibrationNeeded.sound = sound
         case .sensorExpired: sensorExpired.sound = sound
         case .bluetoothUnavailable: bluetoothUnavailable.sound = sound
         case .trioBridge: trioBridge.sound = sound
@@ -200,6 +208,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorGracePeriod: sensorGracePeriod.soundsOnSilent = on
         case .sensorFailed: sensorFailed.soundsOnSilent = on
         case .sensorError: sensorError.soundsOnSilent = on
+        case .calibrationNeeded: calibrationNeeded.soundsOnSilent = on
         case .sensorExpired: sensorExpired.soundsOnSilent = on
         case .bluetoothUnavailable: bluetoothUnavailable.soundsOnSilent = on
         case .trioBridge: trioBridge.soundsOnSilent = on
@@ -212,7 +221,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
     private enum CodingKeys: String, CodingKey {
         case urgentLow, urgentLowSoon, low, high, fallingFast, risingFast, missedReadings
         case sensorWarmUpComplete, sensorExpiringIn24Hours, sensorExpiringIn2Hours, sensorGracePeriod
-        case sensorFailed, sensorError, sensorExpired, bluetoothUnavailable, trioBridge
+        case sensorFailed, sensorError, calibrationNeeded, sensorExpired, bluetoothUnavailable, trioBridge
         case quietHours
     }
 
@@ -300,6 +309,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         sensorGracePeriod = Self.event(fields(.sensorGracePeriod), default: d.sensorGracePeriod)
         sensorFailed = Self.status(fields(.sensorFailed), default: d.sensorFailed)
         sensorError = Self.status(fields(.sensorError), default: d.sensorError)
+        calibrationNeeded = Self.status(fields(.calibrationNeeded), default: d.calibrationNeeded)
         sensorExpired = Self.status(fields(.sensorExpired), default: d.sensorExpired)
         bluetoothUnavailable = Self.status(fields(.bluetoothUnavailable), default: d.bluetoothUnavailable)
         trioBridge = Self.status(fields(.trioBridge), default: d.trioBridge)

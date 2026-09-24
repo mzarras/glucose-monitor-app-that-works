@@ -60,6 +60,8 @@ public enum AlertLimits {
     // MARK: Status alerts
 
     public static let sensorProblemDefaultSnoozeMinutes = 120
+    /// Calibration needed: readings are withheld until the user acts, so remind every 30 minutes.
+    public static let calibrationDefaultSnoozeMinutes = 30
     public static let bluetoothDefaultSnoozeMinutes = 30
     public static let trioBridgeDefaultSnoozeMinutes = 30
     /// HANDOFF §5: "Trio not consuming for 15 min".

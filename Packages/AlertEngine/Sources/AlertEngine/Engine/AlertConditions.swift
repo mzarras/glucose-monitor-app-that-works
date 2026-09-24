@@ -111,11 +111,18 @@ enum GlucoseConditions {
 enum StatusConditions {
     /// States that describe the sensor session. Everything else (searching, connecting,
     /// authenticating, Bluetooth unavailable) happens every 5-minute connection cycle or is about
-    /// the phone, and must not fire or clear a sensor alert.
+    /// the phone, and must not fire or clear a sensor alert. A failure counts only if it raises the
+    /// sensor alert (the sensor is finished, or needs pairing again: D36); transient failures
+    /// (clock mismatch, another app, no value, …) are like a connection cycle — they neither fire
+    /// nor clear anything, and missed readings covers readings that stop for long.
     static func isSettled(_ state: SensorState) -> Bool {
         switch state {
-        case .notPaired, .warmingUp, .active, .gracePeriod, .expired, .failed, .error: return true
-        case .searching, .connecting, .authenticating, .bluetoothUnavailable: return false
+        case .notPaired, .warmingUp, .active, .gracePeriod, .expired, .error, .calibrationNeeded, .calibrationError:
+            return true
+        case .failed(let failure):
+            return failure.raisesSensorAlert
+        case .searching, .connecting, .authenticating, .bluetoothUnavailable:
+            return false
         }
     }
 
@@ -130,8 +137,17 @@ enum StatusConditions {
 
     static func sensorFailed(_ settled: SensorState?) -> AlertCondition {
         guard let settled else { return .holding }
-        if case .failed = settled { return .met }
+        if case .failed(let failure) = settled, failure.raisesSensorAlert { return .met }
         return .clear
+    }
+
+    /// Calibration needed or rejected; clears on any other settled state (e.g. back to active).
+    static func calibrationNeeded(_ settled: SensorState?) -> AlertCondition {
+        switch settled {
+        case nil: return .holding
+        case .calibrationNeeded, .calibrationError: return .met
+        default: return .clear
+        }
     }
 
     static func sensorError(_ settled: SensorState?) -> AlertCondition {
