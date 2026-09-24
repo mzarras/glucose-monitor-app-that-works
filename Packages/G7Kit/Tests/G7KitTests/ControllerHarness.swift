@@ -8,7 +8,7 @@ import GlucoseCore
 /// CoreBluetooth would, with a hand-moved clock.
 final class ControllerHarness {
     let clock: TestClock
-    let store: G7InMemoryCredentialStore
+    let store: any G7CredentialStore
     let log = RecordingDiagnosticLog()
     let central = FakeCentral()
     let sensor: G7SensorSimulator
@@ -26,7 +26,7 @@ final class ControllerHarness {
     init(
         sensorCode: String = "1234",
         sessionAge: TimeInterval = 2 * 86_400,
-        store: G7InMemoryCredentialStore = G7InMemoryCredentialStore(),
+        store: any G7CredentialStore = G7InMemoryCredentialStore(),
         relaunchOf previous: ControllerHarness? = nil
     ) {
         self.store = store

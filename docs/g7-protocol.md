@@ -79,7 +79,10 @@ except the lengths inside the J-PAKE hash (big-endian, §3.3).
   candidate are ignored (a stray `didConnect` is disconnected immediately).
 - **Credentials:** a pairing record that cannot be read (e.g. Keychain before the first unlock after
   a restart) is reported as `.failed(credentialsUnavailable)`, never `.notPaired`; the app should call
-  `start(pairingCode: nil)` again once protected data is available.
+  `start(pairingCode: nil)` again once protected data is available. Saving the record (at least once
+  per wake) keeps working in memory when it fails, but a relaunch would lose what was not saved; after
+  3 consecutive failed saves (Sensor policy) every further failed save emits
+  `.failed(credentialsUnavailable)` too, and a successful save clears the count.
 
 ### 2.3 One connection, step by step (`G7ConnectionCycle`)
 
@@ -157,6 +160,18 @@ the disconnect. Whether the key is really gone is decided by the next connection
 state is `.failed(rejectedAfterAuthentication)`; when it recurs on consecutive connections whose own
 authentication succeeded, `.failed(otherAppRejected)` (another app on this phone is the likely cause).
 A connection without a rejection resets the count.
+
+**Accepted residual risk (PROGRESS.md D35).** The spoofed success cannot be told apart from our own.
+If, inside the few milliseconds between the spoof and the sensor's real rejection, the other app's
+genuine `0x4E` (the answer to *its* GetData, delivered to every subscriber of the shared link) reaches
+us, that one live reading is published: it is real data from this sensor, but it was not
+authenticated to us. Backfill from that window is discarded and nothing after the real rejection is
+forwarded, so the exposure is at most one live reading per race. Holding live readings until the
+disconnect would remove it but delay every reading to Trio by one wake (Trio's heartbeat reads at the
+sensor disconnect, §11), so it is not done. The race needs a second primary-mode G7 app on the phone,
+which setup forbids (HANDOFF §4.6); Phase 2 onboarding/diagnostics flag other G7 apps. Pinned by
+`test_S2_residualP1cRaceIsBoundedToOneLiveReading` (if it starts failing because the reading is no
+longer published, the risk is gone: update D35 and this paragraph).
 
 Decision on the solicited `05` (`DexcomG7AuthSession.swift:463-475`, unchanged):
 
@@ -337,6 +352,19 @@ No captured G7 J-PAKE exchange exists in either repository. Tests:
   batch reports `.failed(sensorClockMismatch)`; a gap-filling record that still fits between its
   neighbours is kept. The newest published reading (sensor timestamp and date, `G7ReadingMark`) is
   persisted with the pairing record, so the rule also holds across app relaunches.
+- **The "wedge" (accepted consequence of the rule above).** After a large backward move of the anchor
+  (the phone clock was fast and is corrected, or is set back by hand by Δ), the session re-anchors
+  after two agreeing wakes, and every new reading is then dated up to Δ earlier than the readings
+  already published. Readings are withheld — with `.failed(sensorClockMismatch)` shown — until real
+  time passes the newest published date, i.e. for about Δ. The readings of that window are **lost**:
+  their dates stay before the newest published one, so neither the live copy nor a later backfill copy
+  can ever be published. (Probe P4: Δ = 1 h → 12 wakes withheld.) The missed-readings alert fires from
+  reading age during the window.
+- **Note for downstream consumers (Phase 2 wiring).** In the same situation the newest *stored*
+  reading is dated in the future by up to Δ (it was dated with the fast clock). Anything that judges
+  freshness from the newest reading (staleness banners, missed-readings alert, Trio/Nightscout/Share
+  upload freshness, widgets) must treat a reading dated after "now" as **stale**, not as fresh — it is
+  never evidence that data is arriving.
 - Backfill arriving before this connection's `0x4E` waits for an agreeing anchor; records never dated
   are discarded at disconnect (`CGMG7Transmitter.swift:656-667`).
 - `id = GlucoseReading.sensorID(serial:sensorTimestamp:)`; duplicates by sensor timestamp are
@@ -416,17 +444,20 @@ it stays non-nil across the ~5-minute disconnects and app relaunches. It is `nil
 - before the first status-0 `0x4E` of a pairing (and before `0x52` answered);
 - after `gracePeriodEndsAt` (a time check when read — no connection needed);
 - once the sensor itself has reported the session over — expired states, failed states, or
-  "stopped" after warm-up (`G7SensorStatus.sessionEnd`) — **with response status 0 on two separate
-  connections** (safety review N1). A non-zero-status reply never counts (it may carry a cached state,
-  §4.1); one status-0 report counts only if the next connection's status-0 `0x4E` reports an end
-  again, and any status-0 report of a running session in between (OK, warm-up, calibration,
+  "stopped" after warm-up (`G7SensorStatus.sessionEnd`) — **in two status-0 `0x4E`, the second one's
+  sensor clock at least 60 s after the first one's** (safety review N1; Sensor policy: the sensor wakes
+  about every 300 s, so this means a later wake, never a repeat within one connection or a
+  re-delivered packet). The sensor clock, not a connection count, tells the reports apart, and the
+  first report is persisted in the pairing record (`G7UnconfirmedSessionEnd`), so iOS terminating the
+  app between wakes cannot prevent the latch. A non-zero-status reply never counts (it may carry a
+  cached state, §4.1); a second report with an earlier or too-close sensor clock neither confirms nor
+  replaces the first; any status-0 report of a running session in between (OK, warm-up, calibration,
   temporary issue) clears it. A single report is shown for that connection (`.expired` or
   `.error(code:)`) and a later OK reading is used as usual, so one bad byte cannot end a session.
   Once latched, the end (`G7SessionEnd`) is persisted in the pairing record; every later `0x4E`, OK
   or not, shows it — `.expired`, `.failed(sensorFailed)` or `.failed(sessionStopped)`, never
   `.active` — and publishes nothing; the same state is shown at launch, after Bluetooth returns, and
-  refuses calibration. The unconfirmed first report is not persisted (a relaunch in between needs two
-  new reports). An "OK" packet whose time lies past the grace end does *not* end the session
+  refuses calibration. An "OK" packet whose time lies past the grace end does *not* end the session
   permanently (a garbled clock could);
 - for an unsupported sensor; when a new pairing is required; after "Forget sensor".
 A new pairing replaces it with the new sensor's session.
@@ -656,6 +687,7 @@ package or folder behind `CGMSource`; nothing G7-specific leaks into GlucoseCore
 8. Signal loss: walk away for 20 min; `state` stays as last reported and the missed-readings alert
    fires from reading age (§2.2).
 9. Session end: at a real expiry (or failure), the ended state appears within two sensor wakes
-   (~10 min) and stays after an app relaunch (§6.1a). With the Dexcom or xDrip app also installed,
-   note whether `.failed(rejectedAfterAuthentication)` / `.failed(otherAppRejected)` ever appears
-   (§3.1).
+   (~10 min), also if the app was terminated between them, and stays after an app relaunch (§6.1a).
+10. With another G7 app installed (Dexcom G7 or xDrip4iOS in primary mode), `.failed(otherAppRejected)`
+    surfaces (after `.failed(rejectedAfterAuthentication)` the first time), never "Pair again" while
+    this phone's key is accepted (§3.1, D35).

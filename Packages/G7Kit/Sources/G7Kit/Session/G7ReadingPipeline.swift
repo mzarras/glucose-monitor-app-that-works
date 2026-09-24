@@ -43,12 +43,15 @@ import GlucoseCore
 /// start. A single garbled packet can therefore neither move the session nor end it.
 ///
 /// Session end (D28, safety review N1). The sensor's own "expired", "failed" or "stopped after
-/// warm-up" state ends the session only when a status-0 `0x4E` reports it on two separate
-/// connections, with no status-0 report of a continuing session in between. A non-zero-status reply
-/// never counts (it may carry a cached state). Until then the reported state is shown for that
-/// connection only and a later OK reading is used as usual. Once latched, every later `0x4E` shows the
-/// end (`G7SessionEnd.state`: `.expired` or `.failed` with the reason), nothing more is published,
-/// and the controller persists the end.
+/// warm-up" state ends the session only when two status-0 `0x4E` report it and the second one's
+/// sensor clock is at least `endConfirmationInterval` after the first one's, with no status-0 report
+/// of a continuing session in between. The sensor clock, not a connection count, tells two reports
+/// apart, and the first report is persisted (`G7UnconfirmedSessionEnd`), so iOS terminating the app
+/// between two wakes cannot prevent the latch. A non-zero-status reply never counts (it may carry a
+/// cached state). Until then the reported state is shown for that connection only and a later OK
+/// reading is used as usual. Once latched, every later `0x4E` shows the end (`G7SessionEnd.state`:
+/// `.expired` or `.failed` with the reason), nothing more is published, and the controller persists
+/// the end.
 ///
 /// Backfill records arriving before this connection's `0x4E` are held raw until the clock is checked;
 /// undatable records are discarded at disconnect (CGMG7Transmitter.swift:656-667). Each batch is
@@ -62,6 +65,11 @@ final class G7ReadingPipeline {
     /// Sensor policy (safety review M2): anchors within 30 s of the session start agree
     /// (transmission latency and slow clock drift); a larger difference is a clock problem.
     static let anchorTolerance: TimeInterval = 30
+
+    /// Sensor policy (safety review N1 follow-up): a second end report confirms the first only if its
+    /// sensor clock is at least 60 s later. The G7 wakes about every 300 s, so this means a later
+    /// wake, never a repeat within the same few-second connection or a re-delivered packet.
+    static let endConfirmationInterval: UInt32 = 60
 
     let serial: String
     /// Reported by the sensor in `0x52`; nil until then (no reading is published without it).
@@ -77,10 +85,8 @@ final class G7ReadingPipeline {
     private(set) var clock: G7SessionClock?
 
     private var pendingAnchorStart: Date?
-    /// Counts `beginConnection()` calls, so two end reports can be told apart by connection.
-    private var connectionNumber = 0
-    /// A reported end not yet confirmed by a second connection.
-    private var unconfirmedEnd: (connection: Int, end: G7SessionEnd)?
+    /// A reported end not yet confirmed by a second report; persisted by the controller.
+    private(set) var unconfirmedEnd: G7UnconfirmedSessionEnd?
     /// Every reading published for this serial in this process (seeded with the persisted newest
     /// one), ascending by sensor timestamp: dedupe and the date-order rule.
     private var published: [G7ReadingMark] = []
@@ -93,6 +99,7 @@ final class G7ReadingPipeline {
         reportedParameters: G7SensorLifetime.Parameters?,
         sessionStart: Date? = nil,
         sessionEnd: G7SessionEnd? = nil,
+        unconfirmedEnd: G7UnconfirmedSessionEnd? = nil,
         newestReading: G7ReadingMark? = nil,
         log: @escaping (String) -> Void
     ) {
@@ -100,6 +107,7 @@ final class G7ReadingPipeline {
         self.parameters = reportedParameters
         self.sessionStart = sessionStart
         self.sessionEnd = sessionEnd
+        self.unconfirmedEnd = sessionEnd == nil ? unconfirmedEnd : nil
         self.published = newestReading.map { [$0] } ?? []
         self.log = log
     }
@@ -117,7 +125,6 @@ final class G7ReadingPipeline {
 
     /// A new physical connection: the previous anchor and any raw frames belong to the old one.
     func beginConnection() {
-        connectionNumber += 1
         clock = nil
         pendingBackfillFrames.removeAll()
         backfillBatch.removeAll()
@@ -169,7 +176,7 @@ final class G7ReadingPipeline {
         let state = sensorState(message.algorithmState, start: start, parameters: parameters, now: receivedAt)
         output.state = state
         if let end = G7SensorStatus.sessionEnd(for: state, algorithmState: message.algorithmState) {
-            noteReportedEnd(end)
+            noteReportedEnd(end, sensorClock: message.sensorClock)
             if let sessionEnd {
                 output.state = sessionEnd.state
                 return output
@@ -290,20 +297,25 @@ final class G7ReadingPipeline {
     }
 
     /// Safety review N1: one packet never ends a session. A status-0 end report is latched only when a
-    /// second, separate connection reports an end again (any status-0 report of a continuing session in
-    /// between clears the first one, in `handleGlucose`).
-    private func noteReportedEnd(_ end: G7SessionEnd) {
+    /// second one arrives at least `endConfirmationInterval` of sensor time after the first (any
+    /// status-0 report of a continuing session in between clears the first one, in `handleGlucose`).
+    /// A second report sooner than that (same connection, re-delivered packet) or with an earlier
+    /// sensor clock neither confirms nor replaces the first.
+    private func noteReportedEnd(_ end: G7SessionEnd, sensorClock: UInt32) {
         guard let first = unconfirmedEnd else {
-            unconfirmedEnd = (connectionNumber, end)
-            log("sensor reported the session over (\(end.rawValue)); it ends if the next connection reports it again")
+            unconfirmedEnd = G7UnconfirmedSessionEnd(end: end, sensorClock: sensorClock)
+            log("sensor reported the session over (\(end.rawValue)) at sensor time \(sensorClock); it ends if a later wake reports it again")
             return
         }
-        guard first.connection != connectionNumber else { return }
+        guard sensorClock >= first.sensorClock, sensorClock - first.sensorClock >= Self.endConfirmationInterval else {
+            log("sensor reported the session over again at sensor time \(sensorClock), not \(Self.endConfirmationInterval) s after \(first.sensorClock); not yet confirmed")
+            return
+        }
         sessionEnd = end
         unconfirmedEnd = nil
         backfillBatch.removeAll()
         pendingBackfillFrames.removeAll()
-        log("session ended (\(end.rawValue)): reported on two separate connections")
+        log("session ended (\(end.rawValue)): reported at sensor times \(first.sensorClock) and \(sensorClock)")
     }
 
     private func liveReading(from message: G7GlucoseMessage, start: Date, session: SensorSession, now: Date) -> LiveOutcome {

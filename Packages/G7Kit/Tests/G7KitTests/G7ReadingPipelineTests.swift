@@ -341,9 +341,9 @@ final class G7ReadingPipelineTests: XCTestCase {
         XCTAssertEqual(restoredOutput.state, .expired)
     }
 
-    /// N1: two end reports on the same connection, or separated by a status-0 report of a running
-    /// session, do not end it; two consecutive connections do.
-    func test_S5_endNeedsTwoSeparateConsecutiveConnections() {
+    /// N1: two end reports less than 60 s of sensor time apart (one connection), or separated by a
+    /// status-0 report of a running session, do not end it; two reports from later wakes do.
+    func test_S5_endNeedsASecondReportAtLeast60sOfSensorTimeLater() {
         let t0 = receivedAt
         let pipeline = makePipeline()
         func send(_ clock: UInt32, state: UInt8, newConnection: Bool = true) -> G7ReadingPipeline.Output {
@@ -358,7 +358,55 @@ final class G7ReadingPipelineTests: XCTestCase {
         _ = send(200_900, state: 0x18)
         XCTAssertFalse(pipeline.sessionEnded, "the first report was cleared by the running-session report")
         _ = send(201_200, state: 0x01)
-        XCTAssertEqual(pipeline.sessionEnd, .stopped, "two consecutive connections (the latest end is kept)")
+        XCTAssertEqual(pipeline.sessionEnd, .stopped, "two consecutive wakes (the latest end is kept)")
+
+        // The boundary: 59 s later does not confirm, 60 s later does; an earlier clock never does.
+        let boundary = makePipeline()
+        func report(_ clock: UInt32) {
+            boundary.beginConnection()
+            _ = boundary.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: nil, state: 0x19)), receivedAt: arrival(clock, t0: t0))
+        }
+        report(300_000)
+        XCTAssertEqual(boundary.unconfirmedEnd, G7UnconfirmedSessionEnd(end: .sensorFailed, sensorClock: 300_000))
+        report(300_059)
+        XCTAssertFalse(boundary.sessionEnded, "59 s of sensor time")
+        XCTAssertEqual(boundary.unconfirmedEnd?.sensorClock, 300_000, "a too-early report does not replace the first")
+        report(300_060)
+        XCTAssertEqual(boundary.sessionEnd, .sensorFailed, "60 s")
+        XCTAssertNil(boundary.unconfirmedEnd)
+
+        let restored = G7ReadingPipeline(serial: serial, reportedParameters: tenDayParameters, sessionStart: t0,
+                                         unconfirmedEnd: G7UnconfirmedSessionEnd(end: .expired, sensorClock: 300_000)) { _ in }
+        restored.beginConnection()
+        _ = restored.handleGlucose(glucose(Fixture.glucose(sensorClock: 299_000, age: 5, glucose: nil, state: 0x18)), receivedAt: arrival(299_000, t0: t0))
+        XCTAssertFalse(restored.sessionEnded, "a report with an earlier sensor clock never confirms")
+    }
+
+    /// N1 follow-up (probe P8c with relaunch): the first end report survives in the pairing record, so
+    /// a report after the app was terminated and relaunched confirms it.
+    func test_S5_unconfirmedEndSurvivesARelaunch() throws {
+        let t0 = receivedAt
+        let first = makePipeline()
+        first.beginConnection()
+        _ = first.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: nil, state: 0x19)), receivedAt: arrival(200_000, t0: t0))
+        let pending = try XCTUnwrap(first.unconfirmedEnd)
+
+        let relaunched = G7ReadingPipeline(serial: serial, reportedParameters: tenDayParameters, sessionStart: first.sessionStart,
+                                           unconfirmedEnd: pending) { _ in }
+        relaunched.beginConnection()
+        let output = relaunched.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_300, age: 5, glucose: nil, state: 0x19)), receivedAt: arrival(200_300, t0: t0))
+        XCTAssertEqual(relaunched.sessionEnd, .sensorFailed)
+        XCTAssertEqual(output.state, .failed(reason: G7FailureReason.sensorFailed))
+
+        // A running-session report after the relaunch clears the restored first report instead.
+        let cleared = G7ReadingPipeline(serial: serial, reportedParameters: tenDayParameters, sessionStart: first.sessionStart,
+                                        unconfirmedEnd: pending) { _ in }
+        cleared.beginConnection()
+        _ = cleared.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_300, age: 5, glucose: 120, state: 0x06)), receivedAt: arrival(200_300, t0: t0))
+        XCTAssertNil(cleared.unconfirmedEnd)
+        cleared.beginConnection()
+        _ = cleared.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_600, age: 5, glucose: nil, state: 0x19)), receivedAt: arrival(200_600, t0: t0))
+        XCTAssertFalse(cleared.sessionEnded)
     }
 
     // MARK: - S2
