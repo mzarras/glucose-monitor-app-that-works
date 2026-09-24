@@ -91,16 +91,19 @@ final class TrioCoordinator {
     }
 
     /// docs/trio-bridge.md "Heartbeat wiring": publish the sensor as Trio's heartbeat only while
-    /// there is an authenticated pairing (`target` non-nil) and the bridge is on; otherwise, with
+    /// there is an authenticated pairing (`peripheral` non-nil) and the bridge is on; otherwise, with
     /// the bridge on, remove the keys (also stale ones another app left). With the bridge off this
     /// app does not touch Trio's App Group. Call after pairing, forgetting and every state change.
-    func updateHeartbeat(target: G7HeartbeatTarget?) async {
+    func updateHeartbeat(_ desired: TrioHeartbeatPeripheral?) async {
         guard let bridge = activeBridge else { return }
-        let desired = target.map {
-            TrioHeartbeatPeripheral(peripheralIdentifier: $0.peripheralIdentifier, serviceUUID: $0.serviceUUID, receiveCharacteristicUUID: $0.characteristicUUID)
-        }
         guard !heartbeatInSync || desired != heartbeatWritten else { return }
         await writeHeartbeat(desired, on: bridge)
+    }
+
+    /// G7Kit's heartbeat target (the paired sensor's peripheral identifier, the G7 service and its
+    /// Receive_Authentication characteristic, as xDrip4iOS 7.1.0 publishes them) in TrioBridge's form.
+    static func heartbeatPeripheral(for target: G7HeartbeatTarget) -> TrioHeartbeatPeripheral {
+        TrioHeartbeatPeripheral(peripheralIdentifier: target.peripheralIdentifier, serviceUUID: target.serviceUUID, receiveCharacteristicUUID: target.characteristicUUID)
     }
 
     private func writeHeartbeat(_ peripheral: TrioHeartbeatPeripheral?, on bridge: TrioBridge) async {

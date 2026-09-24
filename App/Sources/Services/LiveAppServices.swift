@@ -515,20 +515,12 @@ final class LiveAppServices: AppServices {
     }
 
     func updateStorageAvailability() {
-        let held = sensorPipeline.heldReadingCount
-        if productionStore == nil {
-            if !UIApplication.shared.isProtectedDataAvailable {
-                storage.availability = .waitingForFirstUnlock(heldReadings: held)
-            } else if let storeOpenError {
-                storage.availability = .failed(message: storeOpenError)
-            } else {
-                storage.availability = .opening
-            }
-        } else if let problem = sensorPipeline.storeProblem {
-            storage.availability = .failed(message: "Readings are held in memory: \(problem)")
-        } else {
-            storage.availability = .open
-        }
+        let next = StoreAvailability.derive(
+            storeOpen: productionStore != nil, protectedDataAvailable: UIApplication.shared.isProtectedDataAvailable,
+            openError: storeOpenError, insertProblem: sensorPipeline.storeProblem, heldReadings: sensorPipeline.heldReadingCount
+        )
+        guard next != storage.availability else { return }
+        storage.availability = next
         send(.storage)
     }
 
@@ -608,5 +600,20 @@ final class LiveAppServices: AppServices {
 
     func log(_ category: DiagnosticEvent.Category, _ message: String) {
         diagnostics.record(DiagnosticEvent(date: Date(), category: category, message: message))
+    }
+}
+
+extension StoreAvailability {
+    /// S5: what Settings and the storage banner show about the reading database.
+    static func derive(storeOpen: Bool, protectedDataAvailable: Bool, openError: String?, insertProblem: String?, heldReadings: Int) -> StoreAvailability {
+        if !storeOpen {
+            if !protectedDataAvailable { return .waitingForFirstUnlock(heldReadings: heldReadings) }
+            if let openError { return .failed(message: openError) }
+            return .opening
+        }
+        if let insertProblem {
+            return .failed(message: "\(heldReadings) reading(s) are held in memory: \(insertProblem)")
+        }
+        return .open
     }
 }

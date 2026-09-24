@@ -44,7 +44,8 @@ extension LiveAppServices {
     /// sensor state. Only for the live sensor (never during a DEBUG replay run).
     func updateTrioHeartbeat() async {
         guard isBootstrapped, !isReplaying else { return }
-        await trioCoordinator.updateHeartbeat(target: await g7.heartbeatTarget)
+        let target = await g7.heartbeatTarget
+        await trioCoordinator.updateHeartbeat(target.map(TrioCoordinator.heartbeatPeripheral(for:)))
     }
 
     // MARK: - Uploads

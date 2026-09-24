@@ -44,6 +44,7 @@ final class UploadCoordinator {
     private var share: Slot?
     private var configuration: Configuration?
     private var retryTask: Task<Void, Never>?
+    private var applying: Task<Void, Never>?
 
     /// One live uploader and what it was built for.
     private struct Slot {
@@ -68,8 +69,20 @@ final class UploadCoordinator {
 
     // MARK: - Configuration
 
-    /// Creates, replaces or releases uploaders to match `configuration`.
+    /// Creates, replaces or releases uploaders to match `configuration`. Calls run one after the
+    /// other (a second call waits for the first), so two quick changes cannot create two uploaders
+    /// for one queue file.
     func apply(_ configuration: Configuration) async {
+        let previous = applying
+        let task = Task { [weak self] in
+            await previous?.value
+            await self?.reconcile(configuration)
+        }
+        applying = task
+        await task.value
+    }
+
+    private func reconcile(_ configuration: Configuration) async {
         self.configuration = configuration
         nightscoutSummary.isEnabled = configuration.nightscoutEnabled
         nightscoutSummary.isConfigured = configuration.nightscoutSite != nil && configuration.nightscoutHasToken
@@ -82,19 +95,21 @@ final class UploadCoordinator {
         let nightscoutIdentity = configuration.nightscoutEnabled && configuration.liveOutputsAllowed
             ? configuration.nightscoutSite.map { "nightscout|\($0.baseURL.absoluteString)" } : nil
         if nightscoutIdentity != nightscout?.identity {
-            let old = nightscout
-            nightscout = nil
-            await release(old)
+            await release(.nightscout)
             nightscoutSummary.status = nil
             nightscoutSummary.setupError = nil
             if let site = configuration.nightscoutSite, let identity = nightscoutIdentity {
-                do throws(QueueFileInUse) {
-                    let uploader = try ReadingUploader.nightscout(
+                let credentials = self.credentials, queueDirectory = self.queueDirectory, deviceName = self.deviceName
+                let transport = self.transport, diagnostics = self.diagnostics
+                switch await Self.claim({ () throws(QueueFileInUse) -> ReadingUploader in
+                    try ReadingUploader.nightscout(
                         site: site, credentials: credentials, deviceName: deviceName, queueDirectory: queueDirectory,
                         transport: transport, log: diagnostics
                     )
+                }) {
+                case .success(let uploader):
                     nightscout = makeSlot(uploader, identity: identity, isNightscout: true)
-                } catch {
+                case .failure(let error):
                     nightscoutSummary.setupError = Self.describe(error)
                     scheduleRetry()
                 }
@@ -105,19 +120,22 @@ final class UploadCoordinator {
         let shareIdentity = configuration.shareEnabled && configuration.liveOutputsAllowed
             ? configuration.shareReceiverSerial.map { "share|\(configuration.shareRegion.rawValue)|\($0)" } : nil
         if shareIdentity != share?.identity {
-            let old = share
-            share = nil
-            await release(old)
+            await release(.share)
             shareSummary.status = nil
             shareSummary.setupError = nil
             if let serial = configuration.shareReceiverSerial, let identity = shareIdentity {
-                do throws(QueueFileInUse) {
-                    let uploader = try ReadingUploader.dexcomShare(
-                        server: configuration.shareRegion == .us ? .us : .outsideUS, receiverSerialNumber: serial,
-                        credentials: credentials, queueDirectory: queueDirectory, transport: transport, log: diagnostics
+                let credentials = self.credentials, queueDirectory = self.queueDirectory
+                let transport = self.transport, diagnostics = self.diagnostics
+                let server: DexcomShareServer = configuration.shareRegion == .us ? .us : .outsideUS
+                switch await Self.claim({ () throws(QueueFileInUse) -> ReadingUploader in
+                    try ReadingUploader.dexcomShare(
+                        server: server, receiverSerialNumber: serial, credentials: credentials, queueDirectory: queueDirectory,
+                        transport: transport, log: diagnostics
                     )
+                }) {
+                case .success(let uploader):
                     share = makeSlot(uploader, identity: identity, isNightscout: false)
-                } catch {
+                case .failure(let error):
                     shareSummary.setupError = Self.describe(error)
                     scheduleRetry()
                 }
@@ -150,15 +168,47 @@ final class UploadCoordinator {
         }
     }
 
-    /// Releases an uploader and its status task before any replacement is created, so the queue
-    /// file is free again (NightscoutKit: one uploader per queue file).
-    private func release(_ slot: Slot?) async {
-        guard let current = slot else { return }
-        current.statusTask.cancel()
-        await current.statusTask.value
+    private enum Destination {
+        case nightscout, share
     }
 
-    /// `QueueFileInUse`: a released uploader is still finishing a flush. Try again shortly.
+    /// Releases an uploader and its status task before any replacement is created, so the queue
+    /// file is free again (NightscoutKit: one uploader per queue file). The slot is taken out of
+    /// its property here, so nothing in the caller keeps the old uploader alive.
+    private func release(_ destination: Destination) async {
+        let slot: Slot?
+        switch destination {
+        case .nightscout:
+            slot = nightscout
+            nightscout = nil
+        case .share:
+            slot = share
+            share = nil
+        }
+        guard let slot else { return }
+        slot.statusTask.cancel()
+        await slot.statusTask.value
+    }
+
+    /// Creates an uploader, waiting up to one second for a released one to go away: its last status
+    /// callback or a flush in progress can hold it for a moment after release. Beyond that the
+    /// caller surfaces `QueueFileInUse` (S5) and retries later.
+    private static func claim(_ make: () throws(QueueFileInUse) -> ReadingUploader) async -> Result<ReadingUploader, QueueFileInUse> {
+        for _ in 0..<19 {
+            do throws(QueueFileInUse) {
+                return .success(try make())
+            } catch {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        do throws(QueueFileInUse) {
+            return .success(try make())
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    /// `QueueFileInUse` for longer: a released uploader is still finishing a flush. Try again shortly.
     private func scheduleRetry() {
         guard retryTask == nil else { return }
         retryTask = Task { [weak self] in
