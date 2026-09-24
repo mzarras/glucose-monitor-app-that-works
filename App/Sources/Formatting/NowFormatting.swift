@@ -155,6 +155,28 @@ enum SensorStatusText {
         }
     }
 
+    /// Now screen SENSOR row with the session: while the state is a connection step or a transient
+    /// problem, the session still gives the day and time left ("day 6 of 10 · 4d 7h left ·
+    /// readings interrupted").
+    static func row(_ state: SensorState, session: SensorSession?, now: Date, context: DisplayContext = .current) -> String {
+        guard let session else { return row(state, now: now, context: context) }
+        switch state {
+        case .searching, .connecting, .authenticating, .bluetoothUnavailable, .failed:
+            if case .failed(let failure) = state, failure.requiresSensorReplacement || failure.requiresPairing || failure.raisesSensorAlert {
+                return row(state, now: now, context: context)
+            }
+            let base = row(.active(sessionStart: session.start, expiresAt: session.expiresAt), now: now, context: context)
+            return "\(base) · \(connection(state))"
+        case .notPaired, .warmingUp, .active, .gracePeriod, .expired, .error, .calibrationNeeded, .calibrationError:
+            return row(state, now: now, context: context)
+        }
+    }
+
+    /// Settings › Sensor "Session": "started Sep 17, 8:05 PM · ends Sep 27, 8:05 PM".
+    static func session(_ session: SensorSession, now: Date, context: DisplayContext = .current) -> String {
+        "started \(TimeText.shortDay(session.start, context)), \(TimeText.time(session.start, context)) · ends \(TimeText.shortDay(session.expiresAt, context)), \(TimeText.time(session.expiresAt, context))"
+    }
+
     /// Short connection word, lower case.
     static func connection(_ state: SensorState) -> String {
         switch state {

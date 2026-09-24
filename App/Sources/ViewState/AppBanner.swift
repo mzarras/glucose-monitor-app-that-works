@@ -9,6 +9,8 @@ struct AppBanner: Equatable, Identifiable, Sendable {
     enum Kind: Int, Equatable, Hashable, CaseIterable, Sendable {
         // Order = display order within a severity.
         case missedReadings
+        /// The reading database isn't open: readings are held in memory or can't be saved (S5).
+        case storageUnavailable
         case bluetoothOff
         case bluetoothUnauthorized
         case bluetoothUnavailable
@@ -26,9 +28,21 @@ struct AppBanner: Equatable, Identifiable, Sendable {
         case sensorExpired
         case sensorExpiring
         case trioBridgeFailing
+        /// Trio's heartbeat keys couldn't be written: Trio may not loop in the background.
+        case trioHeartbeatFailing
         case notificationsDisabled
+        /// The notification permission prompt hasn't been answered.
+        case notificationsNotSetUp
+        /// Banners, sounds or Time Sensitive are off for this app.
+        case notificationSettingsIncomplete
         case alarmVolumeTooLow
         case urgentLowAlarmOff
+        /// iOS 26+: alarms haven't been asked for yet (D26).
+        case urgentLowAlarmNotSetUp
+        /// Scheduling the urgent-low system alarm failed; urgent low fell back (D26).
+        case urgentLowAlarmFailed
+        /// Fewer alert repeats are scheduled than planned.
+        case alertRepeatsShort
         case nightscoutUploadFailing
         case shareUploadFailing
         case forceQuitGap
@@ -52,6 +66,10 @@ struct AppBanner: Equatable, Identifiable, Sendable {
         /// Pair the worn sensor again: Settings › Sensor, code entry → `pairAgain(code:)`.
         case pairAgain
         case openCalibration
+        /// Ask for notification permission (`AppServices.requestNotificationAuthorization`).
+        case requestNotifications
+        /// Ask to allow alarms for urgent low (`AppServices.requestUrgentLowAlarmAuthorization`, D26).
+        case requestUrgentLowAlarm
     }
 
     let kind: Kind
@@ -166,7 +184,111 @@ enum AppBanners {
                 action: .dismissForceQuitNotice, actionTitle: "Got it"))
         }
 
-        return banners.sorted { ($0.severity.rawValue, $0.kind.rawValue) < ($1.severity.rawValue, $1.kind.rawValue) }
+        banners += phase2Banners(health, context: context)
+
+        // One banner per kind (the list is keyed by kind): the first, i.e. the more specific, wins.
+        var seen = Set<AppBanner.Kind>()
+        return banners
+            .filter { seen.insert($0.kind).inserted }
+            .sorted { ($0.severity.rawValue, $0.kind.rawValue) < ($1.severity.rawValue, $1.kind.rawValue) }
+    }
+
+    /// Problems the `AppServices` summaries report beyond the Phase 1 set: uploads switched on but not
+    /// set up, the other alert-delivery problems, Trio's heartbeat, the database, Bluetooth permission.
+    private static func phase2Banners(_ health: ServiceHealth, context: DisplayContext) -> [AppBanner] {
+        var banners: [AppBanner] = []
+
+        switch health.storage {
+        case .waitingForFirstUnlock(let held):
+            banners.append(AppBanner(
+                kind: .storageUnavailable, severity: .critical,
+                title: "Readings aren't being saved yet",
+                detail: "The phone hasn't been unlocked since it restarted, so the reading database is locked. \(held == 1 ? "1 reading is" : "\(held) readings are") held until it opens.",
+                action: nil, actionTitle: nil))
+        case .failed(let message):
+            banners.append(AppBanner(
+                kind: .storageUnavailable, severity: .critical,
+                title: "Readings can't be saved",
+                detail: "The reading database couldn't be opened: \(message)",
+                action: nil, actionTitle: nil))
+        case .opening, .open:
+            break
+        }
+
+        switch health.bluetoothAuthorization {
+        case .denied, .restricted:
+            banners.append(AppBanner(
+                kind: .bluetoothUnauthorized, severity: .critical,
+                title: "Bluetooth access not allowed",
+                detail: "This app can't talk to the sensor. Allow Bluetooth for it in iOS Settings.",
+                action: .openAppSettings, actionTitle: "Open Settings"))
+        case .notDetermined, .allowed:
+            break
+        }
+
+        if let error = health.trioHeartbeatError {
+            banners.append(AppBanner(
+                kind: .trioHeartbeatFailing, severity: .warning,
+                title: "Trio may not loop in the background",
+                detail: "The sensor couldn't be registered as Trio's heartbeat: \(error)",
+                action: .openTrioSettings, actionTitle: "Trio settings"))
+        }
+
+        if case .notSetUp(let missing) = health.nightscout {
+            banners.append(AppBanner(
+                kind: .nightscoutUploadFailing, severity: .warning,
+                title: "Nightscout upload isn't set up",
+                detail: "Upload is on, but nothing is being sent. \(missing)",
+                action: .openSharingSettings, actionTitle: "Sharing"))
+        }
+        if case .notSetUp(let missing) = health.dexcomShare {
+            banners.append(AppBanner(
+                kind: .shareUploadFailing, severity: .warning,
+                title: "Dexcom Share upload isn't set up",
+                detail: "Upload is on, but Dexcom Follow users get nothing. \(missing)",
+                action: .openSharingSettings, actionTitle: "Sharing"))
+        }
+
+        var settingsOff: [String] = []
+        for issue in health.deliveryIssues {
+            switch issue {
+            case .notificationsNotRequested:
+                banners.append(AppBanner(
+                    kind: .notificationsNotSetUp, severity: .warning,
+                    title: "Notifications aren't set up",
+                    detail: "Alerts can't reach you while the app is in the background until notifications are allowed.",
+                    action: .requestNotifications, actionTitle: "Allow notifications"))
+            case .notificationAlertsOff: settingsOff.append("banners")
+            case .notificationSoundsOff: settingsOff.append("sounds")
+            case .timeSensitiveOff: settingsOff.append("Time Sensitive")
+            case .urgentLowAlarmNotRequested:
+                banners.append(AppBanner(
+                    kind: .urgentLowAlarmNotSetUp, severity: .warning,
+                    title: "Urgent low alarm isn't set up",
+                    detail: "Allow alarms so urgent low rings like a clock alarm — on silent, in Focus, and while the app is in the background.",
+                    action: .requestUrgentLowAlarm, actionTitle: "Allow alarms"))
+            case .urgentLowAlarmFailed(let message):
+                banners.append(AppBanner(
+                    kind: .urgentLowAlarmFailed, severity: .critical,
+                    title: "Urgent low alarm couldn't be scheduled",
+                    detail: "Urgent low uses a notification and the in-app sound instead. \(message)",
+                    action: .openAlertDeliverySettings, actionTitle: "Alert delivery"))
+            case .repeatsNotScheduled(let alert, let missing):
+                banners.append(AppBanner(
+                    kind: .alertRepeatsShort, severity: .warning,
+                    title: "Some alert repeats couldn't be scheduled",
+                    detail: "\(alert): \(missing) \(missing == 1 ? "repeat" : "repeats") fewer than planned while the app is in the background.",
+                    action: .openAlertDeliverySettings, actionTitle: "Alert delivery"))
+            }
+        }
+        if !settingsOff.isEmpty {
+            banners.append(AppBanner(
+                kind: .notificationSettingsIncomplete, severity: .warning,
+                title: "Alerts may not show or sound",
+                detail: "Turned off for this app in iOS Settings: \(settingsOff.joined(separator: ", ")). Turn them on so alerts reach you.",
+                action: .openAppSettings, actionTitle: "Open Settings"))
+        }
+        return banners
     }
 
     /// No live reading for 15 min while the sensor should be delivering (S5). Not raised when no

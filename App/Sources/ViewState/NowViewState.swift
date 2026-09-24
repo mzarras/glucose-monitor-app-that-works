@@ -1,5 +1,6 @@
-// Everything the Now screen shows (HANDOFF §7.3.1). Display-ready; Phase 2 fills it from the
-// store, the CGM source, GlucoseStats and ServiceHealth. The screen classifies staleness itself
+// Everything the Now screen shows (HANDOFF §7.3.1). Display-ready; `AppModel` fills it from
+// `AppServices` (latest live reading, stored readings, sensor state, calibrations), GlucoseStats
+// ("Today so far") and ServiceHealth. The screen classifies staleness itself
 // with a live clock (GlucoseDisplayState), so an old reading goes stale on screen even if nothing
 // updates this state (S5).
 
@@ -34,6 +35,9 @@ struct NowViewState: Equatable, Sendable {
     /// if its state has moved to a transient failure (e.g. the phone clock). Maintained with
     /// `CalibrationNeed.update(previous:sensorState:)` on every sensor-state change.
     var sensorNeedsCalibration: Bool = false
+    /// The authenticated session (for the SENSOR row's "day X of 10 · time left" while the state is
+    /// a connection step or a transient failure); nil when none is valid (D28).
+    var sensorSession: SensorSession? = nil
 
     /// The DEBUG/REPLAY banner. Computed, not stored, so no code path can clear it in a DEBUG
     /// build; nil in Release.

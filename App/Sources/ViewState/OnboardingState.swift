@@ -1,5 +1,5 @@
-// Onboarding / pairing (HANDOFF §4.5, §4.6, §7.3.5, §8A, PROGRESS D7). Phase 2 drives `step`
-// and fills permission and import progress from the system and NightscoutKit.
+// Onboarding / pairing (HANDOFF §4.5, §4.6, §7.3.5, §8A, PROGRESS D7, D35). `AppModel` drives
+// `step` and fills permissions, import progress and pairing from `AppServices` (`OnboardingMapping`).
 
 import Foundation
 import GlucoseCore
@@ -55,6 +55,15 @@ struct ImportProgress: Equatable, Sendable {
     var covered: DateInterval?
     var isFinished: Bool
     var errorMessage: String?
+    /// Stopped by the person; what was imported is kept.
+    var isCancelled: Bool = false
+    /// Readings dated in the future that were rejected (a wrong time zone or clock fault; PROGRESS
+    /// Phase 2 must-do: show `rejectedFutureDated`).
+    var rejectedFutureDated: Int = 0
+    /// Entries skipped before storing, and readings the store already had, as one line; nil if none.
+    var skippedNote: String? = nil
+
+    var isRunning: Bool { !isFinished && !isCancelled && errorMessage == nil }
 }
 
 enum PairingState: Equatable, Sendable {
@@ -64,6 +73,8 @@ enum PairingState: Equatable, Sendable {
     /// The source's failure (D36), e.g. `bluetoothPairingIncomplete`, `pairingRejected`,
     /// `pairingCodeNeeded`; shown with its message.
     case failed(SensorFailure)
+    /// The app refused the code before anything reached the sensor (`PairingError`).
+    case couldNotStart(String)
     case paired
 }
 
@@ -81,6 +92,12 @@ struct OnboardingState: Equatable, Sendable {
     var pairing: PairingState
     /// For the warm-up countdown on the last step.
     var sensorState: SensorState
+    /// A Nightscout site is saved (import from it without typing it again).
+    var nightscoutSiteURL: String? = nil
+    var nightscoutHasToken: Bool = false
+    /// Why saving the Nightscout site or Share credentials failed, for the step that asked.
+    var nightscoutMessage: String? = nil
+    var shareMessage: String? = nil
 
     var alarmsAvailable: Bool { urgentLowAlarm.isAvailable }
     var visibleSteps: [OnboardingStep] { OnboardingStep.visibleSteps(alarmsAvailable: alarmsAvailable) }
@@ -97,6 +114,10 @@ struct OnboardingState: Equatable, Sendable {
         pairing: .idle,
         sensorState: .notPaired
     )
+
+    /// PROGRESS D35 (review): another primary-mode G7 app on this phone can disconnect this one or
+    /// have a reading attributed to it; only one app may be the sensor's primary device.
+    static let otherG7AppsWarning = "Remove or turn off every other app that connects to G7 sensors — the Dexcom G7 app, xDrip4iOS, and Trio's or Loop's own G7 connection. Only one app can be the sensor's primary device; a second one interrupts readings and can make them unreliable."
 }
 
 enum OnboardingText {

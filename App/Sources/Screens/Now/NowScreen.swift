@@ -33,11 +33,14 @@ struct NowScreen: View {
     let state: NowViewState
     let calibration: CalibrationViewState
     let actions: NowActions
+    /// The clock to classify against (AppModel.clock); read on every 15-second tick and every
+    /// state change.
+    var clock: @MainActor () -> Date = { Date() }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 15)) { timeline in
+        TimelineView(.periodic(from: .now, by: 15)) { _ in
             ScrollView {
-                NowContent(state: state, calibration: calibration, now: timeline.date, actions: actions)
+                NowContent(state: state, calibration: calibration, now: clock(), actions: actions)
             }
         }
         .editorialScreen()
@@ -61,6 +64,7 @@ struct NowContent: View {
                 VStack(spacing: 8) {
                     ForEach(banners) { banner in
                         BannerView(banner: banner, perform: actions.performBannerAction)
+                            .accessibilityIdentifier("banner.\(banner.kind)")
                     }
                 }
             }
@@ -69,6 +73,7 @@ struct NowContent: View {
             stateLine(display)
             chartSection
             TodaySoFarView(today: state.today)
+                .accessibilityIdentifier("now.today")
             statusRows
         }
         .padding(.horizontal, Layout.sideMargin)
@@ -172,6 +177,7 @@ struct NowContent: View {
             Text(verbatim: line.text)
                 .monoLabel(size: 11)
                 .foregroundStyle(Theme.ink)
+                .accessibilityIdentifier("now.stateLine")
         }
     }
 
@@ -220,8 +226,10 @@ struct NowContent: View {
         VStack(spacing: 6) {
             Hairline()
                 .padding(.bottom, 4)
-            StatusRow(label: "SENSOR", value: SensorStatusText.row(state.sensorState, now: now, context: context))
+            StatusRow(label: "SENSOR", value: SensorStatusText.row(state.sensorState, session: state.sensorSession, now: now, context: context))
+                .accessibilityIdentifier("now.sensorRow")
             StatusRow(label: "TRIO", value: TrioStatusText.row(state.health.trio, context: context), valueIsAlert: isTrioFailing)
+                .accessibilityIdentifier("now.trioRow")
         }
     }
 
@@ -286,6 +294,7 @@ struct NowHeroView: View {
             }
             .frame(maxWidth: .infinity, minHeight: 106, alignment: .leading)
             .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("now.hero.message")
         }
     }
 
@@ -320,6 +329,7 @@ struct NowHeroView: View {
         .accessibilityLabel(Text(verbatim: HeroSpeech.label(for: reading, now: now)))
         .accessibilityValue(Text(verbatim: reading.delta.map(DeltaText.spoken) ?? ""))
         .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityIdentifier("now.hero.reading")
     }
 
     private func sideBySide(_ reading: LatestReading) -> some View {
