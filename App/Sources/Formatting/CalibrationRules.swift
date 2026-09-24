@@ -192,6 +192,24 @@ enum CalibrationRules {
         }
     }
 
+    /// Review minor 2: the outcome text in context. A refusal for `invalidTime` while the phone's
+    /// clock is known to be wrong is explained as the clock problem, not as an old fingerstick.
+    static func outcomeText(_ outcome: CalibrationSubmission.Outcome, state: CalibrationViewState, now: Date) -> (title: String, detail: String) {
+        if case .refused(.invalidTime) = outcome, isClockMismatch(state, now: now) {
+            return ("Not sent", clockMismatchReason)
+        }
+        return outcomeText(outcome)
+    }
+
+    /// The sensor reports a clock mismatch, the latch holds one for the latest reading, or the
+    /// latest reading is dated ahead of the phone's clock.
+    static func isClockMismatch(_ state: CalibrationViewState, now: Date) -> Bool {
+        if case .failed(let failure) = state.sensorState, failure.kind == .clockMismatch { return true }
+        guard let latest = state.latestLiveReading else { return false }
+        if state.clockMismatchLatchedFor == latest.date { return true }
+        return ClockMismatchLatch.update(latchedFor: nil, latest: latest, now: now) != nil
+    }
+
     static func refusalText(_ refusal: CalibrationRefusal) -> String {
         switch refusal {
         case .notPaired: return "No sensor is paired."
