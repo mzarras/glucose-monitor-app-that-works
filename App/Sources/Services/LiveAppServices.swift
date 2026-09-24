@@ -81,7 +81,7 @@ final class LiveAppServices: AppServices {
 
     private var observers: [UUID: AsyncStream<ServiceChange>.Continuation] = [:]
     private(set) var isBootstrapped = false
-    private var isBootstrapping = false
+    private var bootstrapTask: Task<Void, Never>?
     var g7Started = false
     private var storeOpenError: String?
     private var isOpeningStore = false
@@ -125,7 +125,13 @@ final class LiveAppServices: AppServices {
         historyImports = HistoryImportCoordinator(diagnostics: dependencies.diagnostics)
         sensorPipeline = ReadingPipeline(name: "sensor", source: dependencies.g7, diagnostics: dependencies.diagnostics, now: { Date() })
 
-        sensorPipeline.onChange = { [weak self] change in self?.send(change) }
+        sensorPipeline.onChange = { [weak self] change in
+            if change == .storage {
+                self?.updateStorageAvailability()
+            } else {
+                self?.send(change)
+            }
+        }
         sensorPipeline.onBatchProcessed = { [weak self] in self?.sensorBatchProcessed() }
         sensorPipeline.outputs.sensorStateProcessed = { [weak self] _ in
             Task {
@@ -409,18 +415,25 @@ final class LiveAppServices: AppServices {
         }
     }
 
-    /// Runs once, as soon as protected data is available. See the file comment.
+    /// Runs once, as soon as protected data is available (see the file comment). Concurrent callers
+    /// (launch, foreground, protected-data notification) all wait for the one bootstrap.
     func bootstrap() async {
-        guard !isBootstrapped, !isBootstrapping else { return }
-        guard UIApplication.shared.isProtectedDataAvailable else {
-            storage.availability = .waitingForFirstUnlock(heldReadings: sensorPipeline.heldReadingCount)
-            log(.app, "waiting for the first unlock: preferences, Keychain and database are unreadable until then")
-            send(.storage)
+        if isBootstrapped { return }
+        if let bootstrapTask {
+            await bootstrapTask.value
             return
         }
-        isBootstrapping = true
-        defer { isBootstrapping = false }
+        guard UIApplication.shared.isProtectedDataAvailable else {
+            updateStorageAvailability()
+            log(.app, "waiting for the first unlock: preferences, Keychain and database are unreadable until then")
+            return
+        }
+        let task = Task { await self.performBootstrap() }
+        bootstrapTask = task
+        await task.value
+    }
 
+    private func performBootstrap() async {
         diagnostics.loadSaved()
         accent = preferences.accent
         widget?.accent = accent
@@ -460,7 +473,9 @@ final class LiveAppServices: AppServices {
         await refreshStoredSensor()
         await updateTrioHeartbeat()
         updateClockMismatchLatch(now: Date())
-        send(.health)
+        for change in [ServiceChange.readings, .sensor, .calibration, .trio, .uploads, .historyImport, .alertSettings, .alertDelivery, .storage, .health, .appearance] {
+            send(change)
+        }
 
         #if DEBUG
         if let launchReplay {
@@ -513,6 +528,8 @@ final class LiveAppServices: AppServices {
             observeStoreChanges(store)
             log(.store, "database open at \(databaseURL.lastPathComponent)")
             updateStorageAvailability()
+            await sensorPipeline.storeDidChange()
+            await sensorPipeline.publishWidget()
             await reseedTrio()
             await purgeIfDue()
             await refreshStorageSummary()
