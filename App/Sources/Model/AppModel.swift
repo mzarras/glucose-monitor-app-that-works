@@ -127,7 +127,8 @@ final class AppModel {
         let model = AppModel(services: services, preferences: preferences, clock: clock)
         model.calendar = calendar
         model.rebuildAll()
-        if OnboardingMapping.showsAtLaunch(sensorState: services.sensorState, onboardingCompleted: preferences.onboardingCompleted,
+        if OnboardingMapping.showsAtLaunch(sensorState: services.sensorState, hasStoredSensor: services.hasStoredSensorAdapter,
+                                           onboardingCompleted: preferences.onboardingCompleted,
                                            replayActive: services.replay.activeScenario != nil, arguments: arguments) {
             model.presentOnboarding(at: .welcome)
         }
@@ -350,7 +351,8 @@ final class AppModel {
         case .warmingUp, .active, .gracePeriod, .expired, .failed, .error, .calibrationNeeded, .calibrationError:
             pairingInProgress = false
         }
-        if state != .notPaired { preferences?.onboardingCompleted = true }
+        let sensorIsSetUp = OnboardingMapping.sensorIsSetUp(sensorState: state, hasStoredSensor: hasStoredSensor)
+        if sensorIsSetUp { preferences?.onboardingCompleted = true }
 
         settings.sensor = SettingsMapping.sensor(state: state, session: services.sensorSession, canStopSession: services.canStopSession,
                                                  bluetooth: services.bluetoothAuthorization, failureSince: failure?.since,
@@ -360,7 +362,7 @@ final class AppModel {
             onboarding.pairing = OnboardingMapping.pairing(current: onboarding.pairing, sensorState: state)
             // An existing sensor showed up before the person started onboarding (e.g. after an
             // update): nothing to set up.
-            if onboarding.step == .welcome, state != .notPaired, state != .searching {
+            if onboarding.step == .welcome, sensorIsSetUp {
                 self.onboarding = nil
             } else {
                 self.onboarding = onboarding

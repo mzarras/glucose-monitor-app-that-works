@@ -260,11 +260,25 @@ enum OnboardingMapping {
         }
     }
 
-    /// Onboarding is shown at launch when no sensor has ever been set up here, unless a replay run
-    /// is starting (DEBUG UI tests and demos), or when asked for (`-onboarding`).
-    static func showsAtLaunch(sensorState: SensorState, onboardingCompleted: Bool, replayActive: Bool, arguments: [String]) -> Bool {
+    /// Evidence that a sensor is set up on this phone: a stored sensor (G7Kit `hasStoredSensor`), or
+    /// a state only a paired sensor reports. Connection steps, Bluetooth problems and failures are no
+    /// evidence (the simulator, for one, reports Bluetooth unsupported with nothing paired).
+    static func sensorIsSetUp(sensorState: SensorState, hasStoredSensor: Bool) -> Bool {
+        if hasStoredSensor { return true }
+        switch sensorState {
+        case .warmingUp, .active, .gracePeriod, .calibrationNeeded, .calibrationError:
+            return true
+        case .notPaired, .searching, .connecting, .authenticating, .bluetoothUnavailable, .failed, .error, .expired:
+            return false
+        }
+    }
+
+    /// Onboarding is shown at launch when no sensor has been set up here and onboarding was never
+    /// completed, unless a replay run is starting (DEBUG UI tests and demos); or when asked for
+    /// (`-onboarding`).
+    static func showsAtLaunch(sensorState: SensorState, hasStoredSensor: Bool, onboardingCompleted: Bool, replayActive: Bool, arguments: [String]) -> Bool {
         if arguments.contains("-onboarding") { return true }
         if arguments.contains("-replayScenario") || replayActive { return false }
-        return !onboardingCompleted && sensorState == .notPaired
+        return !onboardingCompleted && !sensorIsSetUp(sensorState: sensorState, hasStoredSensor: hasStoredSensor)
     }
 }

@@ -426,6 +426,17 @@ final class AppModelWiringTests: XCTestCase {
         XCTAssertNil(launch(PreviewAppServices(sensorState: .notPaired), arguments: ["-replayScenario", "steady"], onboardingCompleted: false).onboarding,
                      "a replay run provides the sensor")
         XCTAssertNotNil(launch(PreviewAppServices(sensorState: activeSensor), arguments: ["-onboarding"]).onboarding)
+        // Bluetooth problems and connection steps are no evidence of a sensor (the simulator reports
+        // Bluetooth unsupported with nothing paired).
+        let noBluetooth = PreviewAppServices(sensorState: .bluetoothUnavailable(.unsupported))
+        let model = launch(noBluetooth, onboardingCompleted: false)
+        XCTAssertNotNil(model.onboarding)
+        noBluetooth.sensorState = .searching
+        model.apply(.sensor)
+        XCTAssertNotNil(model.onboarding, "not closed by a connection step")
+        noBluetooth.sensorState = activeSensor
+        model.apply(.sensor)
+        XCTAssertNil(model.onboarding, "an existing sensor showed up before onboarding started: closed")
     }
 
     /// Pairing in onboarding follows the sensor: in progress → failed (source's failure) → paired.
