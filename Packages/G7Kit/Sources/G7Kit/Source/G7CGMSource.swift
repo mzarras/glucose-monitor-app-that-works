@@ -135,6 +135,19 @@ public final class G7CGMSource: CalibratingCGMSource, @unchecked Sendable {
         try result.get()
     }
 
+    /// True when a sensor this phone has authenticated to is stored: route a code retry to
+    /// `pairAgain(code:)` (the same sensor), otherwise to `pair(code:)` (a first or new sensor). In
+    /// particular, a retry after the sensor authenticated during onboarding must use `pairAgain`:
+    /// `pair(code:)` treats the stored sensor as the previous one (its refusal is skipped, §2.2).
+    public var hasStoredSensor: Bool {
+        get async { await onQueue { self.controller.hasStoredSensor } }
+    }
+
+    /// The stored sensor's serial ("DXCMxx-" + 8 hex of the iOS identifier), nil when none is stored.
+    public var storedSensorSerial: String? {
+        get async { await onQueue { self.controller.storedSensorSerial } }
+    }
+
     /// Stops, deletes the pairing code and key, and reports `.notPaired`.
     public func forgetSensor() async {
         await onQueue { self.controller.forget() }
