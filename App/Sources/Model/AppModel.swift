@@ -118,12 +118,14 @@ final class AppModel {
         services: any AppServices,
         arguments: [String] = ProcessInfo.processInfo.arguments,
         preferences: AppUIPreferences = AppUIPreferences(),
+        calendar: Calendar = .current,
         clock: @escaping @MainActor () -> Date = { Date() }
     ) -> AppModel {
         #if DEBUG
         if arguments.contains("-resetOnboardingFlag") { preferences.onboardingCompleted = false }
         #endif
         let model = AppModel(services: services, preferences: preferences, clock: clock)
+        model.calendar = calendar
         model.rebuildAll()
         if OnboardingMapping.showsAtLaunch(sensorState: services.sensorState, onboardingCompleted: preferences.onboardingCompleted,
                                            replayActive: services.replay.activeScenario != nil, arguments: arguments) {
