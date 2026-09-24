@@ -98,6 +98,27 @@ final class NowFormattingTests: XCTestCase {
         }
     }
 
+    /// A newer reading that is also dated ahead of the phone's clock re-latches for that reading,
+    /// and stays latched after the clock passes its date.
+    func test_S5_newerFutureDatedReadingReLatchesTheMismatch() {
+        var state = NowViewState.empty
+        state.sensorState = activeSensor
+        let first = latest(.mgdl(105), ageMinutes: -600)
+        state.latestLiveReading = first
+        state = state.updatingClockMismatchLatch(now: t0)
+        XCTAssertEqual(state.clockMismatchLatchedFor, first.date)
+
+        let newer = latest(.mgdl(120), ageMinutes: -590)
+        state.latestLiveReading = newer
+        state = state.updatingClockMismatchLatch(now: t0)
+        XCTAssertEqual(state.clockMismatchLatchedFor, newer.date, "re-latched for the newer reading")
+        for clock in [t0, newer.date, newer.date.addingTimeInterval(5 * 60), newer.date.addingTimeInterval(30 * 60)] {
+            state = state.updatingClockMismatchLatch(now: clock)
+            XCTAssertEqual(state.display(now: clock), .clockMismatch(latest: newer), "at \(clock)")
+            XCTAssertEqual(state.banners(now: clock, context: testContext).first?.title, "No current reading")
+        }
+    }
+
     /// Review M2: the Now chart is scrubbable in every window.
     @MainActor
     func test_nowChartIsScrubbable() {
