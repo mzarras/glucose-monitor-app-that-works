@@ -17,7 +17,7 @@ public enum G7FailureReason {
     public static func previousSensorRejectedCode(sensorName: String) -> SensorFailure {
         SensorFailure(
             kind: .pairingRejected,
-            message: "The sensor \(sensorName) did not accept this code, and no other sensor did either. If you are still wearing \(sensorName), use Pair again and enter its 4-digit code. If you are pairing a new sensor, check the code on its applicator and try again."
+            message: "The sensor \(sensorName) refused the new code, and no other sensor accepted it. If you meant to keep using \(sensorName), enter its 4-digit code again. If you are pairing a new sensor, check the code on the new applicator."
         )
     }
     /// The confirmed key was refused on a later connection: another device probably paired into the

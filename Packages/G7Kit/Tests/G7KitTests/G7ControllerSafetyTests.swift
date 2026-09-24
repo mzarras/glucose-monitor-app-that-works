@@ -433,7 +433,7 @@ final class G7ControllerSafetyTests: XCTestCase {
 
     /// Re-review N1: the silent skip is time-limited. If no sensor authenticates within 10 minutes of
     /// the pairing start, the skipped refusal is reported, naming the previous sensor and pointing
-    /// to Pair again; a refusal by the previous sensor after the limit is reported at once; and a
+    /// to entering its code again; a refusal by the previous sensor after the limit is reported at once; and a
     /// pairing that succeeded in time reports nothing.
     func test_S5_previousSensorSkipIsTimeLimited() throws {
         let harness = ControllerHarness()
@@ -447,7 +447,8 @@ final class G7ControllerSafetyTests: XCTestCase {
         let expected = G7FailureReason.previousSensorRejectedCode(sensorName: harness.sensorName)
         XCTAssertEqual(harness.states.last, .failed(expected))
         XCTAssertEqual(expected.kind, .pairingRejected)
-        XCTAssertTrue(expected.message.contains(harness.sensorName) && expected.message.contains("Pair again"))
+        XCTAssertEqual(expected.message, "The sensor DXCM4F refused the new code, and no other sensor accepted it. If you meant to keep using DXCM4F, enter its 4-digit code again. If you are pairing a new sensor, check the code on the new applicator.")
+        XCTAssertFalse(expected.message.contains("Pair again"), "onboarding offers only \"Try again\" (pair(code:)), which reaches the worn sensor")
 
         let late = ControllerHarness()
         try late.pair(glucose: late.currentGlucose(120))
