@@ -31,9 +31,12 @@ public struct G7PairingRecord: Sendable, Equatable, Codable {
     /// Session start derived from the sensor clock (G7ReadingPipeline), kept so `currentSession`
     /// survives disconnects and app relaunches (D28) and later anchors are checked against it.
     public var sessionStart: Date?
-    /// The sensor reported the session over (expired, failed, stopped) on two separate connections
-    /// (G7ReadingPipeline): `currentSession` stays nil and the ended state is shown, also after a relaunch.
+    /// The sensor reported the session over (expired, failed, stopped) twice, at least 60 s of sensor
+    /// time apart (G7ReadingPipeline): `currentSession` stays nil and the ended state is shown, also
+    /// after a relaunch.
     public var sessionEnd: G7SessionEnd?
+    /// A first end report waiting for its confirmation (kept across relaunches).
+    public var unconfirmedSessionEnd: G7UnconfirmedSessionEnd?
     /// The newest published reading, so dates stay in sensor-time order across relaunches (S3).
     public var newestReading: G7ReadingMark?
 

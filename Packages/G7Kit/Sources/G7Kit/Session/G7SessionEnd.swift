@@ -5,8 +5,9 @@ import GlucoseCore
 
 /// Why a G7 session is over, as the sensor itself reported it (algorithm state byte 14 of a
 /// status-0 `0x4E`, category from G7AlgorithmState). Latched by G7ReadingPipeline only after two
-/// separate connections reported it (safety review N1) and persisted in the pairing record, so the
-/// ended state is shown again after a relaunch and `currentSession` stays nil (D28).
+/// separate reports, at least 60 s of sensor time apart (safety review N1), and persisted in the
+/// pairing record, so the ended state is shown again after a relaunch and `currentSession` stays nil
+/// (D28).
 public enum G7SessionEnd: String, Sendable, Equatable, Codable {
     /// Expired states 0x0F, 0x18, 0x1A, 0x24.
     case expired
@@ -22,6 +23,19 @@ public enum G7SessionEnd: String, Sendable, Equatable, Codable {
         case .sensorFailed: return .failed(reason: G7FailureReason.sensorFailed)
         case .stopped: return .failed(reason: G7FailureReason.sessionStopped)
         }
+    }
+}
+
+/// A first end report not yet confirmed by a second one (G7ReadingPipeline). Persisted, so an app
+/// terminated by iOS between two sensor wakes still latches the end at the next report.
+public struct G7UnconfirmedSessionEnd: Sendable, Equatable, Codable {
+    public let end: G7SessionEnd
+    /// Sensor clock (bytes 2-5) of the `0x4E` that reported it.
+    public let sensorClock: UInt32
+
+    public init(end: G7SessionEnd, sensorClock: UInt32) {
+        self.end = end
+        self.sensorClock = sensorClock
     }
 }
 

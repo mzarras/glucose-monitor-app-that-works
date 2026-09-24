@@ -34,6 +34,12 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// :643-654); a longer wait suits a sensor that advertises only every few minutes.
     static let candidateConnectTimeout: TimeInterval = 60
 
+    /// Sensor policy (safety review follow-up): after this many consecutive failed saves of the
+    /// pairing record, `.failed(credentialsUnavailable)` is emitted on every further failed save. One
+    /// failure can be transient (the Keychain briefly unavailable); a record is saved at least once
+    /// per sensor wake, so three means the problem has lasted about one to three wakes.
+    static let saveFailuresBeforeSurfacing = 3
+
     private let store: G7CredentialStore
     private let diagnostics: DiagnosticLog
     private let now: () -> Date
@@ -62,6 +68,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
     private var rejectionAfterAuthenticationStreak = 0
     private var connectionAuthenticated = false
     private var connectionRejectedAfterAuthentication = false
+    private var consecutiveSaveFailures = 0
 
     init(
         store: G7CredentialStore,
@@ -109,7 +116,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
 
     /// D28: the session this source authenticated to, persisted across disconnects and relaunches;
     /// nil before the first `0x4E` of a pairing, after the grace-period end, after the sensor reported
-    /// the session over (expired, failed, stopped) on two separate connections (N1, persisted), for an
+    /// the session over (expired, failed, stopped) twice, 60 s of sensor time apart (N1, persisted), for an
     /// unsupported sensor, and when a new pairing is required.
     var currentSession: SensorSession? {
         guard let record, !record.requiresNewPairing, !record.sessionEnded,
@@ -350,6 +357,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
                 reportedParameters: reportedParameters(current),
                 sessionStart: current.sessionStart,
                 sessionEnd: current.sessionEnd,
+                unconfirmedEnd: current.unconfirmedSessionEnd,
                 newestReading: current.newestReading
             ) { [weak self] message in
                 self?.log(.sensor, message)
@@ -534,13 +542,16 @@ final class G7Controller: G7ConnectionCycleDelegate {
         syncSession()
     }
 
-    /// D28: keep the persisted session (start, latched end, newest reading) in step with the pipeline.
+    /// D28: keep the persisted session (start, unconfirmed and latched end, newest reading) in step
+    /// with the pipeline.
     private func syncSession() {
         guard let pipeline, var current = record, current.serial == pipeline.serial else { return }
         guard current.sessionStart != pipeline.sessionStart || current.sessionEnd != pipeline.sessionEnd
+            || current.unconfirmedSessionEnd != pipeline.unconfirmedEnd
             || current.newestReading != pipeline.newestReading else { return }
         current.sessionStart = pipeline.sessionStart
         current.sessionEnd = pipeline.sessionEnd
+        current.unconfirmedSessionEnd = pipeline.unconfirmedEnd
         current.newestReading = pipeline.newestReading
         saveRecord(current)
     }
@@ -582,11 +593,19 @@ final class G7Controller: G7ConnectionCycleDelegate {
         }
     }
 
+    /// The in-memory record keeps working until the app is terminated, but a relaunch would lose what
+    /// was not saved (key, session start, session end): repeated failures are surfaced (S5).
     private func saveRecord(_ newRecord: G7PairingRecord) {
         record = newRecord
-        do { try store.save(newRecord) } catch {
-            // The in-memory record still works until the app is terminated; make the failure visible.
-            log(.sensor, "could not save the pairing record: \(error)")
+        do {
+            try store.save(newRecord)
+            consecutiveSaveFailures = 0
+        } catch {
+            consecutiveSaveFailures += 1
+            log(.sensor, "could not save the pairing record (\(consecutiveSaveFailures) in a row): \(error)")
+            if consecutiveSaveFailures >= Self.saveFailuresBeforeSurfacing {
+                emit(.failed(reason: G7FailureReason.credentialsUnavailable))
+            }
         }
     }
 

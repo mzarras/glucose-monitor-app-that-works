@@ -2,6 +2,7 @@
 
 import CoreBluetooth
 import GlucoseCore
+import os
 import XCTest
 @testable import G7Kit
 
@@ -144,6 +145,42 @@ final class G7ControllerSafetyTests: XCTestCase {
         XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120)])
     }
 
+    /// D35 (pinned residual P1c risk, accepted): if another app's genuine `0x4E` lands inside the
+    /// milliseconds between a spoofed `05 01 01` and the sensor's real rejection of our `04`, that
+    /// one live reading is published (it is real data from this sensor, but it was not authenticated
+    /// to us). Everything else from the window is not: backfill is discarded, and nothing after the
+    /// real rejection is forwarded. If this test starts failing because the reading is no longer
+    /// published, the residual risk is gone: update D35 and docs/g7-protocol.md §3.1.
+    func test_S2_residualP1cRaceIsBoundedToOneLiveReading() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        harness.sensor.confirmedKeys[0x02] = G7Random.bytes(16)
+        harness.clock.advance(300)
+        let othersReading = harness.currentGlucose(121)
+        let othersBackfill = Fixture.backfill(timestamp: harness.sensorClock - 150, glucose: 119) // a new timestamp
+        let link = harness.connection(glucose: nil, disconnect: false) { [unowned harness] data, characteristic in
+            if characteristic == .receiveAuthentication, data.first == 0x04 {
+                harness.controller.valueUpdated(for: .receiveAuthentication, value: Data([0x05, 0x01, 0x01])) // spoof
+            }
+            if characteristic == .writeControl, data == Data([0x4E]) {
+                // The other app's GetData answer and backfill, before the sensor's real `05 02 02`.
+                harness.controller.valueUpdated(for: .writeControl, value: othersReading)
+                harness.controller.valueUpdated(for: .backfill, value: othersBackfill)
+            }
+        }
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(121)], "the one residual live reading")
+        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.rejectedAfterAuthentication))
+        XCTAssertEqual(link.disconnectCount, 1)
+        harness.controller.valueUpdated(for: .writeControl, value: Data([0x59]))
+        harness.controller.didDisconnect(peripheralIdentifier: harness.identifier)
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(121)], "the window's backfill is discarded")
+
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(122))
+        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.savedKeyRejected))
+        XCTAssertEqual(harness.readings.count, 2)
+    }
+
     /// Probe P9: the rejection recurs while our own authentication keeps succeeding: the status names
     /// the likely cause (another app) and never says "pair again"; a clean connection resets it.
     func test_S5_recurringRejectionAfterAuthenticationNamesAnotherApp() throws {
@@ -231,6 +268,58 @@ final class G7ControllerSafetyTests: XCTestCase {
         XCTAssertTrue(relaunched.readings.isEmpty)
         XCTAssertFalse(relaunched.states.contains { if case .active = $0 { return true } else { return false } })
         XCTAssertEqual(relaunched.states.last, ended)
+    }
+
+    /// Probe P8c with relaunch: iOS terminates the app between every sensor wake. The first failed
+    /// report is persisted, so the second one (after a relaunch) latches the end.
+    func test_S5_endLatchesWhenTheAppIsRelaunchedBetweenReports() throws {
+        var harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        for report in 1...2 {
+            let relaunched = ControllerHarness(store: harness.store, relaunchOf: harness)
+            relaunched.controller.emitInitialState()
+            try relaunched.controller.start(pairingCode: nil)
+            relaunched.clock.advance(300)
+            relaunched.connection(glucose: relaunched.currentGlucose(nil, state: 0x19))
+            harness = relaunched
+            if report == 1 {
+                XCTAssertEqual(harness.record?.unconfirmedSessionEnd?.end, .sensorFailed, "persisted")
+                XCTAssertNil(harness.record?.sessionEnd)
+                XCTAssertNotNil(harness.controller.currentSession)
+            }
+        }
+        XCTAssertEqual(harness.record?.sessionEnd, .sensorFailed)
+        XCTAssertNil(harness.record?.unconfirmedSessionEnd)
+        XCTAssertEqual(harness.states.last, .failed(reason: G7FailureReason.sensorFailed))
+        XCTAssertNil(harness.controller.currentSession)
+    }
+
+    // MARK: - Save failures
+
+    /// Follow-up 2: repeated failures to save the pairing record are surfaced (S5), not only logged;
+    /// a single failure is not; a successful save clears it.
+    func test_S5_repeatedPairingRecordSaveFailuresAreSurfaced() throws {
+        let store = FlakyCredentialStore()
+        let harness = ControllerHarness(store: store)
+        try harness.pair(glucose: harness.currentGlucose(120))
+        let unavailable = SensorState.failed(reason: G7FailureReason.credentialsUnavailable)
+
+        store.failSaves = true
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(121)) // two failed saves (identity, newest reading)
+        XCTAssertFalse(harness.states.contains(unavailable), "fewer than \(G7Controller.saveFailuresBeforeSurfacing) failures")
+        if case .active = harness.states.last {} else { XCTFail("\(harness.states)") }
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(122))
+        XCTAssertEqual(harness.states.last, unavailable)
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(121), .mgdl(122)], "readings continue")
+        XCTAssertTrue(harness.log.messages.contains { $0.contains("could not save the pairing record (3 in a row)") })
+
+        store.failSaves = false
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(123))
+        if case .active = harness.states.last {} else { XCTFail("recovered: \(harness.states)") }
+        XCTAssertEqual(harness.record?.newestReading?.date, harness.readings.last?.date, "saved again")
     }
 
     /// P4: the newest published reading is persisted with the session.
@@ -362,6 +451,25 @@ final class G7ControllerSafetyTests: XCTestCase {
 }
 
 /// A Keychain that refuses to be read (e.g. before the first unlock after a restart).
+/// Saves fail while `failSaves` is set; everything else goes to an in-memory store.
+final class FlakyCredentialStore: G7CredentialStore {
+    struct SaveFailed: Error {}
+    private let inner = G7InMemoryCredentialStore()
+    private let failing = OSAllocatedUnfairLock(initialState: false)
+
+    var failSaves: Bool {
+        get { failing.withLock { $0 } }
+        set { failing.withLock { $0 = newValue } }
+    }
+
+    func load() throws -> G7PairingRecord? { try inner.load() }
+    func save(_ record: G7PairingRecord) throws {
+        if failSaves { throw SaveFailed() }
+        try inner.save(record)
+    }
+    func delete() throws { try inner.delete() }
+}
+
 struct UnreadableCredentialStore: G7CredentialStore {
     struct Locked: Error {}
     func load() throws -> G7PairingRecord? { throw Locked() }

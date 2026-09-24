@@ -35,10 +35,10 @@ public enum G7FailureReason {
     /// The sensor has not reported its session length (`0x52`), so no reading can be checked yet.
     public static let sessionLengthUnknown =
         "The sensor has not reported its session length yet, so readings are held back. This normally clears at the next sensor connection."
-    /// The sensor reported a failed state (G7AlgorithmState sensorFailed) on two separate connections.
+    /// The sensor reported a failed state (G7AlgorithmState sensorFailed) twice (G7ReadingPipeline).
     public static let sensorFailed =
         "The sensor reported that it has failed. No more readings will come from it. Replace the sensor."
-    /// The sensor reported "session stopped" after warm-up on two separate connections.
+    /// The sensor reported "session stopped" after warm-up twice (G7ReadingPipeline).
     public static let sessionStopped =
         "The sensor reported that its session has stopped. No more readings will come from it. Replace the sensor."
     /// A `05` "not authenticated" arrived after this connection authenticated (safety review B1/N2).
@@ -51,7 +51,8 @@ public enum G7FailureReason {
     public static let otherAppRejected =
         "Another app on this phone seems to be connecting to the sensor and being refused, which cuts connections short. This phone is still accepted. Close or remove other Dexcom G7 apps."
     /// The pairing record could not be read (for example, the Keychain is locked before the first
-    /// unlock after a restart). Not the same as "not paired".
+    /// unlock after a restart; not the same as "not paired"), or saving it failed three times in a row
+    /// (what was not saved would be lost at the next app restart).
     public static let credentialsUnavailable =
-        "The sensor's pairing could not be read from the Keychain. Unlock the phone; if this persists, pair the sensor again."
+        "The sensor's pairing could not be read from or saved to the Keychain. Unlock the phone; if this persists, pair the sensor again."
 }

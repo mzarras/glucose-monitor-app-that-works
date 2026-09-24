@@ -58,7 +58,7 @@ enum G7SensorStatus {
     /// stopped after warm-up. Temporary issues and calibration states do not end it. "OK but past the
     /// grace end" is not included: that is a time check on the session, so a garbled clock cannot end
     /// a session permanently. One report does not end the session either (G7ReadingPipeline latches
-    /// only after two separate connections reported an end).
+    /// only after two separate reports, at least 60 s of sensor time apart).
     static func sessionEnd(for state: SensorState, algorithmState: G7AlgorithmState) -> G7SessionEnd? {
         switch algorithmState.category {
         case .sensorFailed:
