@@ -215,6 +215,24 @@ final class G7ControllerSafetyTests: XCTestCase {
 
     // MARK: - N1 (D28)
 
+    /// D41 at the controller: one expired report is shown as `.error`, never `.expired`; the next
+    /// wake's report latches `.expired`, which then persists across a relaunch.
+    func test_S5_unconfirmedExpiryIsNotExpiredAtTheController() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(nil, state: 0x18))
+        XCTAssertEqual(harness.states.last, .error(code: 0x18, description: "Session expired"))
+        XCTAssertFalse(harness.states.contains(.expired))
+        XCTAssertNotNil(harness.controller.currentSession)
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(nil, state: 0x18))
+        XCTAssertEqual(harness.states.last, .expired)
+        let relaunched = ControllerHarness(store: harness.store, relaunchOf: harness)
+        relaunched.controller.emitInitialState()
+        XCTAssertEqual(relaunched.states.last, .expired)
+    }
+
     /// Probe P8b: one status-0 "stopped" report is shown but does not end the session; the next OK
     /// reading is published, the status is active and the session is still there.
     func test_S5_oneEndReportDoesNotEndTheSession() throws {
