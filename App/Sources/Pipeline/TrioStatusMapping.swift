@@ -19,7 +19,7 @@ extension TrioBridgeSummary {
         isStarving = status.isStarving()
         trioLag = status.trioLag
         lastGateRefusalDescription = status.lastGateRefusal.map { "\($0.reason) — reading at \($0.readingDate.ISO8601Format())" }
-        if status.isFailing || isStarving {
+        if status.isFailing || isStarving || unavailableReason != nil {
             problemSince = problemSince ?? (status.isFailing ? status.lastErrorAt : nil) ?? now
         } else {
             problemSince = nil

@@ -55,6 +55,15 @@ final class TrioCoordinator {
     func configure(enabled: Bool, liveOutputsAllowed: Bool) {
         summary.isEnabled = enabled
         summary.liveOutputsAllowed = liveOutputsAllowed
+        if enabled, liveOutputsAllowed, bridge == nil {
+            // Turned on, but this build cannot reach Trio at all: fail loud (S5, review minor 4).
+            summary.unavailableReason = "This build has no Trio App Group (Info.plist TrioAppGroupID is missing), so nothing reaches Trio. Rebuild with the team ID set (docs/trio-bridge.md, Setup)."
+            summary.problemSince = summary.problemSince ?? Date()
+            log("turned on but unavailable: no TrioAppGroupID in this build")
+        } else {
+            summary.unavailableReason = nil
+            if !summary.isFailing, !summary.isStarving { summary.problemSince = nil }
+        }
         onChange?(summary)
     }
 
@@ -96,7 +105,17 @@ final class TrioCoordinator {
     /// app does not touch Trio's App Group. Call after pairing, forgetting and every state change.
     func updateHeartbeat(_ desired: TrioHeartbeatPeripheral?) async {
         guard let bridge = activeBridge else { return }
-        guard !heartbeatInSync || desired != heartbeatWritten else { return }
+        // Re-check the App Group every time rather than trusting what this process last wrote:
+        // another app (an old xDrip4iOS install) may have written its heartbeat keys since
+        // (Phase 2 review minor 8).
+        let inGroup = await bridge.heartbeatAddressInAppGroup()
+        let wanted = desired?.peripheralIdentifier.uuidString
+        if heartbeatInSync, desired == heartbeatWritten, inGroup == wanted {
+            return
+        }
+        if heartbeatInSync, inGroup != wanted {
+            log("heartbeat address in Trio's App Group is \(inGroup ?? "none"), expected \(wanted ?? "none"): rewriting")
+        }
         await writeHeartbeat(desired, on: bridge)
     }
 

@@ -54,7 +54,13 @@ final class UploadCoordinator {
         let statusTask: Task<Void, Never>
     }
 
-    init(credentials: any CredentialStore, queueDirectory: URL, deviceName: String, transport: any HTTPTransport = URLSessionTransport(), diagnostics: any DiagnosticLog) {
+    /// How long to wait before trying again to create an uploader whose queue file is still held by
+    /// a released one (`QueueFileInUse`).
+    private let setupRetryDelay: Duration
+
+    init(credentials: any CredentialStore, queueDirectory: URL, deviceName: String, transport: any HTTPTransport = URLSessionTransport(),
+         diagnostics: any DiagnosticLog, setupRetryDelay: Duration = .seconds(5)) {
+        self.setupRetryDelay = setupRetryDelay
         self.credentials = credentials
         self.queueDirectory = queueDirectory
         self.deviceName = deviceName
@@ -211,8 +217,9 @@ final class UploadCoordinator {
     /// `QueueFileInUse` for longer: a released uploader is still finishing a flush. Try again shortly.
     private func scheduleRetry() {
         guard retryTask == nil else { return }
+        let delay = setupRetryDelay
         retryTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: delay)
             guard let self, let configuration = self.configuration else { return }
             self.retryTask = nil
             // Force re-creation of whatever failed.

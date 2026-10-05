@@ -467,8 +467,9 @@ final class LiveAppServices: AppServices {
 
         isBootstrapped = true
         log(.app, "bootstrapped (launched by Bluetooth restoration: \(launchedByBluetoothRestoration))")
-        sensorPipeline.activate()
+        // The store first, so readings that arrived before bootstrap are stored on the normal path.
         await openStoreIfNeeded()
+        sensorPipeline.activate()
         await startG7()
         await refreshStoredSensor()
         await updateTrioHeartbeat()
@@ -496,7 +497,9 @@ final class LiveAppServices: AppServices {
     /// the user's switches and D20.
     func attachOutputs() {
         let trio = trioCoordinator.activeBridge
-        let uploaders = uploads.activeUploaders
+        // Read at the moment of use, so a replaced uploader is picked up and a released one is not
+        // kept alive (Phase 2 review M2).
+        let uploaders: @MainActor () -> [ReadingUploader] = { [weak self] in self?.uploads.activeUploaders ?? [] }
         let flush: @MainActor () -> Void = { [weak self] in self?.uploads.flushIfDue() }
         sensorPipeline.outputs.trio = trio
         sensorPipeline.outputs.uploaders = uploaders
@@ -524,6 +527,7 @@ final class LiveAppServices: AppServices {
             let store = try await GlucoseStore.production(at: databaseURL, diagnostics: diagnostics)
             productionStore = store
             storeOpenError = nil
+            sensorPipeline.storeOpenFailingSince = nil
             sensorPipeline.attach(store: store)
             observeStoreChanges(store)
             log(.store, "database open at \(databaseURL.lastPathComponent)")
@@ -535,6 +539,10 @@ final class LiveAppServices: AppServices {
             await refreshStorageSummary()
         } catch {
             storeOpenError = String(describing: error)
+            if UIApplication.shared.isProtectedDataAvailable {
+                // D42: the storage-failure alert input, from the first failed open of this run.
+                sensorPipeline.storeOpenFailingSince = sensorPipeline.storeOpenFailingSince ?? Date()
+            }
             log(.store, "database could not be opened: \(error)")
             updateStorageAvailability()
         }
@@ -567,6 +575,9 @@ final class LiveAppServices: AppServices {
         updateClockMismatchLatch(now: Date())
         writePipelineHeartbeat()
         updateStorageAvailability()
+        if isBootstrapped, productionStore == nil, storeOpenError != nil, UIApplication.shared.isProtectedDataAvailable {
+            Task { await openStoreIfNeeded() }
+        }
     }
 
     /// Persists the last pipeline activity for force-quit gap detection (HANDOFF §4.6).
@@ -595,10 +606,13 @@ final class LiveAppServices: AppServices {
         guard isBootstrapped else { return }
         await startG7()
         await openStoreIfNeeded()
+        // A drain attempt: stores waiting readings, sends the storage health and a tick (D42).
         activePipeline.retryHeldEvents()
         await refreshAlertDelivery()
-        await activeAlerts?.send(.tick)
-        await trioCoordinator.retry(session: sensorPipeline.sensorSession)
+        if !isReplaying {
+            await trioCoordinator.retry(session: sensorPipeline.sensorSession)
+            await updateTrioHeartbeat()
+        }
         uploads.flushIfDue()
         await purgeIfDue()
         updateClockMismatchLatch(now: Date())
@@ -614,17 +628,20 @@ final class LiveAppServices: AppServices {
         Task.detached(priority: .utility) { try? diagnostics.save() }
     }
 
-    /// About once a minute while in the foreground: alert tick (docs/alerts.md §9), Trio retry
-    /// (docs/trio-bridge.md: retry a failed write without waiting for a reading), clock check.
+    /// About once a minute while in the foreground: a pipeline drain attempt (stores waiting
+    /// readings, alert storage input and tick; docs/alerts.md §9), Trio retry (docs/trio-bridge.md:
+    /// retry a failed write without waiting for a reading) and heartbeat-key check, clock check.
     private func startForegroundTicker() {
         guard foregroundTicker == nil else { return }
         foregroundTicker = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard let self, !Task.isCancelled else { return }
-                await self.activeAlerts?.send(.tick)
+                // A drain attempt: waiting readings, storage health, tick (D42).
+                self.activePipeline.retryHeldEvents()
                 if !self.isReplaying {
                     await self.trioCoordinator.retry(session: self.sensorPipeline.sensorSession)
+                    await self.updateTrioHeartbeat()
                 }
                 self.updateClockMismatchLatch(now: Date())
                 self.writePipelineHeartbeat()

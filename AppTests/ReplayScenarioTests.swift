@@ -92,7 +92,9 @@ final class ReplayScenarioTests: XCTestCase {
         let uploader = try ReadingUploader(destination: destination, queueFile: queueFile, clock: PipelineTestWallClock(clock: clock), log: diagnostics)
         // What LiveAppServices.attachOutputs does: the bridge only when allowed (D20), uploaders likewise.
         replay.pipeline.outputs.trio = trio.activeBridge
-        replay.pipeline.outputs.uploaders = developerSwitchOn ? [uploader] : []
+        if developerSwitchOn {
+            replay.pipeline.outputs.uploaders = { [uploader] }
+        }
         await replay.start()
         let run = Run(
             scenario: scenario, replay: replay, clock: clock, replayClock: replayClock, center: center, audio: audio,
@@ -277,16 +279,18 @@ final class ReplayScenarioTests: XCTestCase {
     // MARK: - sensorExpiry
 
     /// Expiring (2-hour notice) at once, grace period at its start, high at the first ≥ 250 and
-    /// through the HIGH flags as one episode until it recovers, expired at the end; no missed
-    /// readings, no rate alert.
+    /// through the HIGH flags as one episode until it recovers, expired at the end; no rate alert.
+    /// Played to 20 min after the end: missed readings stays quiet after the confirmed end while the
+    /// sensor-expired alert is on (D41), although no reading arrives for 25 minutes.
     func test_sensorExpiry_noticesHighAndExpiredAtTheirMilestones() async throws {
         let run = try await start(.sensorExpiry)
         let graceStarts = run.milestone(.gracePeriodStarts)
         let firstHigh = run.milestone(.firstAtOrAbove250)
         let firstHighFlag = run.milestone(.firstHighFlag)
         let backBelow = run.milestone(.backBelow250)
+        let lastReading = run.milestone(.lastReading)
         let expired = run.milestone(.expired)
-        await play(run, through: expired + 5 * 60)
+        await play(run, through: expired + 20 * 60)
 
         XCTAssertEqual(run.postedOffsets("sensorExpiringIn2Hours"), [0], "the sensor expires 30 min after the start: one 2-hour notice")
         XCTAssertTrue(run.postedOffsets("sensorExpiringIn24Hours").isEmpty, "the 2-hour notice replaces the 24-hour one")
@@ -300,6 +304,11 @@ final class ReplayScenarioTests: XCTestCase {
 
         XCTAssertEqual(run.recorder.firingOffsets["sensorExpired"]?.min(), expired)
         XCTAssertEqual(run.postedOffsets("sensorExpired"), [expired])
+        XCTAssertTrue(run.recorder.isFiring("sensorExpired", at: expired + 20 * 60), "the sensor alert stays until a new sensor")
+        // D41: after the confirmed end the expired alert speaks; missed readings does not add to it,
+        // although the last reading is now 25 minutes old (it would fire at +15 min otherwise).
+        XCTAssertGreaterThan(expired + 20 * 60, lastReading + 15 * 60)
+        XCTAssertNil(run.recorder.firingOffsets["missedReadings"], "missed readings must stay quiet after the confirmed end (D41)")
         XCTAssertEqual(run.recorder.kindsThatFired, ["high", "sensorExpired"])
         await assertNothingReachedTrioOrUploads(run)
     }
@@ -312,7 +321,7 @@ final class ReplayScenarioTests: XCTestCase {
     func test_S6_replayNeverReachesTrioOrUploads() async throws {
         let run = try await start(.slowFallToUrgentLow, developerSwitchOn: true)
         XCTAssertNotNil(run.replay.pipeline.outputs.trio)
-        XCTAssertEqual(run.replay.pipeline.outputs.uploaders.count, 1)
+        XCTAssertEqual(run.replay.pipeline.outputs.uploaders?().count, 1)
         let lastReading = run.milestone(.lastReading)
         await play(run, through: lastReading)
 
