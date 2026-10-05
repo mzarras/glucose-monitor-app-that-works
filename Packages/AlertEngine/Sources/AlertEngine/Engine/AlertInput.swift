@@ -16,6 +16,8 @@ public enum AlertInput: Sendable, Equatable {
     case sensorState(SensorState)
     /// A status change from the Trio bridge.
     case trioBridge(TrioBridgeStatus)
+    /// The reading store's health after each drain attempt (D42).
+    case storage(StorageHealth)
     /// Time has passed. Send on every wake-up and about once a minute while the app is running;
     /// nothing is lost if ticks are late, because pending notifications cover the suspended app.
     case tick

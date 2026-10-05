@@ -94,6 +94,8 @@ public struct AlertEngine: Sendable {
             actions += receive(state, now: now)
         case .trioBridge(let status):
             snapshot.bridgeStatus = status
+        case .storage(let health):
+            snapshot.storageHealth = health
         case .tick:
             break
         case .launched:
@@ -169,6 +171,7 @@ public struct AlertEngine: Sendable {
         actions += step(.sensorExpired, StatusConditions.sensorExpired(snapshot.settledSensorState), now: now)
         actions += step(.bluetoothUnavailable, StatusConditions.bluetoothUnavailable(snapshot.lastReportedSensorState), now: now)
         actions += step(.trioBridge, StatusConditions.trioBridge(snapshot.bridgeStatus, now: now), now: now)
+        actions += step(.storageFailing, StatusConditions.storageFailing(snapshot.storageHealth, now: now), now: now)
 
         actions += announceExpiryAndGracePeriod(now: now)
         return actions
@@ -304,6 +307,7 @@ public struct AlertEngine: Sendable {
             settledSensorState: snapshot.settledSensorState,
             lastReportedSensorState: snapshot.lastReportedSensorState,
             bridgeStatus: snapshot.bridgeStatus,
+            storageHealth: snapshot.storageHealth,
             calendar: configuration.calendar,
             locale: configuration.locale
         )

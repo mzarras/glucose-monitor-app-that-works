@@ -154,7 +154,6 @@ final class MissedReadingsTests: XCTestCase {
             (.expired, .sensorExpired),
             (.failed(SensorFailure(kind: .sensorFailed, message: "failed")), .sensorFailed),
             (.failed(SensorFailure(kind: .sessionStopped, message: "stopped")), .sensorFailed),
-            (.failed(SensorFailure(kind: .unsupportedSensor, message: "unsupported")), .sensorFailed),
         ]
         for (state, sensorAlert) in ends {
             let h = EngineHarness()
@@ -215,16 +214,61 @@ final class MissedReadingsTests: XCTestCase {
         XCTAssertEqual(h.advance(minutes: 44).due, [])
         XCTAssertEqual(h.advance(minutes: 1).due, [.missedReadings])
 
-        // Replace-the-sensor failure, then a new sensor reported straight as active: the window
-        // starts at the new state, not at the old sensor's last reading.
+        // A failed sensor, then "active" with no warm-up (D41): nothing restarts the window, so with
+        // no reading for an hour missed readings fires at once rather than 15 minutes later.
         let other = EngineHarness()
         other.mgdl(120)
         other.send(.sensorState(.failed(SensorFailure(kind: .sensorFailed, message: ""))))
         other.clock.advance(minutes: 60)
         let active = other.send(.sensorState(.active(sessionStart: other.now, expiresAt: other.now.addingTimeInterval(10 * 86_400))))
-        XCTAssertEqual(active.due, [])
-        XCTAssertEqual(other.pendingDates(.missedReadings).first, other.now.addingTimeInterval(minutes(15)))
-        XCTAssertEqual(other.advance(minutes: 15).due, [.missedReadings])
+        XCTAssertEqual(active.fired, [.missedReadings])
+    }
+
+    /// D41: an end report only silences missed readings while the alert announcing it is on.
+    func test_S5_disabledSensorAlertNeverSuppressesMissedReadings() {
+        let cases: [(SensorState, (inout AlertSettings) -> Void)] = [
+            (.expired, { $0.sensorExpired.isEnabled = false }),
+            (.failed(SensorFailure(kind: .sensorFailed, message: "")), { $0.sensorFailed.isEnabled = false }),
+            (.failed(SensorFailure(kind: .sessionStopped, message: "")), { $0.sensorFailed.isEnabled = false }),
+        ]
+        for (state, turnOff) in cases {
+            let h = EngineHarness()
+            h.settings(turnOff)
+            h.mgdl(120)
+            let end = h.send(.sensorState(state))
+            XCTAssertEqual(end.fired, [], "\(state): its alert is off")
+            XCTAssertFalse(h.pendingDates(.missedReadings).isEmpty, "\(state): missed readings stays pending")
+            XCTAssertEqual(h.advance(minutes: 15).due, [.missedReadings], "\(state): the only alarm left, so it fires")
+        }
+        // Turning the alert off while the end is already in place also brings missed readings back.
+        let h = EngineHarness()
+        h.mgdl(120)
+        h.send(.sensorState(.expired))
+        h.clock.advance(minutes: 20)
+        XCTAssertEqual(h.settings { $0.sensorExpired.isEnabled = false }.fired, [.missedReadings])
+    }
+
+    func test_S5_unsupportedSensorDoesNotSuppressMissedReadings() {
+        let h = EngineHarness()
+        h.mgdl(120)
+        let failed = h.send(.sensorState(.failed(SensorFailure(kind: .unsupportedSensor, message: "Not supported."))))
+        XCTAssertEqual(failed.fired, [.sensorFailed])
+        XCTAssertFalse(failed.cancelled.contains(.missedReadings))
+        XCTAssertEqual(h.advance(minutes: 15).due, [.missedReadings])
+    }
+
+    func test_S5_briefExpiryDoesNotPostponeMissedReadings() {
+        // A (false) expiry report, then active again, then silence: missed readings is due 15 min
+        // after the last reading, not 15 min after the active report.
+        let h = EngineHarness()
+        h.mgdl(120)
+        h.clock.advance(minutes: 5)
+        h.send(.sensorState(.expired))
+        h.clock.advance(minutes: 5)
+        h.send(.sensorState(.active(sessionStart: Fixtures.session.start, expiresAt: Fixtures.session.expiresAt)))
+        XCTAssertEqual(h.pendingDates(.missedReadings).first, Fixtures.t0.addingTimeInterval(minutes(15)))
+        XCTAssertEqual(h.advance(minutes: 4).due, [])
+        XCTAssertEqual(h.advance(minutes: 1).due, [.missedReadings], "due at the last reading + 15 min")
     }
 
     func test_missedReadingsFiresDuringCalibrationStates() {

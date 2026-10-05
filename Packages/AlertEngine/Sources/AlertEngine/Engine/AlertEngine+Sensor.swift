@@ -28,18 +28,20 @@ extension AlertEngine {
         if case .warmingUp(let warmUpEnd) = previous, Self.isRunning(state) {
             actions += announce(.sensorWarmUpComplete, sessionDate: warmUpEnd, now: now)
         }
-        // Leaving a state in which no readings were expected starts the missed-readings window
-        // afresh, so a new sensor does not inherit the previous sensor's last reading time: from
-        // now after "not paired" or a confirmed session end (D39); from the end of warm-up (or now,
-        // if the sensor finished early).
-        let wasWithoutReadings = StatusConditions.sessionHasNoReadingsToMiss(previous)
-        let isWithoutReadings = StatusConditions.sessionHasNoReadingsToMiss(state)
-        if wasWithoutReadings, !isWithoutReadings {
+        // Starting the missed-readings window afresh, so a new sensor does not inherit the previous
+        // sensor's last reading time: from now on leaving "not paired"; from the end of warm-up (or
+        // now, if the sensor finished early) on leaving warm-up. Leaving an expired or failed state
+        // does NOT restart it (D41): after a brief or false end report, missed readings stays due at
+        // the last reading + window; a new sensor goes through warm-up, which restarts it.
+        switch (previous, state) {
+        case (.notPaired, .notPaired), (.warmingUp, .warmingUp), (.warmingUp, .notPaired):
+            break
+        case (.notPaired, _):
             snapshot.missedReadingsReference = max(snapshot.missedReadingsReference, now)
-        } else if case .warmingUp(let endsAt) = previous, !isWithoutReadings {
-            if case .warmingUp = state {} else {
-                snapshot.missedReadingsReference = max(snapshot.missedReadingsReference, min(now, endsAt))
-            }
+        case (.warmingUp(let endsAt), _):
+            snapshot.missedReadingsReference = max(snapshot.missedReadingsReference, min(now, endsAt))
+        default:
+            break
         }
         return actions
     }

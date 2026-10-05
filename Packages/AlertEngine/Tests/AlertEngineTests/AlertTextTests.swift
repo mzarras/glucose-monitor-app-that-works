@@ -54,6 +54,8 @@ final class AlertTextTests: XCTestCase {
         XCTAssertEqual(AlertText.body(.sensorExpired, context: context(), isRepeat: false), "The session has ended. No readings until a new sensor is paired.")
         XCTAssertEqual(AlertText.body(.sensorWarmUpComplete, context: context(), isRepeat: false), "Warm-up is complete. Readings are starting.")
         XCTAssertEqual(AlertText.body(.calibrationNeeded, context: context(), isRepeat: false), "The sensor needs a calibration.")
+        XCTAssertEqual(AlertText.body(.storageFailing, context: context(), isRepeat: false),
+                       "Readings could not be saved on the phone. Alerts and Trio still get them; history and charts will have a gap. Check free storage.")
         XCTAssertEqual(AlertText.title(.sensorFailed, context: context()), "Sensor failed", "without a failure state: the list name")
     }
 

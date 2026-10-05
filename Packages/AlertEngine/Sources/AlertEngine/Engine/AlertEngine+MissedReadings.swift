@@ -21,8 +21,9 @@ extension AlertEngine {
         let kind = AlertKind.missedReadings
         guard settings.isEnabled(kind) else { return resetMissedReadings() }
         let window = missedReadingsWindow
-        if StatusConditions.sessionHasNoReadingsToMiss(snapshot.settledSensorState) {
-            // Not paired, or the session ended for good (D39): nothing pending, nothing firing.
+        if StatusConditions.sessionHasNoReadingsToMiss(snapshot.settledSensorState, settings: settings) {
+            // Not paired, or a confirmed end another alert is announcing (D39/D41): nothing pending,
+            // nothing firing.
             return resetMissedReadings()
         }
         switch snapshot.settledSensorState {

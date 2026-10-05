@@ -130,21 +130,32 @@ enum StatusConditions {
     /// is nothing to miss; during warm-up the UI shows a countdown — but only until `endsAt`: after
     /// that, readings are expected whether or not the source ever reports another state (the phone
     /// may be out of range when warm-up ends, or the source may report only a transient failure).
-    static func suppressesMissedReadings(_ settled: SensorState?, now: Date) -> Bool {
-        if sessionHasNoReadingsToMiss(settled) { return true }
+    static func suppressesMissedReadings(_ settled: SensorState?, now: Date, settings: AlertSettings) -> Bool {
+        if sessionHasNoReadingsToMiss(settled, settings: settings) { return true }
         if case .warmingUp(let endsAt) = settled { return now < endsAt }
         return false
     }
 
-    /// No sensor, or a confirmed end of the session (D39): expired, or a failure that needs a new
-    /// sensor. The sensor alert says so and stays until a new sensor; missed readings every window
-    /// on top would add alarms but no information. A lost pairing or a transient failure does NOT
-    /// count: readings could resume, and the user must know they are missing.
-    static func sessionHasNoReadingsToMiss(_ settled: SensorState?) -> Bool {
+    /// No sensor, or a confirmed end of the session that another alert is announcing (D39, as
+    /// corrected by D41): `.expired` while the sensor-expired alert is on, or a sensor-failed /
+    /// session-stopped failure while the sensor-failed alert is on. That alert says so and stays
+    /// until a new sensor; missed readings every window on top would add alarms, not information.
+    /// Nothing else counts — not a lost pairing, a transient failure, an unsupported sensor, or an
+    /// end whose alert is turned off: then missed readings is the only alarm the user gets.
+    /// (G7Kit emits `.expired` only for a confirmed end; an unconfirmed report is `.error`.)
+    static func sessionHasNoReadingsToMiss(_ settled: SensorState?, settings: AlertSettings) -> Bool {
         switch settled {
-        case .notPaired, .expired: return true
-        case .failed(let failure): return failure.requiresSensorReplacement
-        default: return false
+        case .notPaired:
+            return true
+        case .expired:
+            return settings.isEnabled(.sensorExpired)
+        case .failed(let failure):
+            switch failure.kind {
+            case .sensorFailed, .sessionStopped: return settings.isEnabled(.sensorFailed)
+            default: return false
+            }
+        default:
+            return false
         }
     }
 
@@ -188,6 +199,16 @@ enum StatusConditions {
         case .writeFailing: return .met
         case .notConsumedSince(let since):
             let limit = TimeInterval(AlertLimits.trioNotConsumingMinutes * 60)
+            return now.timeIntervalSince(since) >= limit ? .met : .holding
+        }
+    }
+
+    /// D42: met once the store has failed continuously for `storageFailingMinutes`.
+    static func storageFailing(_ health: StorageHealth, now: Date) -> AlertCondition {
+        switch health {
+        case .ok: return .clear
+        case .failing(let since):
+            let limit = TimeInterval(AlertLimits.storageFailingMinutes * 60)
             return now.timeIntervalSince(since) >= limit ? .met : .holding
         }
     }

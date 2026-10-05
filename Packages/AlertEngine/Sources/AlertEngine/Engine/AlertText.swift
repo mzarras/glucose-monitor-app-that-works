@@ -15,6 +15,7 @@ struct AlertTextContext {
     let settledSensorState: SensorState?
     let lastReportedSensorState: SensorState?
     let bridgeStatus: TrioBridgeStatus
+    var storageHealth: StorageHealth = .ok
     let calendar: Calendar
     let locale: Locale
 }
@@ -39,6 +40,7 @@ enum AlertText {
         case .sensorExpired: return "Sensor expired"
         case .bluetoothUnavailable: return "Bluetooth unavailable"
         case .trioBridge: return "Trio isn't getting readings"
+        case .storageFailing: return "History isn't being saved"
         }
     }
 
@@ -122,6 +124,15 @@ enum AlertText {
             case .notConsumedSince(let since): return "Trio has not read a new reading since \(time(since, c))."
             case .off, .healthy: return "Trio is not receiving readings."
             }
+        case .storageFailing:
+            let since: String
+            if case .failing(let date) = c.storageHealth {
+                since = " since \(time(date, c))"
+            } else {
+                since = ""
+            }
+            return "Readings could not be saved on the phone\(since). Alerts and Trio still get them; "
+                + "history and charts will have a gap. Check free storage."
         }
     }
 

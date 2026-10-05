@@ -66,6 +66,10 @@ public enum AlertLimits {
     public static let trioBridgeDefaultSnoozeMinutes = 30
     /// HANDOFF §5: "Trio not consuming for 15 min".
     public static let trioNotConsumingMinutes = 15
+    /// D42: the storage alert fires once the store has failed continuously this long (a single
+    /// failed write, e.g. while the phone is locked during a migration, is not worth an alarm).
+    public static let storageFailingMinutes = 5
+    public static let storageDefaultSnoozeMinutes = 30
 
     // MARK: Snooze for every alert other than urgent low
 

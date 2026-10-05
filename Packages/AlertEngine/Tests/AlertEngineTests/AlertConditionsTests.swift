@@ -112,17 +112,17 @@ final class AlertConditionsTests: XCTestCase {
         XCTAssertEqual(StatusConditions.bluetoothUnavailable(.bluetoothUnavailable(.unauthorized)), .met)
         XCTAssertEqual(StatusConditions.bluetoothUnavailable(.bluetoothUnavailable(.resetting)), .holding)
         XCTAssertEqual(StatusConditions.bluetoothUnavailable(.searching), .clear)
-        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.notPaired, now: Fixtures.t0))
+        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.notPaired, now: Fixtures.t0, settings: .defaults))
         let warmUpEnd = Fixtures.t0.addingTimeInterval(600)
-        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.warmingUp(endsAt: warmUpEnd), now: Fixtures.t0))
-        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.warmingUp(endsAt: warmUpEnd), now: warmUpEnd),
+        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.warmingUp(endsAt: warmUpEnd), now: Fixtures.t0, settings: .defaults))
+        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.warmingUp(endsAt: warmUpEnd), now: warmUpEnd, settings: .defaults),
                        "warm-up suppresses only until it ends by the clock")
-        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.expired, now: Fixtures.t0), "D39: confirmed end")
-        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.failed(SensorFailure(kind: .sessionStopped, message: "")), now: Fixtures.t0))
-        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.failed(SensorFailure(kind: .bondRemoved, message: "")), now: Fixtures.t0))
-        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.failed(SensorFailure(kind: .other, message: "")), now: Fixtures.t0))
-        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.error(code: 1, description: ""), now: Fixtures.t0))
-        XCTAssertFalse(StatusConditions.suppressesMissedReadings(nil, now: Fixtures.t0))
+        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.expired, now: Fixtures.t0, settings: .defaults), "D39: confirmed end")
+        XCTAssertTrue(StatusConditions.suppressesMissedReadings(.failed(SensorFailure(kind: .sessionStopped, message: "")), now: Fixtures.t0, settings: .defaults))
+        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.failed(SensorFailure(kind: .bondRemoved, message: "")), now: Fixtures.t0, settings: .defaults))
+        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.failed(SensorFailure(kind: .other, message: "")), now: Fixtures.t0, settings: .defaults))
+        XCTAssertFalse(StatusConditions.suppressesMissedReadings(.error(code: 1, description: ""), now: Fixtures.t0, settings: .defaults))
+        XCTAssertFalse(StatusConditions.suppressesMissedReadings(nil, now: Fixtures.t0, settings: .defaults))
     }
 
     func test_bridgeConditions() {
