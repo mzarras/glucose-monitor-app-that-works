@@ -4,6 +4,8 @@
 // SensorTests/ReplayScenarioTests.
 //
 // Launch hook (AppEnvironment, DEBUG): `-replayScenario <name> -replaySpeed <x> -replayStartMinute <m>`.
+// Every launch also passes DEBUG `-silenceAlertAudio` (a silent alert player, notifications without
+// sound), so replayed urgent lows don't ring on the machine running the tests.
 // Speed 1 keeps the replay clock equal to the phone clock (the UI classifies staleness against the
 // phone clock); `-replayStartMinute m` delivers everything up to scenario minute m at once, dated in
 // the past, so each test lands on the moment it checks without waiting. Offsets and values are the
@@ -15,12 +17,17 @@ import XCTest
 final class ReplayLaunchUITests: XCTestCase {
     private let timeout: TimeInterval = 30
 
-    private func launch(scenario: String, minute: Int) -> XCUIApplication {
+    /// Launches the app with `arguments` and, always, `-silenceAlertAudio`.
+    private func launchApp(_ arguments: [String]) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["-replayScenario", scenario, "-replaySpeed", "1", "-replayStartMinute", String(minute)]
+        app.launchArguments = ["-silenceAlertAudio"] + arguments
         app.launch()
         return app
+    }
+
+    private func launch(scenario: String, minute: Int) -> XCUIApplication {
+        launchApp(["-replayScenario", scenario, "-replaySpeed", "1", "-replayStartMinute", String(minute)])
     }
 
     private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
@@ -142,10 +149,7 @@ final class ReplayLaunchUITests: XCTestCase {
 
     /// A fresh install with no sensor opens onboarding, under the DEBUG banner.
     func test_launchWithNoSensorShowsOnboarding() {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = ["-resetOnboardingFlag"]
-        app.launch()
+        let app = launchApp(["-resetOnboardingFlag"])
         XCTAssertTrue(element(app, "onboarding.welcome.start").waitForExistence(timeout: timeout), "onboarding's first step")
         waitForLabel(element(app, "build.banner"), "DEBUG banner over onboarding") { $0.contains("DEBUG BUILD") }
     }
@@ -153,10 +157,7 @@ final class ReplayLaunchUITests: XCTestCase {
     /// Review M1: onboarding can be left, and pairing from inside the app is Settings › Sensor (with
     /// the tab bar), never a full-screen flow without a way out.
     func test_onboardingCanBeLeftAndInAppPairingOpensSettings() {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = ["-resetOnboardingFlag"]
-        app.launch()
+        let app = launchApp(["-resetOnboardingFlag"])
         XCTAssertTrue(element(app, "onboarding.welcome.start").waitForExistence(timeout: timeout), "onboarding's first step")
         let setUpLater = element(app, "onboarding.dismiss")
         XCTAssertTrue(setUpLater.waitForExistence(timeout: timeout), "every onboarding step offers Set up later")
