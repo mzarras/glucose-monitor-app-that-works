@@ -269,6 +269,44 @@ final class G7ReadingPipelineTests: XCTestCase {
 
     // MARK: - Session end (N1)
 
+    /// D41: `.expired` is a confirmed end (the alert engine suppresses missed readings on it), so an
+    /// unconfirmed end report never produces it: the first expired report, any expired state in a
+    /// non-zero-status reply (also on two connections), and a time-based expiry whose session start
+    /// came only from the packet's own clock are `.error(code:description:)`. The second report from
+    /// a later wake latches `.expired`.
+    func test_S5_unconfirmedExpiryIsNotExpired() throws {
+        let t0 = receivedAt
+        for raw: UInt8 in [0x0F, 0x18, 0x1A, 0x24] {
+            let pipeline = makePipeline()
+            pipeline.beginConnection()
+            _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(200_000, t0: t0))
+            for clock: UInt32 in [200_300, 200_600] {
+                pipeline.beginConnection()
+                let reply = pipeline.handleGlucose(glucose(Fixture.glucose(status: 0x80, sensorClock: clock, age: 5, glucose: nil, state: raw)), receivedAt: arrival(clock, t0: t0))
+                XCTAssertEqual(reply.state, .error(code: Int(raw), description: G7AlgorithmState(rawValue: raw).name), "status reply 0x\(String(raw, radix: 16))")
+            }
+            pipeline.beginConnection()
+            let first = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_900, age: 5, glucose: nil, state: raw)), receivedAt: arrival(200_900, t0: t0))
+            XCTAssertEqual(first.state, .error(code: Int(raw), description: G7AlgorithmState(rawValue: raw).name), "first report 0x\(String(raw, radix: 16))")
+            XCTAssertFalse(pipeline.sessionEnded)
+            pipeline.beginConnection()
+            let second = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 201_200, age: 5, glucose: nil, state: raw)), receivedAt: arrival(201_200, t0: t0))
+            XCTAssertEqual(second.state, .expired, "latched 0x\(String(raw, radix: 16))")
+        }
+
+        // A non-zero-status OK reply whose own (cached or garbled) clock is past the grace end, before
+        // any anchor: not a confirmed end.
+        let unanchored = makePipeline()
+        unanchored.beginConnection()
+        let garbled = unanchored.handleGlucose(glucose(Fixture.glucose(status: 0x80, sensorClock: 0x0103_0D40, age: 5, glucose: 100, state: 0x06)), receivedAt: t0)
+        XCTAssertNotEqual(garbled.state, .expired)
+        // The same garbled clock as the first status-0 packet of a pairing: not a confirmed end either.
+        let firstAnchor = makePipeline()
+        firstAnchor.beginConnection()
+        let first = firstAnchor.handleGlucose(glucose(Fixture.glucose(sensorClock: 0x0103_0D40, age: 5, glucose: 100, state: 0x06)), receivedAt: t0)
+        XCTAssertEqual(first.state, .error(code: 0x06, description: "OK, past the session end (not confirmed)"))
+    }
+
     /// Probe P8: a non-zero-status reply carrying stopped/expired/failed never ends the session, even
     /// on two separate connections; the next OK reading is published and the session is active.
     func test_S5_statusReplyWithEndStateNeverEndsTheSession() throws {
@@ -338,7 +376,7 @@ final class G7ReadingPipelineTests: XCTestCase {
         restored.beginConnection()
         let restoredOutput = restored.handleGlucose(glucose(Fixture.glucose(sensorClock: 201_200, age: 5, glucose: 130, state: 0x06)), receivedAt: arrival(201_200, t0: t0))
         XCTAssertTrue(restoredOutput.readings.isEmpty)
-        XCTAssertEqual(restoredOutput.state, .expired)
+        XCTAssertEqual(restoredOutput.state, .expired, "a latched (confirmed) expiry")
     }
 
     /// N1: two end reports less than 60 s of sensor time apart (one connection), or separated by a
@@ -481,16 +519,16 @@ final class G7ReadingPipelineTests: XCTestCase {
         }
     }
 
-    /// Expired: the sensor's own expired state (captured 0x18, 7 h after the end) is shown and, once
-    /// a second connection reports it too, ends the session; an "OK" value whose derived time is past
-    /// the grace end is refused.
+    /// Expired: the sensor's own expired state (captured 0x18, 7 h after the end) is shown as an
+    /// unconfirmed `.error` and, once a second connection reports it too, ends the session as
+    /// `.expired` (D41); an "OK" value whose derived time is past the grace end is refused.
     func test_S2_expiredReadingsAreNotEmitted() throws {
         let pipeline = makePipeline()
         pipeline.beginConnection()
         let captured = glucose(Data(hex: "4e004d440e00d40b0001d46b650018036a000e"))
         let expired = pipeline.handleGlucose(captured, receivedAt: receivedAt)
         XCTAssertTrue(expired.readings.isEmpty)
-        XCTAssertEqual(expired.state, .expired)
+        XCTAssertEqual(expired.state, .error(code: 0x18, description: "Session expired"), "one report is not a confirmed end (D41)")
         XCTAssertFalse(pipeline.sessionEnded, "one report is not enough (N1)")
         pipeline.beginConnection()
         let again = Fixture.glucose(sensorClock: captured.sensorClock + 300, age: 5, glucose: nil, state: 0x18)
@@ -503,8 +541,13 @@ final class G7ReadingPipelineTests: XCTestCase {
         let afterEnd = Fixture.glucose(sensorClock: 907_200 + 600, age: 5, glucose: 120, state: 0x06)
         let output = pastGrace.handleGlucose(glucose(afterEnd), receivedAt: receivedAt)
         XCTAssertTrue(output.readings.isEmpty)
-        XCTAssertEqual(output.state, .expired)
+        XCTAssertEqual(output.state, .error(code: 0x06, description: "OK, past the session end (not confirmed)"),
+                       "the start came from this packet's own clock")
         XCTAssertTrue(logs.contains { $0.contains("afterSessionEnd") })
+        pastGrace.beginConnection()
+        let later = Fixture.glucose(sensorClock: 907_200 + 900, age: 5, glucose: 121, state: 0x06)
+        XCTAssertEqual(pastGrace.handleGlucose(glucose(later), receivedAt: receivedAt.addingTimeInterval(300)).state, .expired,
+                       "the grace end passed by time against an established start")
 
         let inGrace = makePipeline()
         inGrace.beginConnection()
@@ -666,7 +709,8 @@ final class G7SensorStatusTests: XCTestCase {
         XCTAssertEqual(G7SensorStatus.state(for: .warmUp, session: session, now: early), .warmingUp(endsAt: session.warmUpEndsAt))
         XCTAssertEqual(G7SensorStatus.state(for: G7AlgorithmState(rawValue: 0x01), session: session, now: early), .warmingUp(endsAt: session.warmUpEndsAt))
         XCTAssertEqual(G7SensorStatus.state(for: G7AlgorithmState(rawValue: 0x01), session: session, now: mid), .error(code: 1, description: "Session stopped"))
-        XCTAssertEqual(G7SensorStatus.state(for: G7AlgorithmState(rawValue: 0x0F), session: session, now: mid), .expired)
+        XCTAssertEqual(G7SensorStatus.state(for: G7AlgorithmState(rawValue: 0x0F), session: session, now: mid), .error(code: 0x0F, description: "Session expired"),
+                       "a single expired report is unconfirmed (D41)")
         for raw: UInt8 in [0x04, 0x05, 0x07, 0x0E] {
             XCTAssertEqual(G7SensorStatus.state(for: G7AlgorithmState(rawValue: raw), session: session, now: mid), .calibrationNeeded(code: Int(raw)))
         }

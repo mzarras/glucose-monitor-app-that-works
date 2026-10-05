@@ -13,6 +13,9 @@ extension TrioBridgeSummary {
     var alertInput: TrioBridgeStatus {
         guard isEnabled, liveOutputsAllowed else { return .off }
         let since = problemSince ?? lastErrorAt ?? newestReadingWrittenAt ?? .distantPast
+        if let unavailableReason {
+            return .writeFailing(since: since, reason: unavailableReason)
+        }
         if isFailing {
             return .writeFailing(since: since, reason: lastErrorDescription ?? "Writing to Trio's App Group failed")
         }

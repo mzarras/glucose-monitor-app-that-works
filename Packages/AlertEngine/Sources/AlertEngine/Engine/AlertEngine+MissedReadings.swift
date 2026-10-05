@@ -21,9 +21,12 @@ extension AlertEngine {
         let kind = AlertKind.missedReadings
         guard settings.isEnabled(kind) else { return resetMissedReadings() }
         let window = missedReadingsWindow
-        switch snapshot.settledSensorState {
-        case .notPaired:
+        if StatusConditions.sessionHasNoReadingsToMiss(snapshot.settledSensorState, settings: settings) {
+            // Not paired, or a confirmed end another alert is announcing (D39/D41): nothing pending,
+            // nothing firing.
             return resetMissedReadings()
+        }
+        switch snapshot.settledSensorState {
         case .warmingUp(let endsAt) where now < endsAt:
             // No readings until warm-up ends. Keep the notifications pending from `endsAt + window`
             // so a suspended app still gets them if no reading follows (safety review D36 B1).

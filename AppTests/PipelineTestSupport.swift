@@ -276,3 +276,56 @@ func waitUntil(_ description: String, timeout: TimeInterval = 10, file: StaticSt
         try? await Task.sleep(for: .milliseconds(2))
     }
 }
+
+/// A repository over a real store whose inserts can be made to fail like a full disk (D42 tests).
+final class FlakyRepository: GlucoseReadingRepository, @unchecked Sendable {
+    // @unchecked Sendable: `failing` is only read and written while holding `lock`; `store` is Sendable.
+    private let lock = NSLock()
+    private var failing = false
+    let store: any GlucoseReadingRepository
+
+    struct DiskFull: Error, CustomStringConvertible {
+        var description: String { "database or disk is full (SQLITE_FULL)" }
+    }
+
+    init(_ store: any GlucoseReadingRepository) {
+        self.store = store
+    }
+
+    var failInserts: Bool {
+        get { lock.withLock { failing } }
+        set { lock.withLock { failing = newValue } }
+    }
+
+    func insert(_ readings: [GlucoseReading]) async throws -> [GlucoseReading] {
+        if failInserts { throw DiskFull() }
+        return try await store.insert(readings)
+    }
+
+    func readings(from start: Date, to end: Date) async throws -> [GlucoseReading] {
+        try await store.readings(from: start, to: end)
+    }
+
+    func latestLiveReading() async throws -> GlucoseReading? {
+        try await store.latestLiveReading()
+    }
+
+    func changes() -> AsyncStream<Void> {
+        store.changes()
+    }
+}
+
+/// An HTTP transport that records requests and answers every one with 200 and an empty JSON
+/// array (what Nightscout returns for an entries upload). Never touches the network.
+final class RecordingTransport: HTTPTransport, @unchecked Sendable {
+    // @unchecked Sendable: `requests` is only read and written while holding `lock`.
+    private let lock = NSLock()
+    private var recorded: [URLRequest] = []
+
+    func send(_ request: URLRequest) async throws(TransportError) -> HTTPResponse {
+        lock.withLock { recorded.append(request) }
+        return HTTPResponse(statusCode: 200, body: Data("[]".utf8))
+    }
+
+    var requests: [URLRequest] { lock.withLock { recorded } }
+}

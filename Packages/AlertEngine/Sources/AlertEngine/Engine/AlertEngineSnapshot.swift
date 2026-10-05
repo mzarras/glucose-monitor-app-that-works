@@ -37,6 +37,7 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
     /// The last state the CGM source reported, whatever it was.
     var lastReportedSensorState: SensorState?
     var bridgeStatus: TrioBridgeStatus = .off
+    var storageHealth: StorageHealth = .ok
     /// One-off announcements already made: `AlertKind.rawValue` → the session date announced
     /// (expiry, grace end or warm-up end). At most one entry per announcement kind.
     var announcedSessionDates: [String: Date] = [:]
@@ -51,7 +52,7 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey {
         case episodes, latestLiveReading, lastValidReadingDate, missedReadingsReference
-        case repeatSeries, latestNow, latestUptime, settledSensorState, lastReportedSensorState, bridgeStatus
+        case repeatSeries, latestNow, latestUptime, settledSensorState, lastReportedSensorState, bridgeStatus, storageHealth
         case announcedSessionDates
     }
 
@@ -82,6 +83,7 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
         settledSensorState = (try? c.decodeIfPresent(SensorState.self, forKey: .settledSensorState)) ?? nil
         lastReportedSensorState = (try? c.decodeIfPresent(SensorState.self, forKey: .lastReportedSensorState)) ?? nil
         bridgeStatus = (try? c.decodeIfPresent(TrioBridgeStatus.self, forKey: .bridgeStatus)) ?? .off
+        storageHealth = (try? c.decodeIfPresent(StorageHealth.self, forKey: .storageHealth)) ?? .ok
         announcedSessionDates = (try? c.decodeIfPresent([String: Date].self, forKey: .announcedSessionDates)) ?? [:]
     }
 

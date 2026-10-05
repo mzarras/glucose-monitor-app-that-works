@@ -17,6 +17,8 @@ final class ReadingPipelineTests: XCTestCase {
         let diagnostics: CollectingDiagnosticLog
         let source: ScriptedCGMSource
         let store: GlucoseStore
+        /// What the pipeline writes through: `store`, with inserts that can be made to fail.
+        let repository: FlakyRepository
         let pipeline: ReadingPipeline
         let alerts: AlertService
         let center: RecordingNotificationCenter
@@ -33,11 +35,12 @@ final class ReadingPipelineTests: XCTestCase {
         harnesses = []
     }
 
-    private func makeHarness(session: SensorSession? = PipelineFixtures.session, attachStore: Bool = true) async throws -> Harness {
+    private func makeHarness(session: SensorSession? = PipelineFixtures.session, attachStore: Bool = true, activate: Bool = true) async throws -> Harness {
         let clock = PipelineTestClock(PipelineFixtures.start)
         let diagnostics = CollectingDiagnosticLog()
         let source = ScriptedCGMSource(session: session)
         let store = try GlucoseStore.productionInMemory(diagnostics: diagnostics, now: clock.closure)
+        let repository = FlakyRepository(store)
         let center = RecordingNotificationCenter(clock: clock)
         let ports = AlertPorts(
             notificationCenter: center, audio: RecordingAudioPlayer(clock: clock), alarms: nil,
@@ -53,13 +56,13 @@ final class ReadingPipelineTests: XCTestCase {
         let pipeline = ReadingPipeline(name: "test", source: source, diagnostics: diagnostics, now: clock.closure)
         pipeline.outputs.alerts = alerts
         pipeline.outputs.trio = trio.activeBridge
-        pipeline.outputs.uploaders = [uploader]
+        pipeline.outputs.uploaders = { [uploader] }
         await alerts.start()
         pipeline.startConsuming()
-        if attachStore { pipeline.attach(store: store) }
-        pipeline.activate()
+        if attachStore { pipeline.attach(store: repository) }
+        if activate { pipeline.activate() }
         let harness = Harness(
-            clock: clock, diagnostics: diagnostics, source: source, store: store, pipeline: pipeline, alerts: alerts, center: center,
+            clock: clock, diagnostics: diagnostics, source: source, store: store, repository: repository, pipeline: pipeline, alerts: alerts, center: center,
             trioStore: trioStore, trio: trio, destination: destination, uploader: uploader
         )
         harnesses.append(harness)
@@ -276,7 +279,8 @@ final class ReadingPipelineTests: XCTestCase {
     /// storage status says so, nothing reaches a consumer; once the store opens they are stored and
     /// published.
     func test_S5_storeClosedBeforeFirstUnlockSurfacesAndRecovers() async throws {
-        let harness = try await makeHarness(attachStore: false)
+        // Before the first unlock the app has not bootstrapped: the pipeline is not active yet.
+        let harness = try await makeHarness(attachStore: false, activate: false)
         let base = PipelineFixtures.start
         let first = PipelineFixtures.reading(.mgdl(100), at: base.addingTimeInterval(-600))
         let second = PipelineFixtures.reading(.mgdl(98), at: base.addingTimeInterval(-300))
@@ -295,8 +299,9 @@ final class ReadingPipelineTests: XCTestCase {
         XCTAssertEqual(harness.trioStore.writesOfReadings, 0)
         XCTAssertTrue(harness.center.posted.isEmpty)
 
-        // Protected data became available: the store opens and is attached.
-        harness.pipeline.attach(store: harness.store)
+        // Protected data became available: bootstrap opens the store, then activates the pipeline.
+        harness.pipeline.attach(store: harness.repository)
+        harness.pipeline.activate()
         await settle(harness, readings: 2, states: 1)
 
         XCTAssertEqual(harness.pipeline.heldReadingCount, 0)
@@ -306,6 +311,7 @@ final class ReadingPipelineTests: XCTestCase {
         let uploadStatus = await harness.uploader.status
         XCTAssertEqual(uploadStatus.queueDepth, 2)
         XCTAssertEqual(harness.pipeline.latestLiveReading?.id, second.id)
+        XCTAssertEqual(harness.pipeline.storageHealth, .ok)
         XCTAssertEqual(
             StoreAvailability.derive(storeOpen: true, protectedDataAvailable: true, openError: nil, insertProblem: nil, heldReadings: 0),
             .open
@@ -314,6 +320,89 @@ final class ReadingPipelineTests: XCTestCase {
             StoreAvailability.derive(storeOpen: false, protectedDataAvailable: true, openError: "disk I/O error", insertProblem: nil, heldReadings: 3),
             .failed(message: "disk I/O error")
         )
+    }
+
+    /// D42: after bootstrap, a store that is not open silences nothing. Readings reach the alert
+    /// engine and Trio at once and wait for the store; every drain attempt ticks the alert engine
+    /// (missed readings fires on time) and reports the storage health; states are not held up.
+    func test_S5_storeClosedStillTicksAlerts() async throws {
+        let harness = try await makeHarness(attachStore: false)
+        let base = PipelineFixtures.start
+        let reading = PipelineFixtures.reading(.mgdl(64), at: base.addingTimeInterval(-30))
+        harness.source.deliver(reading)
+        harness.source.deliver(state: .active(sessionStart: PipelineFixtures.session.start, expiresAt: PipelineFixtures.session.expiresAt))
+        await settle(harness, readings: 1, states: 1)
+
+        XCTAssertEqual(harness.center.posted("low").count, 1, "the alert engine got the reading although nothing is stored")
+        XCTAssertEqual(harness.trioStore.payload.count, 1)
+        XCTAssertEqual(harness.pipeline.heldReadingCount, 1)
+        XCTAssertEqual(harness.pipeline.latestLiveReading?.id, reading.id, "the current value includes readings waiting for the store")
+        XCTAssertEqual(harness.pipeline.storageHealth, .failing(since: base))
+        let queued = await harness.uploader.status.queueDepth
+        XCTAssertEqual(queued, 0, "uploads wait until the reading is stored")
+
+        // No reading for 16 minutes; a wake (foreground ticker, BLE event) drains with nothing new.
+        harness.clock.set(base.addingTimeInterval(16 * 60))
+        let drains = harness.pipeline.completedDrainCount
+        harness.pipeline.retryHeldEvents()
+        await waitUntil("a drain attempt") { harness.pipeline.completedDrainCount > drains && harness.pipeline.isIdle }
+        XCTAssertTrue(isFiring(harness.alerts.phase(of: .missedReadings)), "the drain attempt must tick the alert engine")
+        XCTAssertTrue(isFiring(harness.alerts.phase(of: .storageFailing)), "the storage-failure alert input was sent")
+
+        // The store opens: the waiting reading is stored and uploaded; storage is healthy again.
+        harness.pipeline.attach(store: harness.repository)
+        await waitUntil("stored") { harness.pipeline.heldReadingCount == 0 && harness.pipeline.isIdle }
+        let stored = try await harness.store.readings(from: .distantPast, to: .distantFuture)
+        XCTAssertEqual(stored.map(\.id), [reading.id])
+        let afterRecovery = await harness.uploader.status.queueDepth
+        XCTAssertEqual(afterRecovery, 1)
+        XCTAssertEqual(harness.pipeline.storageHealth, .ok)
+    }
+
+    /// D42 (Phase 2 review M1, the reviewer's probe): inserts throw (full disk). Readings at
+    /// 50 mg/dL still fire urgent low, Trio still gets every one, missed readings stays armed, and
+    /// the storage-failure alert input is set; when the disk recovers the readings are stored and
+    /// uploaded.
+    func test_S5_failingStoreStillAlarmsUrgentLowAndFeedsTrio() async throws {
+        let harness = try await makeHarness()
+        harness.repository.failInserts = true
+        let base = PipelineFixtures.start
+        var readings: [GlucoseReading] = []
+        for index in 0..<4 {
+            let date = base.addingTimeInterval(TimeInterval(index * 300))
+            harness.clock.set(date.addingTimeInterval(5))
+            let reading = PipelineFixtures.reading(.mgdl(50), at: date)
+            readings.append(reading)
+            harness.source.deliver(reading)
+            await settle(harness, readings: index + 1)
+        }
+
+        let stored = try await harness.store.readings(from: .distantPast, to: .distantFuture)
+        XCTAssertTrue(stored.isEmpty)
+        XCTAssertEqual(harness.pipeline.heldReadingCount, 4)
+        XCTAssertEqual(harness.center.posted("urgentLow").count, 1, "urgent low must fire with a failing store")
+        XCTAssertTrue(isFiring(harness.alerts.phase(of: .urgentLow)))
+        XCTAssertEqual(harness.trioStore.payload.count, 4, "Trio gets every reading with a failing store")
+        XCTAssertEqual(harness.alerts.phase(of: .missedReadings), .armed, "readings are arriving: missed readings stays armed")
+        XCTAssertEqual(harness.pipeline.storageHealth, .failing(since: base.addingTimeInterval(5)))
+        XCTAssertTrue(isFiring(harness.alerts.phase(of: .storageFailing)), "after 5 minutes of failure the storage alert fires (AlertLimits.storageFailingMinutes)")
+        let uploadsWhileFailing = await harness.uploader.status.queueDepth
+        XCTAssertEqual(uploadsWhileFailing, 0)
+        XCTAssertNotNil(harness.pipeline.storeProblem)
+
+        // The disk recovers: the next wake stores everything, uploads it, and storage is healthy.
+        harness.repository.failInserts = false
+        let next = PipelineFixtures.reading(.mgdl(52), at: base.addingTimeInterval(1_200))
+        harness.clock.set(next.date.addingTimeInterval(5))
+        harness.source.deliver(next)
+        await settle(harness, readings: 5)
+        let recovered = try await harness.store.readings(from: .distantPast, to: .distantFuture)
+        XCTAssertEqual(recovered.map(\.id), (readings + [next]).map(\.id))
+        let queued = await harness.uploader.status.queueDepth
+        XCTAssertEqual(queued, 5)
+        XCTAssertEqual(harness.pipeline.storageHealth, .ok)
+        XCTAssertNil(harness.pipeline.storeProblem)
+        XCTAssertEqual(harness.trioStore.payload.count, 5)
     }
 
     // MARK: - S1

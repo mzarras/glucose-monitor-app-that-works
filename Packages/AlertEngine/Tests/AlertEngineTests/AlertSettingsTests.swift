@@ -28,7 +28,7 @@ final class AlertSettingsTests: XCTestCase {
         XCTAssertEqual(s.missedReadings.windowMinutes, 15)
         for kind: AlertKind in [
             .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod,
-            .sensorFailed, .sensorError, .calibrationNeeded, .sensorExpired, .bluetoothUnavailable, .trioBridge,
+            .sensorFailed, .sensorError, .calibrationNeeded, .sensorExpired, .bluetoothUnavailable, .trioBridge, .storageFailing,
         ] {
             XCTAssertTrue(s.isEnabled(kind), "\(kind) on by default")
         }
@@ -44,6 +44,7 @@ final class AlertSettingsTests: XCTestCase {
         let off: [AlertKind] = [
             .fallingFast, .risingFast,
             .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod,
+            .storageFailing,   // D42: history is lost, alerts and Trio are not
         ]
         XCTAssertEqual(Set(on).union(off), Set(AlertKind.allCases), "every alert has a stated default")
         for kind in on { XCTAssertTrue(s.soundsOnSilent(kind), "\(kind)") }
@@ -219,6 +220,7 @@ final class AlertSettingsTests: XCTestCase {
         s.sensorFailed = StatusAlertSettings(isEnabled: false, sound: .sonar, soundsOnSilent: false, snoozeMinutes: 15)
         s.sensorError.snoozeMinutes = 200
         s.calibrationNeeded = StatusAlertSettings(isEnabled: false, sound: .doorbell, soundsOnSilent: false, snoozeMinutes: 45)
+        s.storageFailing = StatusAlertSettings(isEnabled: false, sound: .sonar, soundsOnSilent: true, snoozeMinutes: 90)
         s.sensorExpired.isEnabled = false
         s.bluetoothUnavailable.sound = .dusk
         s.trioBridge.soundsOnSilent = false
@@ -226,6 +228,17 @@ final class AlertSettingsTests: XCTestCase {
         let data = try JSONEncoder().encode(s)
         XCTAssertEqual(try JSONDecoder().decode(AlertSettings.self, from: data), s)
         XCTAssertEqual(AlertSettings.decodeOrDefault(data), s)
+    }
+
+    func test_storageFailingSettingsDecodeWithDefaultsFromOlderStoredSettings() throws {
+        let older = try decode(#"{"trioBridge": {"isEnabled": false}}"#)   // written before D42
+        XCTAssertEqual(older.storageFailing, StatusAlertSettings.defaults(for: .storageFailing))
+        XCTAssertTrue(older.storageFailing.isEnabled)
+        XCTAssertFalse(older.storageFailing.soundsOnSilent)
+        XCTAssertEqual(older.storageFailing.snoozeMinutes, 30)
+        let stored = try decode(#"{"storageFailing": {"isEnabled": false, "snoozeMinutes": 99999}}"#)
+        XCTAssertFalse(stored.storageFailing.isEnabled)
+        XCTAssertEqual(stored.storageFailing.snoozeMinutes, 1440)
     }
 
     func test_decodeOrDefaultNeverThrows() {

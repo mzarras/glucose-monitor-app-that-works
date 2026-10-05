@@ -107,14 +107,17 @@ struct TrioBridgeSummary: Sendable, Equatable {
     var heartbeatPublished: Bool
     /// The last heartbeat key write/removal error, if the last attempt failed.
     var heartbeatError: String?
+    /// Set while the bridge is turned on but cannot run at all in this build (no Trio App Group in
+    /// Info.plist): nothing reaches Trio, so it counts as failing (S5, Phase 2 review minor 4).
+    var unavailableReason: String?
 
-    var isFailing: Bool { consecutiveFailures > 0 }
+    var isFailing: Bool { consecutiveFailures > 0 || unavailableReason != nil }
 
     static let off = TrioBridgeSummary(
         isEnabled: false, liveOutputsAllowed: false, appGroupID: nil, lastSuccessfulWriteAt: nil, readingsInLastWrite: 0,
         newestReadingWrittenAt: nil, consecutiveFailures: 0, problemSince: nil, lastErrorDescription: nil, lastErrorAt: nil,
         isStarving: false, trioLag: nil, lastGateRefusalDescription: nil, heartbeatAddressInAppGroup: nil,
-        heartbeatPublished: false, heartbeatError: nil
+        heartbeatPublished: false, heartbeatError: nil, unavailableReason: nil
     )
 }
 

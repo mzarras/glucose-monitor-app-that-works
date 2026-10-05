@@ -89,9 +89,7 @@ extension LiveAppServices {
     /// D26: the urgent-low alarm's Stop runs `StopUrgentLowAlarmIntent`, which reaches the running
     /// service through this bridge. Connected once; it always routes to the active service.
     func connectIntentBridge() async {
-        await UrgentLowAlarmIntentBridge.shared.connect { [weak self] action in
-            await self?.activeAlerts?.send(.user(action))
-        }
+        await AlarmIntentRouting.connect(UrgentLowAlarmIntentBridge.shared) { [weak self] in self?.activeAlerts }
     }
 
     // MARK: - Trio bridge status → the §5 "Trio bridge" alert (S5)
@@ -107,5 +105,16 @@ extension LiveAppServices {
         guard force || input != lastTrioAlertInput else { return }
         lastTrioAlertInput = input
         await activeAlerts?.send(.trioBridge(input))
+    }
+}
+
+/// How the AlarmKit intent bridge reaches the alert service (shared with the app-level test of the
+/// Stop button): every tap goes to whichever service is active at that moment.
+enum AlarmIntentRouting {
+    @MainActor
+    static func connect(_ bridge: UrgentLowAlarmIntentBridge, to activeService: @escaping @MainActor () -> AlertService?) async {
+        await bridge.connect { action in
+            await activeService()?.send(.user(action))
+        }
     }
 }

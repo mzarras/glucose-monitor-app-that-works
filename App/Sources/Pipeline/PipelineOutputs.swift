@@ -14,21 +14,24 @@ import TrioBridge
 @MainActor
 protocol WidgetSnapshotPublishing: AnyObject {
     /// - Parameters:
-    ///   - latestLive: the store's latest live reading, however old.
+    ///   - latestLive: the latest live reading, however old.
     ///   - previousLive: the live reading just before it (delta), if any.
-    ///   - recent: stored readings of the last 3 hours, any source (chart only).
+    ///   - recent: readings of the last 3 hours, any source (chart only).
     func publish(latestLive: GlucoseReading?, previousLive: GlucoseReading?, recent: [GlucoseReading], sensorState: SensorState, now: Date)
 }
 
 @MainActor
 struct PipelineOutputs {
-    /// Gets every stored reading that passed the gate (`.reading`), every sensor state
-    /// (`.sensorState`), and a `.tick` after every batch (a wake-up).
+    /// Gets every reading that passed the gate (`.reading`), every sensor state (`.sensorState`),
+    /// and a `.tick` after every drain attempt (a wake-up).
     var alerts: AlertService?
     /// Nil while the Trio bridge is off or not allowed in this build.
     var trio: TrioBridge?
-    /// Empty while uploads are off or not allowed in this build.
-    var uploaders: [ReadingUploader] = []
+    /// The uploaders to submit stored readings to, read at the moment of use (Phase 2 review M2):
+    /// an uploader replaced in Settings (one per queue file) is picked up without re-attaching, and
+    /// the pipeline never keeps a released uploader alive. Nil or empty while uploads are off or
+    /// not allowed in this build.
+    var uploaders: (@MainActor () -> [ReadingUploader])?
     /// Called after readings were submitted to the uploaders: `flushIfDue` each (the upload
     /// coordinator handles `.alreadyFlushing` and background time). Nil: no flush.
     var flushUploads: (@MainActor () -> Void)?
