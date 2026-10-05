@@ -2,6 +2,7 @@ import AlertEngine
 import GlucoseCore
 import GlucoseStore
 import NightscoutKit
+import UIKit
 import WidgetCore
 import XCTest
 @testable import Sensor
@@ -29,12 +30,25 @@ func eventually(timeout: TimeInterval = 3, _ condition: () -> Bool) async -> Boo
 final class AppModelWiringTests: XCTestCase {
     private var clock = TestClock(t0)
 
-    private func launch(_ services: PreviewAppServices, arguments: [String] = [], onboardingCompleted: Bool = true) -> AppModel {
+    /// - Parameter sensorStateArrived: the source's first state has reached the facade (it sends
+    ///   `.sensor`); until then `.notPaired` is only the facade's default (review M1).
+    private func launch(_ services: PreviewAppServices, arguments: [String] = [], onboardingCompleted: Bool = true,
+                        sensorStateArrived: Bool = true, protectedData: ProtectedData = ProtectedData(true)) -> AppModel {
         let defaults = UserDefaults(suiteName: "AppModelWiringTests.\(UUID().uuidString)")!
         let preferences = AppUIPreferences(defaults: defaults)
         preferences.onboardingCompleted = onboardingCompleted
         let clock = self.clock
-        return AppModel.launch(services: services, arguments: arguments, preferences: preferences, calendar: utcCalendar, clock: { clock.now })
+        let model = AppModel.launch(services: services, arguments: arguments, preferences: preferences, calendar: utcCalendar,
+                                    clock: { clock.now }, protectedDataAvailable: { protectedData.available })
+        if sensorStateArrived { model.apply(.sensor) }
+        return model
+    }
+
+    /// Whether the phone's protected data is readable (before the first unlock it isn't).
+    @MainActor
+    final class ProtectedData {
+        var available: Bool
+        init(_ available: Bool) { self.available = available }
     }
 
     private func liveServices(latestAge: Double = 3, value: GlucoseValue = .mgdl(112)) -> PreviewAppServices {
@@ -69,9 +83,10 @@ final class AppModelWiringTests: XCTestCase {
 
         typealias Setup = (PreviewAppServices) -> Void
         let cases: [(String, Setup, AppBanner.Kind)] = [
-            ("trio write failing", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.consecutiveFailures = 2; $0.trio.lastErrorDescription = "write failed" }, .trioBridgeFailing),
-            ("trio starving", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.isStarving = true }, .trioBridgeFailing),
-            ("trio heartbeat", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.heartbeatError = "denied" }, .trioHeartbeatFailing),
+            ("trio write failing", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.appGroupID = "group.trio"; $0.trio.consecutiveFailures = 2; $0.trio.lastErrorDescription = "write failed" }, .trioBridgeFailing),
+            ("trio starving", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.appGroupID = "group.trio"; $0.trio.isStarving = true }, .trioBridgeFailing),
+            ("trio on, no App Group (m4)", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.appGroupID = nil }, .trioBridgeFailing),
+            ("trio heartbeat", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.appGroupID = "group.trio"; $0.trio.heartbeatError = "denied" }, .trioHeartbeatFailing),
             ("nightscout failing", { $0.nightscout.upload = enabled; $0.nightscout.upload.status = failingStatus }, .nightscoutUploadFailing),
             ("nightscout setup error", { $0.nightscout.upload = enabled; $0.nightscout.upload.setupError = "QueueFileInUse" }, .nightscoutUploadFailing),
             ("nightscout on, not set up", { $0.nightscout.upload = enabled; $0.nightscout.upload.isConfigured = false }, .nightscoutUploadFailing),
@@ -448,17 +463,135 @@ final class AppModelWiringTests: XCTestCase {
         let preferences = AppUIPreferences(defaults: defaults)
         preferences.onboardingCompleted = true
         let clock = self.clock
-        let model = AppModel.launch(services: services, arguments: [], preferences: preferences, calendar: utcCalendar, clock: { clock.now })
+        let model = AppModel.launch(services: services, arguments: [], preferences: preferences, calendar: utcCalendar, clock: { clock.now },
+                                    protectedDataAvailable: { true })
         XCTAssertTrue(model.now.sensorNeedsCalibration)
         services.sensorState = .failed(SensorFailure(kind: .clockMismatch, message: "clock"))
         model.apply(.sensor)
         XCTAssertTrue(model.now.sensorNeedsCalibration)
         XCTAssertTrue(kinds(model).contains(.calibrationNeeded))
-        let relaunched = AppModel.launch(services: services, arguments: [], preferences: preferences, calendar: utcCalendar, clock: { clock.now })
+        let relaunched = AppModel.launch(services: services, arguments: [], preferences: preferences, calendar: utcCalendar, clock: { clock.now },
+                                         protectedDataAvailable: { true })
         XCTAssertTrue(relaunched.now.sensorNeedsCalibration, "persisted with the Now state")
         services.sensorState = activeSensor
         relaunched.apply(.sensor)
         XCTAssertFalse(relaunched.now.sensorNeedsCalibration)
+    }
+
+    // MARK: - Review M1: in-app pairing is never a trap; nothing offers to pair before the state is known
+
+    /// Every in-app way to pair (hero "Pair a sensor"/"Replace sensor", the replacement and pairing
+    /// banners) opens Settings › Sensor — a normal page with the tab bar — never the full-screen
+    /// onboarding. Onboarding itself (first launch) can be left from every step.
+    func test_inAppPairingCanAlwaysBeDismissed() async {
+        let services = liveServices()
+        services.sensorState = .failed(SensorFailure(kind: .sensorFailed, message: "Replace it"))
+        let model = launch(services)
+        for action in [AppBanner.Action.pairSensor, .pairAgain] {
+            model.selectTab(.now)
+            model.settingsRoute = nil
+            model.perform(action)
+            XCTAssertNil(model.onboarding, "\(action): no full-screen onboarding from inside the app")
+            XCTAssertEqual(model.selectedTab, .settings, "\(action)")
+            XCTAssertEqual(model.settingsRoute, .sensor, "\(action)")
+        }
+        // The page offers what this state needs (a new sensor here), so it is never a dead end.
+        XCTAssertNotNil(PairingGuidance.settingsOffer(for: model.settings.sensor.state, failureSince: nil, hasStoredSensor: true, now: t0))
+        XCTAssertNotNil(PairingGuidance.settingsOffer(for: .expired, failureSince: nil, hasStoredSensor: true, now: t0))
+        XCTAssertNotNil(PairingGuidance.settingsOffer(for: .gracePeriod(endsAt: minutes(-1)), failureSince: nil, hasStoredSensor: true, now: t0),
+                        "grace period over: the hero says expired and sends the person here")
+
+        // First-launch onboarding: "Set up later" from every step leaves it, without marking it done.
+        let fresh = PreviewAppServices(sensorState: .notPaired)
+        let firstRun = launch(fresh, onboardingCompleted: false)
+        for step in OnboardingStep.allCases {
+            firstRun.presentOnboarding(at: step)
+            XCTAssertEqual(firstRun.onboarding?.isDismissible, true, "\(step)")
+            firstRun.dismissOnboarding()
+            XCTAssertNil(firstRun.onboarding, "\(step)")
+        }
+        XCTAssertEqual(firstRun.preferences?.onboardingCompleted, false, "offered again next launch while no sensor is set up")
+    }
+
+    /// Before the source's first state the facade reports `.notPaired` by default: no "Pair a sensor",
+    /// no onboarding, no pairing offer in Settings — until a `.sensor` change says it is real.
+    func test_pairActionHiddenUntilSensorStateKnown() {
+        let services = PreviewAppServices(sensorState: .notPaired)
+        let model = launch(services, onboardingCompleted: false, sensorStateArrived: false)
+        XCTAssertNil(model.onboarding, "not decided on the facade's default")
+        guard case .message(let title, _, let action) = NowHero.make(model.now.display(now: t0), now: t0, sensorStateKnown: model.now.sensorStateKnown) else {
+            return XCTFail("hero message expected")
+        }
+        XCTAssertEqual(title, "Starting up")
+        XCTAssertNil(action, "no pair action before the state is known")
+        XCTAssertEqual(StateLine.make(model.now.display(now: t0), sensorState: .notPaired, now: t0, sensorStateKnown: false).text, "STARTING UP")
+        XCTAssertTrue(model.settings.sensor.isWaitingForFirstState, "Settings › Sensor shows 'Checking…' instead of a pairing offer")
+
+        // The source's first state arrives: now it is real.
+        model.apply(.sensor)
+        XCTAssertTrue(model.now.sensorStateKnown)
+        XCTAssertFalse(model.settings.sensor.isWaitingForFirstState)
+        guard case .message(_, _, let pair) = NowHero.make(model.now.display(now: t0), now: t0, sensorStateKnown: model.now.sensorStateKnown) else {
+            return XCTFail("hero message expected")
+        }
+        XCTAssertEqual(pair, .pairSensor)
+        XCTAssertNotNil(model.onboarding, "first run, no sensor: onboarding is offered now")
+
+        // Any other state, or a stored sensor, is evidence at launch.
+        XCTAssertTrue(launch(PreviewAppServices(sensorState: .searching), sensorStateArrived: false).now.sensorStateKnown)
+        let stored = PreviewAppServices(sensorState: .notPaired)
+        stored.hasStoredSensor = true
+        XCTAssertTrue(launch(stored, sensorStateArrived: false).now.sensorStateKnown)
+    }
+
+    /// Review m2: before the first unlock (e.g. a Bluetooth-restoration launch) preferences are
+    /// neither read nor written and onboarding isn't decided; both happen once protected data is
+    /// available.
+    func test_preferencesAndOnboardingWaitForProtectedData() async {
+        let defaults = UserDefaults(suiteName: "AppModelWiringTests.\(UUID().uuidString)")!
+        let preferences = AppUIPreferences(defaults: defaults)
+        preferences.appearance = .dark
+        preferences.sensorNeedsCalibration = true
+        let protectedData = ProtectedData(false)
+        let services = PreviewAppServices(sensorState: .failed(SensorFailure(kind: .credentialsUnavailable, message: "locked")))
+        let clock = self.clock
+        let model = AppModel.launch(services: services, arguments: [], preferences: preferences, calendar: utcCalendar, clock: { clock.now },
+                                    protectedDataAvailable: { protectedData.available })
+        model.apply(.sensor)
+        XCTAssertFalse(model.preferencesLoaded)
+        XCTAssertEqual(model.settings.appearance, .system, "not read before the first unlock")
+        XCTAssertNil(model.onboarding, "not decided before the first unlock")
+        XCTAssertFalse(model.now.sensorNeedsCalibration)
+
+        protectedData.available = true
+        NotificationCenter.default.post(name: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil)
+        let loaded = await eventually { model.preferencesLoaded }
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(model.settings.appearance, .dark)
+        XCTAssertTrue(model.now.sensorNeedsCalibration, "the stored need survives a transient failure (review minor 4)")
+        XCTAssertNotNil(model.onboarding, "decided now: first run, no sensor set up")
+    }
+
+    /// Review m3: right after a code is submitted, the previous sensor's state (here: active) is not
+    /// this pairing's result; only states after a connection step count.
+    func test_onboardingPairingIgnoresThePreviousSensorsState() async {
+        let services = PreviewAppServices(sensorState: .notPaired)
+        let model = launch(services, onboardingCompleted: false)
+        model.goToOnboardingStep(.pairing)
+        services.pairingError = nil
+        model.pairNewSensor(code: "1234")
+        // Before the facade answers, a stale state from the previous sensor arrives.
+        services.sensorState = activeSensor
+        model.apply(.sensor)
+        XCTAssertEqual(model.onboarding?.pairing, .inProgress, "the previous sensor's state is not this pairing's result")
+        await model.settle()
+        // The new pairing starts (searching), then the new sensor warms up.
+        services.sensorState = .searching
+        model.apply(.sensor)
+        services.sensorState = .warmingUp(endsAt: minutes(30))
+        model.apply(.sensor)
+        XCTAssertEqual(model.onboarding?.pairing, .paired)
+        XCTAssertEqual(OnboardingMapping.pairing(current: .inProgress, sensorState: .expired, sawConnectionStep: false), .inProgress)
     }
 
     // MARK: - Onboarding

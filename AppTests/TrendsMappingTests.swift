@@ -1,5 +1,6 @@
 import GlucoseCore
 import GlucoseStats
+import WidgetCore
 import XCTest
 @testable import Sensor
 
@@ -117,6 +118,17 @@ final class TrendsMappingTests: XCTestCase {
             XCTAssertEqual(traces.count, period.days)
             XCTAssertEqual(traces.filter(\.isToday).count, 1)
         }
+    }
+
+    /// Review m1 (S4): with a HIGH percentile the AGP's top is 400, so the HIGH line never sits at a
+    /// ceiling (250) that reads as a value; without one, the usual axis.
+    func test_S4_agpHighPercentileIsDrawnAboveEveryNumber() {
+        let numeric = [AGPBucket(minuteOfDay: 0, p5: 80, p25: 100, p50: 120, p75: 140, p95: 180)]
+        XCTAssertEqual(AGPChartScale.upperBound(numeric), ChartScale.yUpperBound(maxPlotted: 180))
+        let withHigh = numeric + [AGPBucket(minuteOfDay: 15, p5: .mgdl(150), p25: .mgdl(180), p50: .mgdl(220), p75: .mgdl(240), p95: .aboveRange)]
+        XCTAssertEqual(AGPChartScale.upperBound(withHigh), 400)
+        XCTAssertEqual(AGPLineValue.aboveRange.chartY(floor: 40, ceiling: Double(AGPChartScale.upperBound(withHigh))), 400)
+        XCTAssertGreaterThan(AGPChartScale.upperBound(withHigh), ChartScale.yUpperBound(maxPlotted: 240), "not at the numeric ceiling")
     }
 
     /// 1 D / 3 D show the real readings of each day, and nothing else (S1).

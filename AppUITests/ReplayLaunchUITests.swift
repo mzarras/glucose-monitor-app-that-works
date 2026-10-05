@@ -46,7 +46,7 @@ final class ReplayLaunchUITests: XCTestCase {
     /// The DEBUG/REPLAY banner names the scenario (PROGRESS D19), and onboarding is not shown.
     private func assertReplayBanner(_ app: XCUIApplication, _ scenario: String) {
         waitForLabel(element(app, "build.banner"), "DEBUG/REPLAY banner") { $0.contains("DEBUG BUILD") && $0.contains("REPLAY: \(scenario.uppercased())") }
-        XCTAssertFalse(element(app, "onboarding.root").exists, "a replay run never shows onboarding")
+        XCTAssertFalse(element(app, "onboarding.step").exists, "a replay run never shows onboarding")
     }
 
     /// The hero's number, from its VoiceOver label ("112 milligrams per deciliter, steady, …").
@@ -148,5 +148,25 @@ final class ReplayLaunchUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(element(app, "onboarding.welcome.start").waitForExistence(timeout: timeout), "onboarding's first step")
         waitForLabel(element(app, "build.banner"), "DEBUG banner over onboarding") { $0.contains("DEBUG BUILD") }
+    }
+
+    /// Review M1: onboarding can be left, and pairing from inside the app is Settings › Sensor (with
+    /// the tab bar), never a full-screen flow without a way out.
+    func test_onboardingCanBeLeftAndInAppPairingOpensSettings() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-resetOnboardingFlag"]
+        app.launch()
+        XCTAssertTrue(element(app, "onboarding.welcome.start").waitForExistence(timeout: timeout), "onboarding's first step")
+        let setUpLater = element(app, "onboarding.dismiss")
+        XCTAssertTrue(setUpLater.waitForExistence(timeout: timeout), "every onboarding step offers Set up later")
+        setUpLater.tap()
+        waitForLabel(element(app, "now.hero.message"), "Now: no sensor paired") { $0.contains("No sensor paired") }
+        let pair = element(app, "now.hero.action")
+        XCTAssertTrue(pair.waitForExistence(timeout: timeout))
+        pair.tap()
+        XCTAssertTrue(element(app, "settings.sensor.page").waitForExistence(timeout: timeout), "Settings › Sensor")
+        XCTAssertFalse(element(app, "onboarding.step").exists, "not the full-screen onboarding")
+        XCTAssertTrue(app.buttons["Trends"].exists && app.buttons["Settings"].exists, "the tab bar is there")
     }
 }

@@ -74,6 +74,12 @@ struct SensorSettings: Equatable, Sendable {
     /// A pairing request is on its way to the sensor (code accepted by the app, sensor not yet
     /// connected).
     var pairingInProgress: Bool = false
+    /// Review M1: `state` is the source's, not the facade's launch default; while false nothing
+    /// offers to pair.
+    var stateKnown: Bool = true
+
+    /// `.notPaired` before the source has reported: say so instead of offering to pair.
+    var isWaitingForFirstState: Bool { !stateKnown && state == .notPaired }
 }
 
 struct TrioSettings: Equatable, Sendable {

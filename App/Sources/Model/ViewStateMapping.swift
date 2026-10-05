@@ -225,12 +225,16 @@ enum OnboardingMapping {
     }
 
     /// The pairing step after a code was submitted, from the sensor state the source reports. Before
-    /// a submission (`.idle`) and once paired, the state doesn't follow the sensor.
-    static func pairing(current: PairingState, sensorState: SensorState) -> PairingState {
+    /// a submission (`.idle`) and once paired, the state doesn't follow the sensor. Review m3: while
+    /// in progress, a result counts only after a connection step since the code was submitted
+    /// (`sawConnectionStep`), so the previous sensor's state is never shown as this pairing's result.
+    static func pairing(current: PairingState, sensorState: SensorState, sawConnectionStep: Bool = true) -> PairingState {
         switch current {
         case .idle, .paired:
             return current
-        case .inProgress, .failed, .couldNotStart:
+        case .inProgress:
+            if !sawConnectionStep { return current }
+        case .failed, .couldNotStart:
             break
         }
         switch sensorState {
@@ -281,7 +285,10 @@ enum OnboardingMapping {
     /// (`-onboarding`).
     static func showsAtLaunch(sensorState: SensorState, hasStoredSensor: Bool, onboardingCompleted: Bool, replayActive: Bool, arguments: [String]) -> Bool {
         if arguments.contains("-onboarding") { return true }
-        if arguments.contains("-replayScenario") || replayActive { return false }
+        if replayActive { return false }
+        #if DEBUG
+        if arguments.contains("-replayScenario") { return false }
+        #endif
         return !onboardingCompleted && !sensorIsSetUp(sensorState: sensorState, hasStoredSensor: hasStoredSensor)
     }
 }

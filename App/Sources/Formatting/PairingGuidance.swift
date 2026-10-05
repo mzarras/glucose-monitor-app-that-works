@@ -102,6 +102,9 @@ enum PairingGuidance {
         switch state {
         case .notPaired, .expired:
             return .enterCode(steps: ["Apply a sensor.", enterNewCode], buttonTitle: "Pair a new sensor", action: .pair)
+        case .gracePeriod(let endsAt) where now >= endsAt:
+            // The grace period is over: the Now screen says "Sensor expired" and sends the person here.
+            return .enterCode(steps: ["Apply a sensor.", enterNewCode], buttonTitle: "Pair a new sensor", action: .pair)
         case .failed(let failure):
             if failure.kind == .credentialsUnavailable {
                 // Minor 1: `pair(code:)` with the worn sensor's code — it tolerates the unreadable

@@ -30,7 +30,12 @@ enum NowHero: Equatable, Sendable {
         }
     }
 
-    static func make(_ display: GlucoseDisplayState, now: Date, context: DisplayContext = .current) -> NowHero {
+    /// - Parameter sensorStateKnown: false while the facade still reports its launch default
+    ///   (`.notPaired` before the source's first state, review M1): no "Pair a sensor" then.
+    static func make(_ display: GlucoseDisplayState, now: Date, context: DisplayContext = .current, sensorStateKnown: Bool = true) -> NowHero {
+        if case .notPaired = display, !sensorStateKnown {
+            return .message(title: "Starting up", detail: "Checking for your sensor…", action: nil)
+        }
         switch display {
         case .current(let reading):
             return .reading(reading)
@@ -100,7 +105,11 @@ struct StateLine: Equatable, Sendable {
     let text: String
     let dot: Dot
 
-    static func make(_ display: GlucoseDisplayState, sensorState: SensorState, now: Date, context: DisplayContext = .current) -> StateLine {
+    static func make(_ display: GlucoseDisplayState, sensorState: SensorState, now: Date, context: DisplayContext = .current,
+                     sensorStateKnown: Bool = true) -> StateLine {
+        if case .notPaired = display, !sensorStateKnown {
+            return StateLine(text: "STARTING UP", dot: .muted)
+        }
         switch display {
         case .current(let reading):
             let minutes = AgeText.wholeMinutes(from: reading.date, to: now)

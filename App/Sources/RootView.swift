@@ -91,7 +91,7 @@ struct RootView: View {
             openSensorSettings: { model.openSettings(.sensor) },
             openCalibration: { model.isCalibrationPresented = true },
             exportDiagnostics: { model.exportDiagnostics() },
-            pairSensor: { model.presentOnboarding(at: .pairing) },
+            pairSensor: { model.perform(.pairSensor) },
             pairAgain: { model.perform(.pairAgain) },
             performBannerAction: { model.perform($0) }
         )
@@ -106,7 +106,7 @@ struct RootView: View {
     }
 
     private var settingsActions: SettingsActions {
-        var actions = SettingsActions(
+        withDeveloperActions(SettingsActions(
             pair: { model.pairNewSensor(code: $0) },
             pairAgain: { model.pairSensorAgain(code: $0) },
             forgetSensor: { model.forgetSensor() },
@@ -129,13 +129,20 @@ struct RootView: View {
             setAccent: { model.setAccent($0) },
             setAppearance: { model.setAppearance($0) },
             setRetention: { model.setRetention($0) }
-        )
+        ))
+    }
+
+    /// DEBUG builds: the Developer page's replay controls (D11, D20). Release: unchanged (m5).
+    private func withDeveloperActions(_ base: SettingsActions) -> SettingsActions {
         #if DEBUG
+        var actions = base
         actions.startReplay = { model.startReplay(scenario: $0, speed: $1) }
         actions.stopReplay = { model.stopReplay() }
         actions.setDeveloperLiveOutputs = { model.setDeveloperLiveOutputs($0) }
-        #endif
         return actions
+        #else
+        return base
+        #endif
     }
 
     private var onboardingActions: OnboardingActions {
@@ -150,7 +157,8 @@ struct RootView: View {
             submitPairingCode: { model.pairNewSensor(code: $0) },
             pairAgain: { model.pairSensorAgain(code: $0) },
             finish: { model.finishOnboarding() },
-            cancelImport: { model.cancelImport() }
+            cancelImport: { model.cancelImport() },
+            dismiss: { model.dismissOnboarding() }
         )
     }
 }

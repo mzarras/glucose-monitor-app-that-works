@@ -38,10 +38,12 @@ struct SettingsActions {
     var setAccent: @MainActor (AccentChoice) -> Void
     var setAppearance: @MainActor (AppearancePreference) -> Void
     var setRetention: @MainActor (DataRetention) -> Void
-    /// DEBUG builds: replay controls (D11, D20). Unused in Release.
+    #if DEBUG
+    /// DEBUG builds: replay controls (D11, D20). Not in Release (review m5).
     var startReplay: @MainActor (_ scenario: String, _ speed: Double) -> Void = { _, _ in }
     var stopReplay: @MainActor () -> Void = {}
     var setDeveloperLiveOutputs: @MainActor (Bool) -> Void = { _ in }
+    #endif
 
     static var noop: SettingsActions {
         SettingsActions(pair: { _ in }, pairAgain: { _ in }, stopSession: {}, openCalibration: {}, setTrioEnabled: { _ in }, saveNightscout: { _, _ in },
@@ -110,7 +112,8 @@ struct SettingsContent: View {
                 Hairline().padding(.top, 6)
             }
             SettingsGroup("SENSOR") {
-                SettingsLinkRow(title: "G7 sensor", value: SensorStatusText.row(state.sensor.state, session: state.sensor.session, now: now, context: context), route: .sensor)
+                SettingsLinkRow(title: "G7 sensor", value: state.sensor.isWaitingForFirstState ? "checking…"
+                                    : SensorStatusText.row(state.sensor.state, session: state.sensor.session, now: now, context: context), route: .sensor)
                     .accessibilityIdentifier("settings.sensor")
             }
             SettingsGroup("TRIO") {

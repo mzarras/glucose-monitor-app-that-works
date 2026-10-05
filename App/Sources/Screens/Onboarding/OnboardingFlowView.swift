@@ -26,6 +26,8 @@ struct OnboardingActions {
     var pairAgain: @MainActor (String) -> Void
     var finish: @MainActor () -> Void
     var cancelImport: @MainActor () -> Void = {}
+    /// "Set up later": leaves onboarding without completing it (review M1).
+    var dismiss: @MainActor () -> Void = {}
 
     static var noop: OnboardingActions {
         OnboardingActions(goTo: { _ in }, startNightscoutImport: { _, _, _ in }, startClarityImport: { _, _ in }, requestBluetooth: {},
@@ -57,7 +59,6 @@ struct OnboardingFlowView: View {
             }
         }
         .editorialScreen()
-        .accessibilityIdentifier("onboarding.root")
     }
 }
 
@@ -73,10 +74,17 @@ struct OnboardingContent: View {
                 Text(verbatim: "STEP \((state.visibleSteps.firstIndex(of: state.step) ?? 0) + 1) OF \(state.visibleSteps.count)")
                     .monoLabel(size: 11)
                     .foregroundStyle(Theme.muted)
+                    .accessibilityIdentifier("onboarding.step")
                 Spacer()
                 if let previous = state.step.previous(alarmsAvailable: state.alarmsAvailable), state.step != .warmUp {
                     Button("Back") { actions.goTo(previous) }
                         .buttonStyle(LinkButtonStyle())
+                }
+                if state.isDismissible, state.step != .warmUp {
+                    // Review M1: never a trap. (Warm-up has its own Done.)
+                    Button("Set up later", action: actions.dismiss)
+                        .buttonStyle(LinkButtonStyle())
+                        .accessibilityIdentifier("onboarding.dismiss")
                 }
             }
             Hairline().padding(.bottom, 12)
@@ -178,7 +186,7 @@ struct ImportStep: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             }
-            LabeledField(label: "Access token (read)") {
+            LabeledField(label: "Access token (read and write)") {
                 SecureField(text: $token) { Text(verbatim: "Token") }
             }
         }

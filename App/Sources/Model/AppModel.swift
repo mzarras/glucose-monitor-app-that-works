@@ -15,6 +15,7 @@ import AlertEngine
 import Foundation
 import GlucoseCore
 import Observation
+import UIKit
 import WidgetCore
 
 @MainActor
@@ -47,6 +48,10 @@ final class AppModel {
     /// OPEN QUESTIONS in docs/app-wiring.md for accelerated DEBUG replay.
     let clock: @MainActor () -> Date
     let preferences: AppUIPreferences?
+    /// Whether the phone's protected data is readable (false before the first unlock after a restart,
+    /// e.g. a Bluetooth-restoration launch). UI preferences are read and written, and onboarding is
+    /// decided, only once it is (review m2). Injected in tests.
+    let protectedDataAvailable: @MainActor () -> Bool
     @ObservationIgnored var calendar: Calendar = .current
 
     @ObservationIgnored private var observation: Task<Void, Never>?
@@ -67,6 +72,20 @@ final class AppModel {
     @ObservationIgnored private var failure: (kind: SensorFailure.Kind, since: Date)?
     /// A code was submitted and the sensor has not answered yet.
     @ObservationIgnored var pairingInProgress = false
+    /// Review m3: a connection step (searching/connecting/authenticating) has been seen since the
+    /// onboarding code was submitted, so the sensor state now describes this pairing rather than
+    /// the previous sensor.
+    @ObservationIgnored var pairingSawConnectionStep = false
+    /// Review M1: the facade's sensor state is real. Before the source's first state reaches the
+    /// facade it reports `.notPaired` by default; until a `.sensor` change arrives (or the state is
+    /// anything but `.notPaired`, or a sensor is stored) nothing offers to pair.
+    @ObservationIgnored private(set) var sensorStateKnown = false
+    /// Review m2: UI preferences have been read (protected data was available).
+    @ObservationIgnored private(set) var preferencesLoaded = false
+    /// Whether to show onboarding has been decided (once per launch).
+    @ObservationIgnored private var onboardingDecided = false
+    @ObservationIgnored private var launchArguments: [String] = []
+    @ObservationIgnored private var protectedDataObserver: NSObjectProtocol?
     /// Alert settings sent to the facade and not yet confirmed by a `.alertSettings` change; the next
     /// edit builds on them (AppModel+Actions `editAlert`).
     @ObservationIgnored var alertSettingsDraft: AlertSettings?
@@ -93,18 +112,22 @@ final class AppModel {
         self.services = nil
         self.clock = { Date() }
         self.preferences = nil
+        self.protectedDataAvailable = { true }
+        self.sensorStateKnown = true
     }
 
-    private init(services: any AppServices, preferences: AppUIPreferences, clock: @escaping @MainActor () -> Date) {
+    private init(services: any AppServices, preferences: AppUIPreferences, clock: @escaping @MainActor () -> Date,
+                 protectedDataAvailable: @escaping @MainActor () -> Bool) {
         self.services = services
         self.preferences = preferences
         self.clock = clock
-        var nowState = NowViewState.empty
-        nowState.sensorNeedsCalibration = preferences.sensorNeedsCalibration
-        now = nowState
+        self.protectedDataAvailable = protectedDataAvailable
+        // No preference is read here (review m2): `loadPreferences()` does, once protected data is
+        // available.
+        now = .empty
         trends = .empty(period: .default)
         alerts = AlertsMapping.make(.defaults)
-        settings = Self.emptySettings(appearance: preferences.appearance)
+        settings = Self.emptySettings(appearance: .default)
         calibration = .unavailable
         onboarding = nil
     }
@@ -116,32 +139,80 @@ final class AppModel {
     /// The running app: every view state from `services`, then kept up to date from
     /// `services.changes()`.
     ///
+    /// Onboarding is decided once both the sensor state is known and protected data is available
+    /// (`decideOnboardingIfReady`), never from the facade's launch defaults.
+    ///
     /// Launch arguments: `-onboarding` shows onboarding; `-tab <now|trends|alerts|settings>` opens a
     /// tab; DEBUG `-resetOnboardingFlag` forgets that onboarding was completed (UI tests). A replay
-    /// run (`-replayScenario`, started by the services) never shows onboarding.
+    /// run (DEBUG `-replayScenario`, started by the services) never shows onboarding.
     static func launch(
         services: any AppServices,
         arguments: [String] = ProcessInfo.processInfo.arguments,
         preferences: AppUIPreferences = AppUIPreferences(),
         calendar: Calendar = .current,
-        clock: @escaping @MainActor () -> Date = { Date() }
+        clock: @escaping @MainActor () -> Date = { Date() },
+        protectedDataAvailable: @escaping @MainActor () -> Bool = { UIApplication.shared.isProtectedDataAvailable }
     ) -> AppModel {
-        #if DEBUG
-        if arguments.contains("-resetOnboardingFlag") { preferences.onboardingCompleted = false }
-        #endif
-        let model = AppModel(services: services, preferences: preferences, clock: clock)
+        let model = AppModel(services: services, preferences: preferences, clock: clock, protectedDataAvailable: protectedDataAvailable)
         model.calendar = calendar
+        model.launchArguments = arguments
+        // `.notPaired` is also the facade's default before the source's first state: not evidence.
+        model.sensorStateKnown = services.sensorState != .notPaired || services.hasStoredSensor
         model.rebuildAll()
-        if OnboardingMapping.showsAtLaunch(sensorState: services.sensorState, hasStoredSensor: services.hasStoredSensor,
-                                           onboardingCompleted: preferences.onboardingCompleted,
-                                           replayActive: services.replay.activeScenario != nil, arguments: arguments) {
-            model.presentOnboarding(at: .welcome)
-        }
+        model.loadPreferences()
+        if !model.preferencesLoaded { model.waitForProtectedData() }
         if let index = arguments.firstIndex(of: "-tab"), index + 1 < arguments.count, let tab = AppTab(rawValue: arguments[index + 1]) {
             model.selectedTab = tab
         }
         model.startObserving()
         return model
+    }
+
+    // MARK: - Preferences and the onboarding decision (review M1, m2)
+
+    /// Reads the UI preferences once protected data is available, merges what the services reported
+    /// meanwhile, and decides onboarding if the sensor state is known.
+    func loadPreferences() {
+        guard !preferencesLoaded, let preferences, protectedDataAvailable() else { return }
+        preferencesLoaded = true
+        if let protectedDataObserver {
+            NotificationCenter.default.removeObserver(protectedDataObserver)
+            self.protectedDataObserver = nil
+        }
+        #if DEBUG
+        if launchArguments.contains("-resetOnboardingFlag") { preferences.onboardingCompleted = false }
+        #endif
+        settings.appearance = preferences.appearance
+        // The stored need, or one seen since launch, kept or cleared by the state now (review minor 4).
+        let needsCalibration = CalibrationNeed.update(previous: preferences.sensorNeedsCalibration || now.sensorNeedsCalibration,
+                                                      sensorState: now.sensorState)
+        now.sensorNeedsCalibration = needsCalibration
+        preferences.sensorNeedsCalibration = needsCalibration
+        if sensorStateKnown, OnboardingMapping.sensorIsSetUp(sensorState: now.sensorState, hasStoredSensor: hasStoredSensor) {
+            preferences.onboardingCompleted = true
+        }
+        decideOnboardingIfReady()
+    }
+
+    /// Also retried on every change and clock tick (`apply`, `tick`).
+    private func waitForProtectedData() {
+        protectedDataObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.loadPreferences() }
+        }
+    }
+
+    /// Shows onboarding at launch if it is due — once, and only when the sensor state is real and
+    /// the preferences could be read.
+    private func decideOnboardingIfReady() {
+        guard !onboardingDecided, sensorStateKnown, preferencesLoaded, let services, let preferences else { return }
+        onboardingDecided = true
+        if OnboardingMapping.showsAtLaunch(sensorState: services.sensorState, hasStoredSensor: services.hasStoredSensor,
+                                           onboardingCompleted: preferences.onboardingCompleted,
+                                           replayActive: services.replay.activeScenario != nil, arguments: launchArguments) {
+            presentOnboarding(at: .welcome)
+        }
     }
 
     #if DEBUG
@@ -203,11 +274,22 @@ final class AppModel {
 
     /// Every view state from the services' current values.
     func rebuildAll() {
-        for change in ServiceChange.allCases { apply(change) }
+        for change in ServiceChange.allCases { rebuild(change) }
+    }
+
+    /// A change the services sent. A `.sensor` change means the sensor state is the source's, not
+    /// the facade's launch default (review M1).
+    func apply(_ change: ServiceChange) {
+        if change == .sensor, !sensorStateKnown {
+            sensorStateKnown = true
+        }
+        rebuild(change)
+        if !preferencesLoaded { loadPreferences() } // decides onboarding too
+        if change == .sensor { decideOnboardingIfReady() }
     }
 
     /// Rebuilds the view states that read what `change` names (ServiceValues.swift), nothing else.
-    func apply(_ change: ServiceChange) {
+    private func rebuild(_ change: ServiceChange) {
         guard let services else { return }
         let time = clock()
         switch change {
@@ -269,6 +351,9 @@ final class AppModel {
     /// The UI clock (RootView: every 15 s and when the app comes to the foreground).
     func tick() {
         guard let services else { return }
+        // `isProtectedDataAvailable` can read false while the SwiftUI app is still being created,
+        // before UIKit has finished launching; the first tick (first render) tries again.
+        if !preferencesLoaded { loadPreferences() }
         let time = clock()
         services.updateClockMismatchLatch(now: time)
         refreshLatch(time)
@@ -327,6 +412,8 @@ final class AppModel {
         guard let services else { return }
         let state = services.sensorState
         hasStoredSensor = services.hasStoredSensor
+        if hasStoredSensor { sensorStateKnown = true }
+        now.sensorStateKnown = sensorStateKnown
         now.sensorState = state
         now.sensorSession = services.sensorSession
         calibration.sensorState = state
@@ -336,7 +423,7 @@ final class AppModel {
         let needsCalibration = CalibrationNeed.update(previous: now.sensorNeedsCalibration, sensorState: state)
         if needsCalibration != now.sensorNeedsCalibration {
             now.sensorNeedsCalibration = needsCalibration
-            preferences?.sensorNeedsCalibration = needsCalibration
+            if preferencesLoaded { preferences?.sensorNeedsCalibration = needsCalibration }
         }
 
         // When the current failure began (PairingGuidance.credentialsRetryWindow).
@@ -346,26 +433,31 @@ final class AppModel {
             failure = nil
         }
 
-        // A pairing is answered once the sensor reports anything past the connection steps.
+        // A pairing is answered once the sensor reports anything past the connection steps that
+        // follow the code (review m3: not the previous sensor's state).
         switch state {
-        case .searching, .connecting, .authenticating, .bluetoothUnavailable, .notPaired:
+        case .searching, .connecting, .authenticating:
+            pairingSawConnectionStep = true
+        case .bluetoothUnavailable, .notPaired:
             break
         case .warmingUp, .active, .gracePeriod, .expired, .failed, .error, .calibrationNeeded, .calibrationError:
-            pairingInProgress = false
+            if pairingSawConnectionStep { pairingInProgress = false }
         }
-        let sensorIsSetUp = OnboardingMapping.sensorIsSetUp(sensorState: state, hasStoredSensor: hasStoredSensor)
-        if sensorIsSetUp { preferences?.onboardingCompleted = true }
+        let sensorIsSetUp = sensorStateKnown && OnboardingMapping.sensorIsSetUp(sensorState: state, hasStoredSensor: hasStoredSensor)
+        if sensorIsSetUp, preferencesLoaded { preferences?.onboardingCompleted = true }
 
         settings.sensor = SettingsMapping.sensor(state: state, session: services.sensorSession, storedSerial: services.storedSensorSerial,
                                                  canStopSession: services.canStopSession,
                                                  bluetooth: services.bluetoothAuthorization, failureSince: failure?.since,
                                                  pairingInProgress: pairingInProgress)
+        settings.sensor.stateKnown = sensorStateKnown
         if var onboarding {
             onboarding.sensorState = state
-            onboarding.pairing = OnboardingMapping.pairing(current: onboarding.pairing, sensorState: state)
+            onboarding.pairing = OnboardingMapping.pairing(current: onboarding.pairing, sensorState: state,
+                                                           sawConnectionStep: pairingSawConnectionStep)
             // An existing sensor showed up before the person started onboarding (e.g. after an
-            // update): nothing to set up.
-            if onboarding.step == .welcome, sensorIsSetUp {
+            // update): nothing to set up — unless onboarding was asked for (`-onboarding`).
+            if onboarding.step == .welcome, sensorIsSetUp, !launchArguments.contains("-onboarding") {
                 self.onboarding = nil
             } else {
                 self.onboarding = onboarding

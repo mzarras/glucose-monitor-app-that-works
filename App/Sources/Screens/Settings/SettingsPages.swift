@@ -23,6 +23,7 @@ struct SensorSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Layout.sectionSpacing) {
                 PageTitle("G7 sensor")
+                    .accessibilityIdentifier("settings.sensor.page")
                 SettingsValueRow(title: "Status", value: SensorStatusText.row(sensor.state, now: Date()))
                 if let serial = sensor.serial {
                     SettingsValueRow(title: "Serial", value: serial)
@@ -47,8 +48,15 @@ struct SensorSettingsView: View {
                     FieldMessage(text: feedback)
                 }
                 calibrateRow
-                if let offer = PairingGuidance.settingsOffer(for: sensor.state, failureSince: sensor.failureSince,
-                                                             hasStoredSensor: hasStoredSensor, now: Date()) {
+                if sensor.isWaitingForFirstState {
+                    // Review M1: the facade's launch default is not "no sensor"; don't offer to pair yet.
+                    HStack(spacing: 10) {
+                        ProgressView().accessibilityHidden(true)
+                        Text(verbatim: "Checking for your sensor…").font(Typography.body(size: 13))
+                    }
+                    .accessibilityElement(children: .combine)
+                } else if let offer = PairingGuidance.settingsOffer(for: sensor.state, failureSince: sensor.failureSince,
+                                                                    hasStoredSensor: hasStoredSensor, now: Date()) {
                     if case .failed(let failure) = sensor.state {
                         FieldMessage(text: failure.message)
                     }

@@ -39,6 +39,11 @@ enum ServiceHealthMapping {
         // DEBUG builds keep the bridge off unless the developer switch is on (D20): it writes nothing,
         // so it reads as off here and Settings says why.
         guard trio.isEnabled, trio.liveOutputsAllowed else { return .off }
+        // Review m4: switched on, but this build has no Trio App Group to write to (S5).
+        guard trio.appGroupID != nil else {
+            return .failing(since: trio.problemSince ?? now,
+                            message: "This build has no Trio App Group (Info.plist TrioAppGroupID), so readings can't be handed to Trio.")
+        }
         if trio.isFailing {
             return .failing(since: trio.problemSince ?? trio.lastErrorAt ?? now, message: trio.lastErrorDescription ?? "Writing to Trio's App Group failed.")
         }

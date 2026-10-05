@@ -98,6 +98,9 @@ struct OnboardingState: Equatable, Sendable {
     /// Why saving the Nightscout site or Share credentials failed, for the step that asked.
     var nightscoutMessage: String? = nil
     var shareMessage: String? = nil
+    /// Review M1: every step offers "Set up later", so onboarding is never a trap (without a new
+    /// sensor, the pairing step has no other way out).
+    var isDismissible: Bool = true
 
     var alarmsAvailable: Bool { urgentLowAlarm.isAvailable }
     var visibleSteps: [OnboardingStep] { OnboardingStep.visibleSteps(alarmsAvailable: alarmsAvailable) }

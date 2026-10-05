@@ -53,8 +53,7 @@ struct AGPChart: View {
 
     var body: some View {
         let segments = AGPSegmentation.segments(buckets)
-        let numbers = buckets.flatMap { [$0.p5, $0.p25, $0.p50, $0.p75, $0.p95].compactMap(\.mgdl) }
-        let upper = ChartScale.yUpperBound(maxPlotted: numbers.max().map { Int($0.rounded(.up)) })
+        let upper = AGPChartScale.upperBound(buckets)
         let floor = Double(ChartScale.yLowerBound)
         let ceiling = Double(upper)
         func y(_ value: AGPLineValue) -> Double { value.chartY(floor: floor, ceiling: ceiling) }
@@ -95,6 +94,19 @@ struct AGPChart: View {
         .chartPlotStyle { $0.overlay(alignment: .bottom) { Rectangle().fill(Theme.ink).frame(height: 1) } }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: TrendsText.agpSpeech(buckets)))
+    }
+}
+
+/// The AGP chart's y-axis top (review m1, S4): as for every glucose chart, unless a percentile is
+/// the sensor's HIGH flag — then 400, the sensor's top, so the HIGH line sits above every number
+/// instead of at a ceiling such as 250 that would read as a value of 250.
+enum AGPChartScale {
+    static let highFlagCeiling = 400
+
+    static func upperBound(_ buckets: [AGPBucket]) -> Int {
+        let lines = buckets.flatMap { [$0.p5, $0.p25, $0.p50, $0.p75, $0.p95] }
+        if lines.contains(.aboveRange) { return highFlagCeiling }
+        return ChartScale.yUpperBound(maxPlotted: lines.compactMap(\.mgdl).max().map { Int($0.rounded(.up)) })
     }
 }
 

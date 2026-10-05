@@ -25,7 +25,9 @@ extension AppModel {
         case .dismissForceQuitNotice:
             now.health.forceQuitGap = nil
             services?.dismissForceQuitGap()
-        case .pairSensor: presentOnboarding(at: .pairing)
+        // Review M1: in-app pairing is a Settings page (with the tab bar and the S5 banners one tap
+        // away), never the full-screen onboarding, whose only exit is finishing a pairing.
+        case .pairSensor: openSettings(.sensor)
         case .pairAgain: openSettings(.sensor)
         case .openCalibration: isCalibrationPresented = true
         case .requestNotifications: requestNotifications()
@@ -104,6 +106,7 @@ extension AppModel {
     private func startPairing(code: String, again: Bool) {
         guard let services else { return }
         pairingInProgress = true
+        pairingSawConnectionStep = false
         settings.sensor.pairingInProgress = true
         settings.feedback.pairing = nil
         if onboarding != nil {
@@ -256,7 +259,7 @@ extension AppModel {
     /// Light/dark is the app's own setting (widgets follow the system).
     func setAppearance(_ appearance: AppearancePreference) {
         settings.appearance = appearance
-        preferences?.appearance = appearance
+        if preferencesLoaded { preferences?.appearance = appearance }
     }
 
     // MARK: - History import (HANDOFF §4.5; charts and stats only, S6)
@@ -335,7 +338,14 @@ extension AppModel {
     func finishOnboarding() {
         onboarding = nil
         hadStoredSensorAtPairingStart = nil
-        preferences?.onboardingCompleted = true
+        if preferencesLoaded { preferences?.onboardingCompleted = true }
+    }
+
+    /// "Set up later" (review M1): onboarding can always be left. It is not marked completed, so it
+    /// is offered again at the next launch while no sensor is set up; Settings › Sensor pairs any time.
+    func dismissOnboarding() {
+        onboarding = nil
+        hadStoredSensorAtPairingStart = nil
     }
 
     // MARK: - DEBUG replay (D11, D19, D20)
