@@ -178,8 +178,9 @@ public struct MissedReadingsSettings: Sendable, Equatable, Hashable, Encodable {
     }
 }
 
-/// A condition alert about the sensor, Bluetooth or the Trio bridge (sensor failed, sensor error,
-/// calibration needed, sensor expired, Bluetooth unavailable, Trio bridge). On by default (S5).
+/// A condition alert about the sensor, Bluetooth, the Trio bridge or storage (sensor failed, sensor
+/// error, calibration needed, sensor expired, Bluetooth unavailable, Trio bridge, storage failing).
+/// On by default (S5).
 public struct StatusAlertSettings: Sendable, Equatable, Hashable, Encodable {
     public var isEnabled: Bool
     public var sound: AlertSoundID
@@ -196,20 +197,22 @@ public struct StatusAlertSettings: Sendable, Equatable, Hashable, Encodable {
         self.snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes)
     }
 
-    /// Defaults per kind. Sound on silent is on for all of them: each means readings have stopped
-    /// or are not reaching Trio, and each is raised while the app is awake handling that event.
+    /// Defaults per kind. Sound on silent is on for those that mean readings have stopped or are
+    /// not reaching Trio (each raised while the app is awake handling that event); off for storage
+    /// failing, which loses history but not alerts or Trio (D42).
     public static func defaults(for kind: AlertKind) -> StatusAlertSettings {
         let snooze: Int
         switch kind {
         case .bluetoothUnavailable: snooze = AlertLimits.bluetoothDefaultSnoozeMinutes
         case .trioBridge: snooze = AlertLimits.trioBridgeDefaultSnoozeMinutes
         case .calibrationNeeded: snooze = AlertLimits.calibrationDefaultSnoozeMinutes
+        case .storageFailing: snooze = AlertLimits.storageDefaultSnoozeMinutes
         default: snooze = AlertLimits.sensorProblemDefaultSnoozeMinutes
         }
         return StatusAlertSettings(
             isEnabled: true,
             sound: AlertSoundCatalog.defaultSound(for: kind),
-            soundsOnSilent: true,
+            soundsOnSilent: kind != .storageFailing,
             snoozeMinutes: snooze
         )
     }

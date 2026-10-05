@@ -23,6 +23,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
     public var sensorExpired: StatusAlertSettings
     public var bluetoothUnavailable: StatusAlertSettings
     public var trioBridge: StatusAlertSettings
+    public var storageFailing: StatusAlertSettings
     public var quietHours: QuietHours
 
     /// HANDOFF §5 defaults.
@@ -44,6 +45,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         sensorExpired = .defaults(for: .sensorExpired)
         bluetoothUnavailable = .defaults(for: .bluetoothUnavailable)
         trioBridge = .defaults(for: .trioBridge)
+        storageFailing = .defaults(for: .storageFailing)
         quietHours = .default
     }
 
@@ -71,6 +73,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorExpired: return sensorExpired.isEnabled
         case .bluetoothUnavailable: return bluetoothUnavailable.isEnabled
         case .trioBridge: return trioBridge.isEnabled
+        case .storageFailing: return storageFailing.isEnabled
         }
     }
 
@@ -93,6 +96,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorExpired: return sensorExpired.sound
         case .bluetoothUnavailable: return bluetoothUnavailable.sound
         case .trioBridge: return trioBridge.sound
+        case .storageFailing: return storageFailing.sound
         }
     }
 
@@ -116,6 +120,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorExpired: return sensorExpired.soundsOnSilent
         case .bluetoothUnavailable: return bluetoothUnavailable.soundsOnSilent
         case .trioBridge: return trioBridge.soundsOnSilent
+        case .storageFailing: return storageFailing.soundsOnSilent
         }
     }
 
@@ -137,6 +142,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorExpired: return sensorExpired.snoozeMinutes
         case .bluetoothUnavailable: return bluetoothUnavailable.snoozeMinutes
         case .trioBridge: return trioBridge.snoozeMinutes
+        case .storageFailing: return storageFailing.snoozeMinutes
         case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod:
             return nil
         }
@@ -165,6 +171,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorExpired: sensorExpired.isEnabled = enabled
         case .bluetoothUnavailable: bluetoothUnavailable.isEnabled = enabled
         case .trioBridge: trioBridge.isEnabled = enabled
+        case .storageFailing: storageFailing.isEnabled = enabled
         }
         return true
     }
@@ -188,6 +195,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorExpired: sensorExpired.sound = sound
         case .bluetoothUnavailable: bluetoothUnavailable.sound = sound
         case .trioBridge: trioBridge.sound = sound
+        case .storageFailing: storageFailing.sound = sound
         }
     }
 
@@ -212,6 +220,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .sensorExpired: sensorExpired.soundsOnSilent = on
         case .bluetoothUnavailable: bluetoothUnavailable.soundsOnSilent = on
         case .trioBridge: trioBridge.soundsOnSilent = on
+        case .storageFailing: storageFailing.soundsOnSilent = on
         }
         return true
     }
@@ -221,7 +230,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
     private enum CodingKeys: String, CodingKey {
         case urgentLow, urgentLowSoon, low, high, fallingFast, risingFast, missedReadings
         case sensorWarmUpComplete, sensorExpiringIn24Hours, sensorExpiringIn2Hours, sensorGracePeriod
-        case sensorFailed, sensorError, calibrationNeeded, sensorExpired, bluetoothUnavailable, trioBridge
+        case sensorFailed, sensorError, calibrationNeeded, sensorExpired, bluetoothUnavailable, trioBridge, storageFailing
         case quietHours
     }
 
@@ -313,6 +322,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         sensorExpired = Self.status(fields(.sensorExpired), default: d.sensorExpired)
         bluetoothUnavailable = Self.status(fields(.bluetoothUnavailable), default: d.bluetoothUnavailable)
         trioBridge = Self.status(fields(.trioBridge), default: d.trioBridge)
+        storageFailing = Self.status(fields(.storageFailing), default: d.storageFailing)
 
         let q = fields(.quietHours)
         quietHours = QuietHours(

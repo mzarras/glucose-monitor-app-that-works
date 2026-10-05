@@ -147,6 +147,130 @@ final class MissedReadingsTests: XCTestCase {
         XCTAssertEqual(h.phase(.missedReadings), .firing(since: start.addingTimeInterval(minutes(15))))
     }
 
+    /// D39: after a confirmed end of the session the sensor alert says so and stays; missed
+    /// readings every window on top would only add alarms.
+    func test_S5_missedReadingsSuppressedAfterConfirmedEndButSensorAlertStays() {
+        let ends: [(SensorState, AlertKind)] = [
+            (.expired, .sensorExpired),
+            (.failed(SensorFailure(kind: .sensorFailed, message: "failed")), .sensorFailed),
+            (.failed(SensorFailure(kind: .sessionStopped, message: "stopped")), .sensorFailed),
+        ]
+        for (state, sensorAlert) in ends {
+            let h = EngineHarness()
+            h.mgdl(120)
+            XCTAssertFalse(h.pendingDates(.missedReadings).isEmpty)
+            let end = h.send(.sensorState(state))
+            XCTAssertEqual(end.fired, [sensorAlert], "\(state)")
+            XCTAssertTrue(end.cancelled.contains(.missedReadings), "\(state): pending missed-readings notifications removed")
+            XCTAssertTrue(h.pendingDates(.missedReadings).isEmpty)
+            var due: [AlertKind] = []
+            var fired: [AlertKind] = []
+            for _ in 0..<(3 * 12) {
+                let a = h.advance(minutes: 5)
+                due += a.due
+                fired += a.fired
+            }
+            XCTAssertEqual(due, [], "\(state): no missed-readings alarms for 3 hours")
+            XCTAssertFalse(fired.contains(.missedReadings))
+            XCTAssertTrue(fired.contains(sensorAlert), "\(state): the sensor alert keeps re-alerting")
+            XCTAssertEqual(h.phase(sensorAlert), .firing(since: Fixtures.t0), "\(state): and stays until a new sensor")
+        }
+        // Missed readings that was already firing is cleared by the confirmed end, too.
+        let h = EngineHarness()
+        h.mgdl(120)
+        h.advance(minutes: 20)
+        XCTAssertEqual(h.phase(.missedReadings), .firing(since: Fixtures.t0.addingTimeInterval(minutes(15))))
+        XCTAssertTrue(h.send(.sensorState(.expired)).cancelled.contains(.missedReadings))
+        XCTAssertEqual(h.phase(.missedReadings), .armed)
+    }
+
+    func test_S5_missedReadingsStillFiresForTransientFailuresAndLostPairing() {
+        let kinds = SensorFailure.Kind.allCases.filter { !SensorFailure(kind: $0, message: "").requiresSensorReplacement }
+        XCTAssertTrue(kinds.contains(.credentialsUnavailable))
+        XCTAssertTrue(kinds.contains(.bondRemoved))
+        for kind in kinds {
+            let h = EngineHarness()
+            h.send(.sensorState(.active(sessionStart: Fixtures.session.start, expiresAt: Fixtures.session.expiresAt)))
+            h.mgdl(120)
+            var due: [AlertKind] = []
+            for _ in 0..<4 {
+                h.clock.advance(minutes: 5)
+                due += h.send(.sensorState(.failed(SensorFailure(kind: kind, message: "x")))).due
+            }
+            XCTAssertEqual(due, [.missedReadings], "\(kind): the user is told readings are missing")
+        }
+    }
+
+    func test_missedReadingsReArmsOnNewSensor() {
+        // Expired, then a new sensor warms up: pending again from its warm-up end, and due then + 15.
+        let h = EngineHarness()
+        h.mgdl(120)
+        h.send(.sensorState(.expired))
+        h.advance(minutes: 60)
+        XCTAssertTrue(h.pendingDates(.missedReadings).isEmpty)
+        let end = h.now.addingTimeInterval(minutes(30))
+        h.send(.sensorState(.warmingUp(endsAt: end)))
+        XCTAssertEqual(h.pendingDates(.missedReadings).first, end.addingTimeInterval(minutes(15)))
+        XCTAssertEqual(h.advance(minutes: 44).due, [])
+        XCTAssertEqual(h.advance(minutes: 1).due, [.missedReadings])
+
+        // A failed sensor, then "active" with no warm-up (D41): nothing restarts the window, so with
+        // no reading for an hour missed readings fires at once rather than 15 minutes later.
+        let other = EngineHarness()
+        other.mgdl(120)
+        other.send(.sensorState(.failed(SensorFailure(kind: .sensorFailed, message: ""))))
+        other.clock.advance(minutes: 60)
+        let active = other.send(.sensorState(.active(sessionStart: other.now, expiresAt: other.now.addingTimeInterval(10 * 86_400))))
+        XCTAssertEqual(active.fired, [.missedReadings])
+    }
+
+    /// D41: an end report only silences missed readings while the alert announcing it is on.
+    func test_S5_disabledSensorAlertNeverSuppressesMissedReadings() {
+        let cases: [(SensorState, (inout AlertSettings) -> Void)] = [
+            (.expired, { $0.sensorExpired.isEnabled = false }),
+            (.failed(SensorFailure(kind: .sensorFailed, message: "")), { $0.sensorFailed.isEnabled = false }),
+            (.failed(SensorFailure(kind: .sessionStopped, message: "")), { $0.sensorFailed.isEnabled = false }),
+        ]
+        for (state, turnOff) in cases {
+            let h = EngineHarness()
+            h.settings(turnOff)
+            h.mgdl(120)
+            let end = h.send(.sensorState(state))
+            XCTAssertEqual(end.fired, [], "\(state): its alert is off")
+            XCTAssertFalse(h.pendingDates(.missedReadings).isEmpty, "\(state): missed readings stays pending")
+            XCTAssertEqual(h.advance(minutes: 15).due, [.missedReadings], "\(state): the only alarm left, so it fires")
+        }
+        // Turning the alert off while the end is already in place also brings missed readings back.
+        let h = EngineHarness()
+        h.mgdl(120)
+        h.send(.sensorState(.expired))
+        h.clock.advance(minutes: 20)
+        XCTAssertEqual(h.settings { $0.sensorExpired.isEnabled = false }.fired, [.missedReadings])
+    }
+
+    func test_S5_unsupportedSensorDoesNotSuppressMissedReadings() {
+        let h = EngineHarness()
+        h.mgdl(120)
+        let failed = h.send(.sensorState(.failed(SensorFailure(kind: .unsupportedSensor, message: "Not supported."))))
+        XCTAssertEqual(failed.fired, [.sensorFailed])
+        XCTAssertFalse(failed.cancelled.contains(.missedReadings))
+        XCTAssertEqual(h.advance(minutes: 15).due, [.missedReadings])
+    }
+
+    func test_S5_briefExpiryDoesNotPostponeMissedReadings() {
+        // A (false) expiry report, then active again, then silence: missed readings is due 15 min
+        // after the last reading, not 15 min after the active report.
+        let h = EngineHarness()
+        h.mgdl(120)
+        h.clock.advance(minutes: 5)
+        h.send(.sensorState(.expired))
+        h.clock.advance(minutes: 5)
+        h.send(.sensorState(.active(sessionStart: Fixtures.session.start, expiresAt: Fixtures.session.expiresAt)))
+        XCTAssertEqual(h.pendingDates(.missedReadings).first, Fixtures.t0.addingTimeInterval(minutes(15)))
+        XCTAssertEqual(h.advance(minutes: 4).due, [])
+        XCTAssertEqual(h.advance(minutes: 1).due, [.missedReadings], "due at the last reading + 15 min")
+    }
+
     func test_missedReadingsFiresDuringCalibrationStates() {
         for state: SensorState in [.calibrationNeeded(code: 1), .calibrationError(code: 2)] {
             let h = EngineHarness()
