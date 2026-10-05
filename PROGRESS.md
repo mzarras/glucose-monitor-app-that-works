@@ -8,7 +8,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 |---|---|
 | 0 — Bootstrap | done (2026-09-23) |
 | 1 — Parallel build | done (2026-09-23): all 7 workstreams merged into `integration`; gates 1–3 PASS |
-| 2 — Integration | wiring done: `p2-stage` 3189243 = Integrator A (`p2-services` e979521) + B (`p2-app` 70d2d1b) + WS4 D39 (ae3109a); **all four gates PASS** (incl. gate 4 replay: ReplayScenarioTests + 10 SensorUITests); gate 5 in progress (two independent reviewers + test-verifier) |
+| 2 — Integration | gate 5 on `p2-stage`: test-verifier PASS, reviewer 2 PASS (M1 onboarding trap + minors), reviewer 1 **FAIL** (B1 D39 on unconfirmed expiry → D41; M1 store failure starves alerts → D42; M2 uploader re-attach) → fixing |
 | 3 — Hardening | not started |
 | 4 — Device build | not started |
 
@@ -74,6 +74,8 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D38 | **Gate before store:** the pipeline validates every live reading with `LiveReadingGate` (`validateAllowingReplay` only in a DEBUG replay run) *before* `insert`; refused readings are diagnosed and never stored, so they can't appear in history, charts or `latestLiveReading`. Consumers act on `insert`'s returned (already-validated) readings. Imported history bypasses the live gate (store-only). | S2 names storage explicitly; Integrator A flagged that store-then-gate kept gate-refused readings as history. |
 | D39 | Missed-readings alerts are suppressed after a confirmed session end (`.expired`, or `.failed` with `requiresSensorReplacement`) and while `.notPaired`; the sensor alert ("Replace the sensor" / expired) stays active until a new sensor, so the user is still told. Not suppressed by transient failures (incl. `credentialsUnavailable`). | Integrator A noted missed readings kept alarming every 15 min after expiry on top of the sensor alert — alarm fatigue without new information. |
 | D40 | `scripts/check.sh` signs simulator test runs ad hoc ("Sign to Run Locally", no team needed) so hosted tests get their entitlements (Keychain), and treats any skipped app unit test as a failure. | Integrator A's hosted Keychain tests could only skip under unsigned builds. |
+| D41 | D39 corrected (Phase 2 review B1): missed readings are suppressed only on a **confirmed** session end — `.expired` emitted only after G7Kit's two-report latch (or the grace end passing by time); an unconfirmed single end report is `.error(code:description:)` — or a latched `sensorFailed`/`sessionStopped` failure, **and** only while the matching sensor alert is enabled. `unsupportedSensor` never suppresses. Otherwise missed readings keeps firing. | One cached/garbled packet or a disabled sensor alert would otherwise have left the user with no data and no alarm. |
+| D42 | **Storage failure doesn't silence alerts or Trio:** when the store can't open/insert (e.g. full disk), gate-passed live readings still go to the alert engine and Trio (both dedupe themselves); uploads resume from their queue when storage recovers; a new storage-failure alert (on by default) says history isn't being saved; the pipeline always ticks the alert engine and writes its heartbeat after every drain attempt. | Michael, 2026-10-05 (Phase 2 review M1: 42 readings at 50 mg/dL produced no alarm with a failing store). |
 
 ## Discrepancies with HANDOFF (resolved)
 
