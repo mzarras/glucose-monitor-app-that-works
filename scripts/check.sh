@@ -294,6 +294,15 @@ gate_safety() {
         pass "S6: validateAllowingReplay only in GlucoseCore, AlertEngine, App"
     fi
 
+    # S4 / D21: the Trio LOW/HIGH sentinel may be enabled outside TrioBridge only on lines citing D21.
+    sentinel="$(grep -rn 'writeSentinel' App/Sources Packages/*/Sources 2>/dev/null \
+        | grep -v '^Packages/TrioBridge/' | grep -v 'D21')"
+    if [ -n "$sentinel" ]; then
+        fail "S4: .writeSentinel used outside TrioBridge without citing D21: $(echo $sentinel)"
+    else
+        pass "S4: .writeSentinel outside TrioBridge only on lines citing D21"
+    fi
+
     # S6: non-test code outside ReplayKit that constructs .replay/.mock readings must sit inside an
     # `#if DEBUG` block (tracked per line through nested #if/#else/#endif; an #else branch of
     # `#if DEBUG` is not guarded). Heuristic only: it misses `source:` split across lines or a
