@@ -66,7 +66,7 @@ enum AlertsMapping {
         case .missedReadings:
             row.threshold = .window(minutes: settings.missedReadings.windowMinutes, allowed: AlertLimits.missedReadingsWindowMinutes)
         case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod, .sensorFailed, .sensorError,
-             .calibrationNeeded, .sensorExpired, .bluetoothUnavailable, .trioBridge:
+             .calibrationNeeded, .sensorExpired, .bluetoothUnavailable, .trioBridge, .storageFailing:
             break
         }
         return row
@@ -126,6 +126,7 @@ enum AlertsMapping {
         case .sensorExpired: s.sensorExpired.snoozeMinutes = minutes
         case .bluetoothUnavailable: s.bluetoothUnavailable.snoozeMinutes = minutes
         case .trioBridge: s.trioBridge.snoozeMinutes = minutes
+        case .storageFailing: s.storageFailing.snoozeMinutes = minutes
         case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod:
             break
         }

@@ -96,6 +96,8 @@ struct TrioSettings: Equatable, Sendable {
     var heartbeatError: String? = nil
     /// DEBUG builds keep the bridge off unless the developer switch is on (D20).
     var pausedInDebugBuild: Bool = false
+    /// The bridge is on but can't run in this build (e.g. no Trio App Group), and why.
+    var unavailableReason: String? = nil
 }
 
 struct NightscoutSettings: Equatable, Sendable {
@@ -208,7 +210,9 @@ enum SettingsText {
         case .opening: return "Opening the reading database…"
         case .waitingForFirstUnlock(let held):
             return "The database opens after the first unlock since the phone restarted. \(held) \(held == 1 ? "reading is" : "readings are") held until then."
-        case .failed(let message): return "The reading database couldn't be opened: \(message)"
+        case .failed(let message):
+            // D42: history isn't being saved, but live readings still reach alerts and Trio.
+            return "History isn't being saved: \(message) Alerts and Trio still get new readings; charts, statistics and uploads catch up once it recovers."
         }
     }
 

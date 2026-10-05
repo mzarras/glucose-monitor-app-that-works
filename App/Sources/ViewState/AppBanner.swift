@@ -206,10 +206,11 @@ enum AppBanners {
                 detail: "The phone hasn't been unlocked since it restarted, so the reading database is locked. \(held == 1 ? "1 reading is" : "\(held) readings are") held until it opens.",
                 action: nil, actionTitle: nil))
         case .failed(let message):
+            // D42: the gate runs before the store, so live readings still reach alerts and Trio.
             banners.append(AppBanner(
                 kind: .storageUnavailable, severity: .critical,
-                title: "Readings can't be saved",
-                detail: "The reading database couldn't be opened: \(message)",
+                title: "History isn't being saved",
+                detail: "New readings still reach alerts and Trio, but aren't stored: charts, statistics and uploads miss them until this is fixed. \(message)",
                 action: nil, actionTitle: nil))
         case .opening, .open:
             break

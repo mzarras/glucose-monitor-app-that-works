@@ -47,13 +47,14 @@ extension AlertKind {
         case .sensorExpired: return "Sensor expired"
         case .bluetoothUnavailable: return "Bluetooth unavailable"
         case .trioBridge: return "Trio handoff failing"
+        case .storageFailing: return "History isn't being saved"
         }
     }
 
     var section: AlertSection {
         switch self {
         case .urgentLow, .urgentLowSoon, .low, .high, .fallingFast, .risingFast: return .glucose
-        case .missedReadings, .bluetoothUnavailable, .trioBridge: return .dataFlow
+        case .missedReadings, .bluetoothUnavailable, .trioBridge, .storageFailing: return .dataFlow
         case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod, .sensorFailed, .sensorError,
              .calibrationNeeded, .sensorExpired:
             return .sensor

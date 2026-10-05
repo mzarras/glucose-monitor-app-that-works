@@ -85,7 +85,8 @@ final class AppModelWiringTests: XCTestCase {
         let cases: [(String, Setup, AppBanner.Kind)] = [
             ("trio write failing", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.appGroupID = "group.trio"; $0.trio.consecutiveFailures = 2; $0.trio.lastErrorDescription = "write failed" }, .trioBridgeFailing),
             ("trio starving", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.appGroupID = "group.trio"; $0.trio.isStarving = true }, .trioBridgeFailing),
-            ("trio on, no App Group (m4)", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.appGroupID = nil }, .trioBridgeFailing),
+            ("trio on, unavailable (m4)", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.unavailableReason = "No Trio App Group" }, .trioBridgeFailing),
+            ("trio on, no App Group (m4, defence in depth)", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.appGroupID = nil }, .trioBridgeFailing),
             ("trio heartbeat", { $0.trio = TrioBridgeSummary.off; $0.trio.isEnabled = true; $0.trio.liveOutputsAllowed = true; $0.trio.appGroupID = "group.trio"; $0.trio.heartbeatError = "denied" }, .trioHeartbeatFailing),
             ("nightscout failing", { $0.nightscout.upload = enabled; $0.nightscout.upload.status = failingStatus }, .nightscoutUploadFailing),
             ("nightscout setup error", { $0.nightscout.upload = enabled; $0.nightscout.upload.setupError = "QueueFileInUse" }, .nightscoutUploadFailing),
@@ -105,6 +106,7 @@ final class AppModelWiringTests: XCTestCase {
             ("force-quit gap", { $0.forceQuitGap = ForceQuitGapReport(from: minutes(-300), to: minutes(-200)) }, .forceQuitGap),
             ("store locked", { $0.storage.availability = .waitingForFirstUnlock(heldReadings: 2) }, .storageUnavailable),
             ("store failed", { $0.storage.availability = .failed(message: "disk full") }, .storageUnavailable),
+            ("inserts failing (D42)", { $0.storage.availability = .failed(message: "3 reading(s) are held in memory: disk full") }, .storageUnavailable),
             ("bluetooth denied", { $0.bluetoothAuthorization = .denied }, .bluetoothUnauthorized),
             ("bluetooth restricted", { $0.bluetoothAuthorization = .restricted }, .bluetoothUnauthorized),
             ("bluetooth off", { $0.sensorState = .bluetoothUnavailable(.poweredOff) }, .bluetoothOff),
@@ -134,6 +136,27 @@ final class AppModelWiringTests: XCTestCase {
             XCTAssertTrue(kinds(model).contains(kind), "\(name): no \(kind) banner in \(kinds(model))")
             XCTAssertFalse(model.now.banners(now: clock.now).isEmpty, "\(name): the Now tab shows a problem dot")
         }
+    }
+
+    /// The Trio bridge switched on but unavailable in this build says why, in Settings and as a
+    /// failing banner; a failing store (D42) says history isn't saved while alerts and Trio carry on.
+    func test_S5_trioUnavailableAndStorageFailureAreExplained() {
+        let services = liveServices()
+        services.trio = .off
+        services.trio.isEnabled = true
+        services.trio.liveOutputsAllowed = true
+        services.trio.unavailableReason = "This build has no Trio App Group."
+        services.storage.availability = .failed(message: "3 reading(s) are held in memory: disk full")
+        let model = launch(services)
+        XCTAssertEqual(model.settings.trio.unavailableReason, "This build has no Trio App Group.")
+        guard case .failing(_, let message) = model.settings.trio.status else { return XCTFail("Trio unavailable reads as failing") }
+        XCTAssertEqual(message, "This build has no Trio App Group.")
+        let banners = model.now.banners(now: clock.now, context: testContext)
+        XCTAssertTrue(banners.contains { $0.kind == .trioBridgeFailing && $0.detail.contains("no Trio App Group") })
+        let storage = banners.first { $0.kind == .storageUnavailable }
+        XCTAssertEqual(storage?.title, "History isn't being saved")
+        XCTAssertTrue(storage?.detail.contains("still reach alerts and Trio") ?? false)
+        XCTAssertTrue(SettingsText.storageProblem(model.settings.storageAvailability)?.contains("Alerts and Trio still get new readings") ?? false)
     }
 
     /// Problems that arrive later, through `changes()`, raise their banner without a relaunch.

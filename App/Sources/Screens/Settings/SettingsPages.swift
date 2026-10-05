@@ -193,6 +193,10 @@ struct TrioSettingsView: View {
                 if trio.pausedInDebugBuild {
                     WarningNote(text: SettingsText.pausedInDebugBuild)
                 }
+                if let reason = trio.unavailableReason {
+                    WarningNote(text: reason)
+                        .accessibilityIdentifier("settings.trio.unavailable")
+                }
                 SettingsValueRow(title: "Status", value: TrioStatusText.row(trio.status))
                 if case .failing(let since, let message) = trio.status {
                     WarningNote(text: "Failing since \(TimeText.time(since)): \(message)")

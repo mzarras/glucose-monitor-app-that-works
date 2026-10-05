@@ -117,6 +117,20 @@ final class AlertsViewTests: XCTestCase {
         XCTAssertEqual(row?.soundID, .sonar)
     }
 
+    /// D42: "History isn't being saved" is a configurable data-flow alert, sound-on-silent off by default.
+    func test_storageFailingAlertRow() {
+        let row = AlertsMapping.make(.defaults).row(.storageFailing)
+        XCTAssertEqual(AlertKind.storageFailing.title, "History isn't being saved")
+        XCTAssertEqual(AlertKind.storageFailing.section, .dataFlow)
+        XCTAssertEqual(row?.isEnabled, true)
+        XCTAssertEqual(row?.soundOnSilent, false)
+        var s = AlertSettings.defaults
+        s = AlertsMapping.apply(.snooze(.storageFailing, 45), to: s)
+        s = AlertsMapping.apply(.enabled(.storageFailing, false), to: s)
+        XCTAssertEqual(s.storageFailing.snoozeMinutes, 45)
+        XCTAssertFalse(s.storageFailing.isEnabled)
+    }
+
     /// Every alert the engine can raise has a row (S5: Bluetooth and "sensor expired" included), in
     /// a section, with the engine's default sound.
     func test_everyEngineAlertHasARowInASection() {

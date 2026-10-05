@@ -131,7 +131,8 @@ enum SettingsMapping {
             newestReadingWrittenAt: trio.newestReadingWrittenAt,
             heartbeatPublished: trio.heartbeatPublished,
             heartbeatError: trio.heartbeatError,
-            pausedInDebugBuild: trio.isEnabled && !trio.liveOutputsAllowed
+            pausedInDebugBuild: trio.isEnabled && !trio.liveOutputsAllowed,
+            unavailableReason: trio.isEnabled ? trio.unavailableReason : nil
         )
     }
 

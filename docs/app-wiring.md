@@ -31,13 +31,24 @@ SensorApp → AppModel.launch(services: AppEnvironment.shared.services)   one mo
   use speed 1 (`-replayStartMinute` jumps ahead instead; see Open questions).
 - **Fixtures.** DEBUG `AppModel.fixtures()` builds fixture view states with no services, for
   previews and the fixture-based unit tests only.
+- **Sensor state known (review M1).** Before the source's first state reaches it, the facade
+  reports `.notPaired` by default. The model treats the state as real once a `.sensor` change has
+  arrived, or the state at launch is anything but `.notPaired`, or a sensor is stored
+  (`hasStoredSensor`). Until then the hero reads "Starting up", the sensor rows "checking…",
+  Settings › Sensor shows "Checking for your sensor…" instead of a pairing offer, and onboarding
+  is not decided.
+- **Protected data (review m2).** UI preferences (`AppUIPreferences`: onboarding completed,
+  light/dark, the remembered calibration need) are read and written only once
+  `UIApplication.isProtectedDataAvailable` (a Bluetooth-restoration launch can start before the
+  first unlock). The model retries on the protected-data notification, every change and every
+  clock tick (the SwiftUI app can be created before UIKit reports it).
 
 ## `ServiceChange` → what is rebuilt
 
 | Change | Reads | Rebuilds |
 |---|---|---|
 | `.readings` | `latestLiveReading`, `previousLiveReading`, `clockMismatchLatchedFor`, `readings(from:to:)` | Now hero reading + latch, Calibration's reading + latch; reloads chart + "Today so far" (async); Trends if visible, else marks it stale |
-| `.sensor` | `sensorState`, `sensorSession`, `acceptedCalibrationRange`, `canStopSession`, `hasStoredSensor`, `bluetoothAuthorization` | Now state/session/`sensorNeedsCalibration`, Calibration state, Settings › Sensor (incl. `failureSince`), Onboarding pairing + warm-up |
+| `.sensor` | `sensorState`, `sensorSession`, `acceptedCalibrationRange`, `canStopSession`, `hasStoredSensor`, `storedSensorSerial`, `bluetoothAuthorization` | marks the sensor state known; Now state/session/`sensorNeedsCalibration`, Calibration state, Settings › Sensor (incl. `failureSince`), Onboarding pairing + warm-up; decides onboarding if due |
 | `.calibration` | `recentCalibrations` | Calibration `lastSubmission`, Now fingerstick markers |
 | `.trio` | `trio` | Settings › Trio, Now health (banner, TRIO row) |
 | `.uploads` | `nightscout`, `dexcomShare` | Settings › Sharing, import forms (saved site), Now health |
@@ -82,10 +93,10 @@ when the local day changed.
   | Source | Banner kind |
   |---|---|
   | no live reading ≥ 15 min, or a future-dated/latched one | `missedReadings` ("No reading for …" / "No current reading") |
-  | `storage.availability` waiting for first unlock / failed | `storageUnavailable` |
+  | `storage.availability` waiting for first unlock / failed (open or inserts, D42: "History isn't being saved" — live readings still reach alerts and Trio) | `storageUnavailable` |
   | `bluetoothAuthorization` denied/restricted; `SensorState.bluetoothUnavailable` | `bluetoothUnauthorized`, `bluetoothOff`, `bluetoothUnavailable` |
   | `SensorState` error / failed (D36/D37: replace, pair again, sensor problem, interrupted) / calibration / expired / expiring | `sensorError`, `sensorNeedsReplacement`, `sensorNeedsPairing`, `sensorProblem`, `sensorInterrupted`, `calibrationNeeded`, `sensorExpired`, `sensorExpiring` |
-  | `trio.isFailing` or `trio.isStarving` (bridge on, outputs allowed) | `trioBridgeFailing` |
+  | `trio.unavailableReason` (on, but no Trio App Group in this build), `trio.isFailing` or `trio.isStarving` (bridge on, outputs allowed) | `trioBridgeFailing` |
   | `trio.heartbeatError` | `trioHeartbeatFailing` |
   | `alertDelivery`: denied/provisional, not asked, banners/sounds/Time Sensitive off, volume low/muted, alarms denied/not asked, alarm scheduling failed, repeats short | `notificationsDisabled`, `notificationsNotSetUp`, `notificationSettingsIncomplete`, `alarmVolumeTooLow`, `urgentLowAlarmOff`, `urgentLowAlarmNotSetUp`, `urgentLowAlarmFailed`, `alertRepeatsShort` |
   | uploader failing / setup error / on but not configured | `nightscoutUploadFailing`, `shareUploadFailing` |
@@ -106,7 +117,8 @@ warning shows on every period and next to GMI (`TrendsText.gmiNote`); the TIR ch
 `inRangeDeltaPoints` (nil without prior data), marked "(sparse data)" when the prior period is
 under 70 %; count/streak deltas are not shown. AGP from `AGPDisplaySmoothing.smoothedForDisplay`,
 empty buckets dropped, LOW/HIGH percentiles kept as flags (`AGPLineValue`) and drawn at the chart
-floor/ceiling (S4). 1 D / 3 D: the stored readings of each local day (`DayTrace`). Lows: level 1
+floor/ceiling; with any HIGH percentile the top is 400 (`AGPChartScale`), so a HIGH line never sits
+at a ceiling such as 250 that reads as a value (S4). 1 D / 3 D: the stored readings of each local day (`DayTrace`). Lows: level 1
 events starting in the period, mean duration, `busiestWindow(hourCount: 3)` when ≥ 2 lows.
 Imported-data footnote from `containsImportedReadings` (origins and span from the imported
 readings in the period). After-runs row hidden (v1.1).
@@ -117,7 +129,8 @@ Tests: `TrendsMappingTests`, `AppModelWiringTests.test_trendsFromTheStore`.
 
 ### Alerts (HANDOFF §5; docs/alerts.md)
 
-Rows are AlertEngine's own `AlertKind`s (the app has no alert enum), built from `alertSettings` by
+Rows are AlertEngine's own `AlertKind`s (the app has no alert enum; D42 added "History isn't being
+saved", `storageFailing`, sound-on-silent off by default), built from `alertSettings` by
 `AlertsMapping.make`; every range comes from `AlertLimits` (the Phase 1 screen's own Low 60–100 /
 High 120–400 / rate 2–5 clamps are gone). An edit is `AlertsMapping.apply(edit, to:)` — the
 settings types' clamping setters — then `updateAlertSettings`. Edits made before the facade
@@ -134,7 +147,7 @@ low.").
 | Page | From | Actions |
 |---|---|---|
 | Sensor | `sensorState`, `sensorSession`, `storedSensorSerial`, `canStopSession`, `hasStoredSensor`, `bluetoothAuthorization` | `PairingGuidance.settingsOffer` → `pair(code:)` / `pairAgain(code:)` (`PairingError.noSensorToPairAgain` is shown, never retried as a new pairing); forget sensor; stop session only if `canStopSession` (G7: hidden); calibrate |
-| Trio | `trio` | `setTrioBridgeEnabled`; shows `TrioAppGroupID` to compare with Trio's Group ID, last write, heartbeat, D20 pause note |
+| Trio | `trio` | `setTrioBridgeEnabled`; shows `TrioAppGroupID` to compare with Trio's Group ID, `unavailableReason`, last write, heartbeat, D20 pause note |
 | Sharing | `nightscout`, `dexcomShare` | `saveNightscout(url:token:)`, `setNightscoutUploadEnabled`, `saveDexcomShare(accountName:password:receiverSerialNumber:)`, `setDexcomShareRegion` (US default, D7), `setDexcomShareEnabled`, `retryUploads`; errors under the Save button; D29/D30 notes |
 | Alert delivery | `alertDelivery` | `requestNotificationAuthorization`, `requestUrgentLowAlarmAuthorization`, open iOS Settings; `refreshAlertDelivery` on appear |
 | Data | `storage`, `historyImport` | import (sheet), `exportAllReadingsCSV` / `exportDiagnostics` → share sheet (`ActivityView`), `setRetention`; size + reading count; `refreshStorageSummary` on appear |
@@ -144,11 +157,19 @@ low.").
 
 ### Onboarding (HANDOFF §4.5, §4.6, §7.3.5; D7, D26, D35)
 
-Shown at launch when onboarding was never completed and no sensor is set up
-(`OnboardingMapping.sensorIsSetUp`: a stored sensor or a paired-only state — not Bluetooth or
-connection states), never during a replay run (`-replayScenario` or an active scenario); `-onboarding`
-forces it, DEBUG `-resetOnboardingFlag` clears the flag (UI tests). Completion is remembered
-(`AppUIPreferences`) when the person finishes or a sensor is evidently set up.
+Shown at launch — decided once the sensor state is known and protected data is available — when
+onboarding was never completed and no sensor is set up (`OnboardingMapping.sensorIsSetUp`: a stored
+sensor or a paired-only state — not Bluetooth or connection states), never during a replay run
+(DEBUG `-replayScenario`, or an active scenario); `-onboarding` forces it, DEBUG
+`-resetOnboardingFlag` clears the flag (UI tests). Completion is remembered (`AppUIPreferences`)
+when the person finishes or a sensor is evidently set up.
+
+**Never a trap (review M1).** Every step but warm-up (which has Done) offers "Set up later"
+(`dismissOnboarding()`: not marked completed, so it is offered again next launch while no sensor is
+set up). Pairing from inside the app — the hero's "Pair a sensor" / "Replace the sensor", the
+replacement and pair-again banners — opens Settings › Sensor (`PairingGuidance.settingsOffer`
+covers not paired, expired, grace over, replacement and lost pairing), a normal page with the tab
+bar and the banners one tap away; the full-screen onboarding is first-run only.
 
 - Import: saved Nightscout site → import directly; otherwise URL + token are saved first
   (`saveNightscout`), then `startNightscoutImport(scope:)`. Clarity CSV via `.fileImporter`, read
@@ -162,7 +183,9 @@ forces it, DEBUG `-resetOnboardingFlag` clears the flag (UI tests). Completion i
   denied → iOS Settings), notifications + Critical Alerts from `alertDelivery`, the AlarmKit step on
   iOS 26+.
 - Pairing: `pair(code:)`; the step follows `sensorState` (in progress → the source's failure →
-  paired); a `PairingError` shows before anything reached the sensor. Retries go through
+  paired) only after a connection step has been seen since the code was submitted, so the previous
+  sensor's state is never shown as this pairing's result (review m3); a `PairingError` shows before
+  anything reached the sensor. Retries go through
   `PairingGuidance.recovery(for:context:)` with `PairingContext(hasStoredSensor:isNewPairing: true,
   authenticatedInThisPairing:)`, where "authenticated in this pairing" = a sensor is stored now that
   wasn't when the pairing started.
