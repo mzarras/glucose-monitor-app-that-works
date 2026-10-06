@@ -6,11 +6,6 @@ import WidgetCore
 struct BannerView: View {
     let banner: AppBanner
     let perform: (AppBanner.Action) -> Void
-    /// The moment the banner was built for (used for a countdown when there is no live clock).
-    var now: Date = Date()
-    /// When set, a countdown in the banner ticks every second against this clock (the running app);
-    /// nil renders it once at `now` (previews, screenshots).
-    var liveClock: (@MainActor () -> Date)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -26,16 +21,6 @@ struct BannerView: View {
                     .font(Typography.body(size: 13))
                     .foregroundStyle(Theme.ink)
                     .fixedSize(horizontal: false, vertical: true)
-                if let end = banner.countdownEnd {
-                    // D43: the grace period's live countdown (the label above already says it).
-                    GraceCountdownText(end: end, now: now, liveClock: liveClock) { remaining in
-                        Text(verbatim: "\(remaining) left")
-                            .font(Typography.label(size: 13, medium: true))
-                            .monospacedDigit()
-                            .foregroundStyle(Theme.ink)
-                    }
-                    .accessibilityHidden(true)
-                }
                 if let action = banner.action, let title = banner.actionTitle {
                     Button(title) { perform(action) }
                         .buttonStyle(LinkButtonStyle())

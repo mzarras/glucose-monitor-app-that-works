@@ -36,15 +36,36 @@ final class GraceCountdownTests: XCTestCase {
         state.latestLiveReading = latest(.mgdl(120), ageMinutes: 2, now: end.addingTimeInterval(-60))
         let before = end.addingTimeInterval(-1)
         XCTAssertNotNil(GraceCountdown.end(sensorState: grace, now: before))
-        XCTAssertTrue(state.banners(now: before, context: testContext).contains { $0.kind == .sensorExpiring && $0.countdownEnd == end },
-                      "the grace banner carries the countdown")
+        // Review m7: one live countdown (the body). The banner says when readings stop, with no
+        // duration; the time left is not repeated there.
+        let banner = state.banners(now: before, context: testContext).first { $0.kind == .sensorExpiring }
+        XCTAssertEqual(banner?.title, "Sensor in grace period")
+        XCTAssertEqual(banner?.detail, "Readings stop at \(TimeText.time(end, testContext)). Replace the sensor soon.")
+        XCTAssertFalse(banner?.detail.contains("left") ?? true)
 
         XCTAssertNil(GraceCountdown.end(sensorState: grace, now: end), "at zero the countdown goes")
         guard case .sensorExpired = state.display(now: end) else { return XCTFail("expired takes over at the end") }
         guard case .message(let title, _, _) = NowHero.make(state.display(now: end), now: end) else { return XCTFail("hero message") }
         XCTAssertEqual(title, "Sensor expired")
         XCTAssertTrue(state.banners(now: end, context: testContext).contains { $0.kind == .sensorExpired })
-        XCTAssertFalse(state.banners(now: end, context: testContext).contains { $0.countdownEnd != nil })
+        XCTAssertFalse(state.banners(now: end, context: testContext).contains { $0.kind == .sensorExpiring })
+    }
+
+    /// Review m9: a tick scheduled at the grace end that fires a few milliseconds early still
+    /// renders the end (the later of the scheduled date and the clock), so "Sensor expired" shows at
+    /// zero rather than on the next 15 s tick.
+    func test_anEarlyTickAtTheGraceEndStillSwitchesToExpired() {
+        var state = NowViewState.empty
+        state.sensorState = .gracePeriod(endsAt: end)
+        state.latestLiveReading = latest(.mgdl(120), ageMinutes: 2, now: end.addingTimeInterval(-60))
+        let earlyClock = end.addingTimeInterval(-0.004)
+        guard case .current = state.display(now: earlyClock) else { return XCTFail("4 ms before the end it is still grace") }
+        let rendered = NowRefreshSchedule.renderDate(scheduled: end, clock: earlyClock)
+        XCTAssertEqual(rendered, end)
+        guard case .sensorExpired = state.display(now: rendered) else { return XCTFail("the tick at the end renders expired") }
+        XCTAssertNil(GraceCountdown.end(sensorState: state.sensorState, now: rendered))
+        // A late tick keeps the clock (later than the schedule).
+        XCTAssertEqual(NowRefreshSchedule.renderDate(scheduled: end, clock: end.addingTimeInterval(2)), end.addingTimeInterval(2))
     }
 
     /// The Now screen's clock ticks every 15 s and exactly at the grace end, so the switch happens

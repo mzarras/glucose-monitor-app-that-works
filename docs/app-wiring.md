@@ -85,11 +85,13 @@ when the local day changed.
   context): TIR, mean, lows = `level1EventCountOverlappingPeriod` (a low that began before
   midnight counts). No readings today → "—" everywhere.
 - **Grace-period countdown (D43)**: while `sensorState` is `.gracePeriod(endsAt)` and the end is
-  ahead, a live h:mm:ss to `endsAt` (`GraceCountdownView`, 1 s `TimelineView`, Editorial figure
-  type) under the state line, and the same countdown in the grace banner. VoiceOver reads it to the
-  minute ("Grace period, 7 hours 40 minutes left"). The Now screen's clock
-  (`NowRefreshSchedule`: every 15 s plus exactly at `endsAt`) switches to "Sensor expired" at zero.
-  No widget countdown.
+  ahead, the screen's one live countdown: h:mm:ss to `endsAt` under the state line
+  (`GraceCountdownView`, 1 s `TimelineView`, Editorial figure type; VoiceOver to the minute, "Grace
+  period, 7 hours 40 minutes left"). The grace banner says only when readings stop ("Readings stop
+  at 8:15 PM. Replace the sensor soon."); the SENSOR row keeps "grace period · 7h 40m left" (review
+  m7). The Now screen's clock (`NowRefreshSchedule`: every 15 s plus exactly at `endsAt`) switches to
+  "Sensor expired" at zero; each tick renders the later of its scheduled date and the clock, so a
+  tick that fires a few ms early still shows the end (review m9). No widget countdown.
 - **Status rows**: SENSOR from `sensorState` + `sensorSession` ("day 6 of 10 · 4d 7h left", keeping
   the day/time left through connection steps and transient failures); TRIO from
   `ServiceHealthMapping.trioStatus`.
@@ -138,10 +140,12 @@ Tests: `TrendsMappingTests`, `AppModelWiringTests.test_trendsFromTheStore`.
 Rows are AlertEngine's own `AlertKind`s (the app has no alert enum; D42 added "History isn't being
 saved", `storageFailing`, sound-on-silent off by default). D43: the five sensor expiry reminders
 (`AlertKind.sensorExpiryReminders`: 24 h, 12 h, 2 h, grace start, expired) are their own section,
-"Sensor expiry reminders", in the order they come due; each one-off announcement has a Sound switch
-(`AlertSettings.playsSound` / `setPlaysSound`, `AlertEdit.playsSound`; 24 h off by default) on its row
-and its page; "Sensor expired" always sounds, and urgent low never gets a Sound switch (S7: its row
-has no `playsSound`, and the engine refuses the edit). Screenshots: `alerts-expiry-reminders-*.png`,
+"Sensor expiry reminders", in the order they come due. Each row has one switch (on/off) and says
+"no sound" or the sound's name; the one-off announcements' Sound switch (`AlertSettings.playsSound` /
+`setPlaysSound`, `AlertEdit.playsSound`; 24 h off by default) is on the reminder's page, above "Sound
+on silent", which is disabled while Sound is off (review m8: two unlabelled switches on a row invited
+turning a reminder off instead of muting it). "Sensor expired" always sounds, and urgent low never
+gets a Sound switch (S7: its row has no `playsSound`, and the engine refuses the edit). Screenshots: `alerts-expiry-reminders-*.png`,
 `alerts-expiry-24h-*.png` (taken by `test_alertsShowTheSensorExpiryReminders` with
 `SENSOR_WRITE_SCREENSHOTS=1`). Rows are built from `alertSettings` by
 `AlertsMapping.make`; every range comes from `AlertLimits` (the Phase 1 screen's own Low 60–100 /

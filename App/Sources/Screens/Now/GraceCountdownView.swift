@@ -1,5 +1,6 @@
-// The grace-period countdown on the Now screen (PROGRESS D43): "GRACE PERIOD", a live h:mm:ss to
-// the moment readings stop, in the Editorial figure type, and the clock time. Ticks every second
+// The grace-period countdown on the Now screen (PROGRESS D43): "GRACE PERIOD" and a live h:mm:ss to
+// the moment readings stop, in the Editorial figure type — the screen's one live countdown (review
+// m7: the banner says when readings stop, the SENSOR row the rounded time left). Ticks every second
 // while the app is open (a 1 s TimelineView of its own, so the rest of the screen keeps its 15 s
 // clock). VoiceOver reads it to the minute. At zero the Now screen switches to "Sensor expired"
 // (NowRefreshSchedule ticks at the end).
@@ -12,7 +13,6 @@ struct GraceCountdownView: View {
     /// The moment the screen was built for; the countdown shows this when there is no live clock.
     let now: Date
     var liveClock: (@MainActor () -> Date)?
-    var context: DisplayContext = .current
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -32,10 +32,6 @@ struct GraceCountdownView: View {
                         .foregroundStyle(Theme.muted)
                 }
             }
-            Text(verbatim: "Readings stop at \(TimeText.time(end, context)). Have a new sensor ready.")
-                .font(Typography.body(size: 13))
-                .foregroundStyle(Theme.ink)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.leading, 12)
         .overlay(alignment: .leading) {
@@ -48,10 +44,9 @@ struct GraceCountdownView: View {
         .accessibilityIdentifier("now.graceCountdown")
     }
 
-    /// Read when VoiceOver reaches it (to the minute): "Grace period, 7 hours 40 minutes left.
-    /// Readings stop at 8:15 PM."
+    /// Read when VoiceOver reaches it (to the minute): "Grace period, 7 hours 40 minutes left".
     private var spokenLabel: String {
-        "\(GraceCountdown.spoken(until: end, now: liveClock?() ?? now)). Readings stop at \(TimeText.time(end, context))."
+        GraceCountdown.spoken(until: end, now: liveClock?() ?? now)
     }
 }
 

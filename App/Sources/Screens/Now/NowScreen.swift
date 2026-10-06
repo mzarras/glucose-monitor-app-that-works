@@ -40,9 +40,11 @@ struct NowScreen: View {
     var body: some View {
         // Every 15 s, and exactly at the grace period's end (D43), so "Sensor expired" takes over
         // the moment the countdown reaches zero.
-        TimelineView(NowRefreshSchedule(interval: 15, extraDates: graceEnd.map { [$0] } ?? [])) { _ in
+        TimelineView(NowRefreshSchedule(interval: 15, extraDates: graceEnd.map { [$0] } ?? [])) { timeline in
             ScrollView {
-                NowContent(state: state, calibration: calibration, now: clock(), actions: actions, liveClock: clock)
+                NowContent(state: state, calibration: calibration,
+                           now: NowRefreshSchedule.renderDate(scheduled: timeline.date, clock: clock()),
+                           actions: actions, liveClock: clock)
             }
         }
         .editorialScreen()
@@ -72,7 +74,7 @@ struct NowContent: View {
             if !banners.isEmpty {
                 VStack(spacing: 8) {
                     ForEach(banners) { banner in
-                        BannerView(banner: banner, perform: actions.performBannerAction, now: now, liveClock: liveClock)
+                        BannerView(banner: banner, perform: actions.performBannerAction)
                             .accessibilityIdentifier("banner.\(banner.kind)")
                     }
                 }
@@ -81,7 +83,7 @@ struct NowContent: View {
                         pairSensor: actions.pairSensor, pairAgain: actions.pairAgain, calibrate: actions.openCalibration)
             stateLine(display)
             if let end = GraceCountdown.end(sensorState: state.sensorState, now: now) {
-                GraceCountdownView(end: end, now: now, liveClock: liveClock, context: context)
+                GraceCountdownView(end: end, now: now, liveClock: liveClock)
             }
             chartSection
             TodaySoFarView(today: state.today)

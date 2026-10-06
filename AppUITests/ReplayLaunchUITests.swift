@@ -147,32 +147,37 @@ final class ReplayLaunchUITests: XCTestCase {
 
     // MARK: - Alerts (D43)
 
-    /// The Alerts tab groups the sensor expiry reminders (24 h, 12 h, 2 h, grace start, expired) with
-    /// a Sound switch on each announcement (24 h off by default), and none for urgent low (S7).
+    /// The Alerts tab groups the sensor expiry reminders (24 h, 12 h, 2 h, grace start, expired). Each
+    /// row has one switch (on/off; review m8: no Sound switch in the list); an announcement's page has
+    /// the Sound switch (24 h off by default); urgent low's page has none (S7).
     /// With SENSOR_WRITE_SCREENSHOTS=1 (TEST_RUNNER_ prefix through xcodebuild) it also saves the
     /// list and the 24 h reminder's page to docs/screenshots, named with SENSOR_SCREENSHOT_SCHEME.
     func test_alertsShowTheSensorExpiryReminders() throws {
         let app = launch(scenario: "steady", minute: 60, extra: ["-tab", "alerts"])
         let urgentLow = element(app, "alerts.row.urgentLow")
         XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout))
-        XCTAssertFalse(element(app, "alerts.sound.urgentLow").exists, "S7: no Sound switch for urgent low")
+        urgentLow.tap()
+        XCTAssertTrue(app.staticTexts["Urgent low"].waitForExistence(timeout: timeout))
+        XCTAssertFalse(element(app, "alerts.detail.sound").exists, "S7: no Sound switch for urgent low")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout))
         let first = element(app, "alerts.row.sensorExpiringIn24Hours")
         let last = element(app, "alerts.row.sensorExpired")
         // Scroll until the whole group is on screen (the last row of it visible).
         for _ in 0..<12 where !(last.exists && last.isHittable) { app.swipeUp(velocity: .slow) }
         XCTAssertTrue(first.isHittable && last.isHittable, "the expiry reminders are on the Alerts tab")
-        for kind in ["sensorExpiringIn12Hours", "sensorExpiringIn2Hours", "sensorGracePeriod", "sensorExpired"] {
+        for kind in ["sensorExpiringIn24Hours", "sensorExpiringIn12Hours", "sensorExpiringIn2Hours", "sensorGracePeriod", "sensorExpired"] {
             XCTAssertTrue(element(app, "alerts.row.\(kind)").exists, kind)
+            XCTAssertTrue(element(app, "alerts.toggle.\(kind)").exists, "\(kind): its on/off switch")
         }
-        for kind in ["sensorExpiringIn24Hours", "sensorExpiringIn12Hours", "sensorExpiringIn2Hours", "sensorGracePeriod"] {
-            XCTAssertTrue(element(app, "alerts.sound.\(kind)").exists, "\(kind) has a Sound switch")
-        }
-        XCTAssertFalse(element(app, "alerts.sound.sensorExpired").exists, "expired always sounds")
-        let soundOff = app.switches.matching(identifier: "alerts.sound.sensorExpiringIn24Hours").firstMatch
-        if soundOff.exists { XCTAssertEqual(soundOff.value as? String, "0", "24 h: no sound by default") }
+        XCTAssertEqual(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'alerts.sound.'")).count, 0,
+                       "review m8: no Sound switch in the list")
         try saveScreenshot("alerts-expiry-reminders")
         first.tap()
         XCTAssertTrue(app.staticTexts["Sensor expires in 24 h"].waitForExistence(timeout: timeout))
+        let sound = app.switches.matching(identifier: "alerts.detail.sound").firstMatch
+        XCTAssertTrue(sound.waitForExistence(timeout: timeout), "the Sound switch is on the reminder's page")
+        XCTAssertEqual(sound.value as? String, "0", "24 h: no sound by default")
         try saveScreenshot("alerts-expiry-24h")
     }
 

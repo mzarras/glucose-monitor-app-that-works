@@ -15,6 +15,13 @@ struct NowRefreshSchedule: TimelineSchedule {
         return sequence(first: startDate) { schedule.nextDate(after: $0, start: startDate) }
     }
 
+    /// The moment to render a tick for: the later of the scheduled tick and the clock. A tick that
+    /// fires a few milliseconds early (review m9) still renders the state at its scheduled date, so
+    /// the switch at the grace end is not left for the next 15 s tick.
+    static func renderDate(scheduled: Date, clock: Date) -> Date {
+        max(scheduled, clock)
+    }
+
     /// The next tick after `date`: the next one on the `interval` grid that starts at `start`, or an
     /// extra date, whichever comes first.
     func nextDate(after date: Date, start: Date) -> Date {
