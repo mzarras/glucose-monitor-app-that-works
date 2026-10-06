@@ -84,6 +84,12 @@ when the local day changed.
 - **Today so far**: `GlucoseStatistics.todaySoFar` over the same fetch (24 h before midnight is hypo
   context): TIR, mean, lows = `level1EventCountOverlappingPeriod` (a low that began before
   midnight counts). No readings today → "—" everywhere.
+- **Grace-period countdown (D43)**: while `sensorState` is `.gracePeriod(endsAt)` and the end is
+  ahead, a live h:mm:ss to `endsAt` (`GraceCountdownView`, 1 s `TimelineView`, Editorial figure
+  type) under the state line, and the same countdown in the grace banner. VoiceOver reads it to the
+  minute ("Grace period, 7 hours 40 minutes left"). The Now screen's clock
+  (`NowRefreshSchedule`: every 15 s plus exactly at `endsAt`) switches to "Sensor expired" at zero.
+  No widget countdown.
 - **Status rows**: SENSOR from `sensorState` + `sensorSession` ("day 6 of 10 · 4d 7h left", keeping
   the day/time left through connection steps and transient failures); TRIO from
   `ServiceHealthMapping.trioStatus`.

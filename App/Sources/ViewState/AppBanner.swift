@@ -78,6 +78,8 @@ struct AppBanner: Equatable, Identifiable, Sendable {
     let detail: String
     let action: Action?
     let actionTitle: String?
+    /// D43: a live countdown to this moment is shown in the banner (the grace period's end).
+    var countdownEnd: Date? = nil
 
     var id: Kind { kind }
 }
@@ -439,7 +441,8 @@ enum AppBanners {
                 kind: .sensorExpiring, severity: .warning,
                 title: "Sensor in grace period",
                 detail: "Readings stop at \(TimeText.time(endsAt, context)) (\(TimeText.duration(endsAt.timeIntervalSince(now))) left). Replace the sensor soon.",
-                action: .openSensorSettings, actionTitle: "Sensor")]
+                action: .openSensorSettings, actionTitle: "Sensor",
+                countdownEnd: endsAt)]
         case .active(_, let expiresAt) where expiresAt.timeIntervalSince(now) <= expiringWithin:
             return [AppBanner(
                 kind: .sensorExpiring, severity: .warning,
