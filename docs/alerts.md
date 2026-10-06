@@ -227,17 +227,31 @@ delivery; the grace sentence is left out until the grace period's end is known.
   (review m1). An end reported more than a minute before that reminder is due removes it and posts
   now; if that report was brief and the grace period resumes, the reminder is scheduled again for the
   real end (review m5). With the alert off, nothing is pending for it.
-  Known limit (review m6): opening, acknowledging or snoozing the posted "Sensor expired" *before* the
-  sensor reports the end does not acknowledge the alert — there is no episode yet. At the report the
-  alert starts and sounds as usual, and the notification is posted again if it is no longer in
-  Notification Center.
+  Known limits, each erring loud:
+  - review m6: opening, acknowledging or snoozing the posted "Sensor expired" *before* the sensor
+    reports the end does not acknowledge the alert — there is no episode yet. At the report the alert
+    starts and sounds as usual, and the notification is posted again if it is no longer in
+    Notification Center;
+  - review n3: `.ensurePosted` takes "no longer pending or in Notification Center" as missing. With
+    Notification Center turned off for the app (Settings → Notifications), a notification is never
+    retained, so each reminder whose moment the app sees while running can be shown twice: once by
+    iOS, once by the check. A reminder the person cleared without iOS reporting the dismissal (e.g.
+    "Clear All") can likewise be posted again at its check, written with the time left then;
+  - review n4: a failure that requires a new sensor (the plan is dropped) followed by a report that
+    the same sensor is running again rebuilds the plan and posts the current reminder at once, even
+    if iOS had already shown it (rare: such failures are normally final).
 - **Per session.** Dates within an hour of the plan's are the same session (jitter, review M1); a move
   of more than 2 minutes within that hour is adopted and the pending reminders are rewritten at the
   new dates (review m4; one due within 60 s is left alone). A new sensor warming up, no sensor, a
   sensor that must be replaced (`SensorFailure.requiresSensorReplacement`: failed, session stopped,
   unsupported; review M1), or other dates remove the pending reminders. A lost pairing, an
   unclassified failure, an error or a calibration state keeps them. If a sensor reported as needing
-  replacement reports running again, the plan is rebuilt and the current reminder is posted late. A
+  replacement reports running again, the plan is rebuilt and the current reminder is posted late
+  (n4 above). The date the state does not carry (the grace end with `.active`, the expiry with
+  `.gracePeriod`) is taken from the reading's session at the session's own distance from the state's
+  date, so a reading and a state seen across a phone-clock change never move the plan by halves; a
+  reminder whose rewritten date is already past (the clock was set back past it, so iOS has shown it
+  on real time) is neither removed nor posted blindly, only checked (`.ensurePosted`, review n2). A
   plan replacing another one without a warm-up in between (in practice the same sensor seen through a
   phone clock moved by more than an hour) skips the reminders already past rather than repeating them.
 - **Switching.** Turning one off removes its pending notification and nothing else; turning it on

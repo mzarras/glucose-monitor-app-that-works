@@ -260,10 +260,17 @@ extension AlertEngine {
             default: continue
             }
             guard scheduledDate > Self.protectedUntil(now) else { continue }
-            guard let date = plan.date(of: kind), date > now else {
-                // Its date moved into the past: the planner posts it if it is the current one.
-                plan[kind] = nil
-                actions.append(.cancelSlots(kind, [reminderSlot]))
+            let date = plan.date(of: kind) ?? scheduledDate
+            guard date > now else {
+                // Its date moved into the past: the phone clock was set back past it, so on real time
+                // its notification has already gone out. Not removed and not posted blindly: the
+                // planner takes it as come due and, if it is the current one, checks it is there
+                // (`.ensurePosted`, review n2). A refused one stays refused and is posted then.
+                if case .notScheduled? = plan[kind] {
+                    plan[kind] = .notScheduled(date)
+                } else {
+                    plan[kind] = .pending(date)
+                }
                 continue
             }
             let notice = expiryReminderNotice(kind, at: date, now: now)
@@ -320,16 +327,25 @@ extension AlertEngine {
     }
 
     /// The running session's dates: the expiry from the active state or the grace end from the grace
-    /// state, and the other one from the session readings arrive with, if it is the same session.
+    /// state, and the other one from the session readings arrive with, if it is the same session —
+    /// kept at the session's distance from the state's date. Both are derived from the phone clock,
+    /// so a reading and a state seen on either side of a clock change must not move the plan by
+    /// halves (review n2).
     private func runningSessionDates() -> (expiresAt: Date?, graceEndsAt: Date?)? {
         let tolerance = Self.sameSessionTolerance
         let known = snapshot.knownSession
         switch snapshot.settledSensorState {
         case .active(_, let expiresAt):
-            let graceEnd = known.flatMap { abs($0.expiresAt.timeIntervalSince(expiresAt)) < tolerance ? $0.gracePeriodEndsAt : nil }
+            let graceEnd = known.flatMap { session -> Date? in
+                let offset = expiresAt.timeIntervalSince(session.expiresAt)
+                return abs(offset) < tolerance ? session.gracePeriodEndsAt.addingTimeInterval(offset) : nil
+            }
             return (expiresAt, graceEnd)
         case .gracePeriod(let endsAt):
-            let expiry = known.flatMap { abs($0.gracePeriodEndsAt.timeIntervalSince(endsAt)) < tolerance ? $0.expiresAt : nil }
+            let expiry = known.flatMap { session -> Date? in
+                let offset = endsAt.timeIntervalSince(session.gracePeriodEndsAt)
+                return abs(offset) < tolerance ? session.expiresAt.addingTimeInterval(offset) : nil
+            }
             return (expiry, endsAt)
         default:
             return nil
