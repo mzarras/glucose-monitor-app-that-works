@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // XCTest's assertion macros take synchronous autoclosures, so `XCTAssertEqual(await x, y)` does not
 // compile. These evaluate the async expressions first, then assert.
 

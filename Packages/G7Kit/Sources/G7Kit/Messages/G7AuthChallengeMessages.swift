@@ -7,6 +7,9 @@
 //
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/AuthRequestRxMessage.swift @ 7.1.0 (0370937)
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/DexcomG7AuthBridge.m @ 7.1.0 (0370937)
+// CGMBLEKit lineage: CGMBLEKit/Messages/AuthRequestRxMessage.swift (LoopKit CGMBLEKit, formerly xDripG5;
+//   MIT, Packages/G7Kit/licenses/CGMBLEKit-LICENSE), reached through xDrip4iOS;
+//   compared with loopandlearn/CGMBLEKit @ 98fae79 (Trio submodule).
 // Changes: the 0x02 request and 0x04 response builders are Swift versions of
 // DexcomG7AuthBridge.m `makeAuthRequest` and `authChallengeResponseForTokenHash`.
 

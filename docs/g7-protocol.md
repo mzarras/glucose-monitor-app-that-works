@@ -19,9 +19,13 @@ File:line citations without a repository name refer to xDrip4iOS paths under
 
 ## 1. Scope
 
-- **Primary mode only.** This app authenticates to the sensor itself with the 4-digit applicator
-  code. xDrip4iOS's *coexistence* mode (observing a connection the Dexcom app authenticated) is not
-  ported; the Dexcom app is removed from the phone (HANDOFF §4.6).
+- **Two modes (D45).** *Primary*: this app authenticates to the sensor itself with the 4-digit
+  applicator code and owns the connection (HANDOFF §4.6; the Dexcom app is removed). *Listen*: the
+  Dexcom app on the same phone owns the connection and this app only observes it — no pairing code,
+  no slot, and no write except one read-only `52` query per connection when the session length was
+  not observed (§14, D49). Ported from xDrip4iOS's coexistence (`useOtherApp`) path
+  without the commands it sends there. The app chooses the mode (`G7Configuration.mode`,
+  `G7CGMSource.setMode`); G7Kit never switches by itself.
 - **G7 10-day only.** A sensor whose `0x52` reports any session length other than 907 200 s is
   refused (§6.2). ONE+ (`DX02…`) and Stelo (`DX01…`) names are never connected.
 - **No stop-session command.** xDrip4iOS 7.1.0 primary mode has no G7 session-stop command
@@ -393,7 +397,13 @@ No captured G7 J-PAKE exchange exists in either repository. Tests:
   dates pass the last published one). A backfill record that fails it is withheld the same way and the
   batch reports `.failed(sensorClockMismatch)`; a gap-filling record that still fits between its
   neighbours is kept. The newest published reading (sensor timestamp and date, `G7ReadingMark`) is
-  persisted with the pairing record, so the rule also holds across app relaunches.
+  persisted with the pairing record, so after a relaunch nothing is dated before it. Across a
+  relaunch the rule is checked against that one mark only, not against every reading published
+  before the relaunch (audit m15). Residual: if the phone clock changed and the new process
+  re-anchored, a backfill record for a never-published sensor time *before* the mark is dated with
+  the new anchor and can sit up to the clock change away from its stored neighbours. Its id still
+  dedupes, alerts never evaluate backfill, and it is withheld anyway when it would land after the
+  mark.
 - **The "wedge" (accepted consequence of the rule above).** After a large backward move of the anchor
   (the phone clock was fast and is corrected, or is set back by hand by Δ), the session re-anchors
   after two agreeing wakes, and every new reading is then dated up to Δ earlier than the readings
@@ -461,6 +471,45 @@ follows a calibration.
 (`DXCM`+2 chars, ~1 300 values; G7SensorKit matches on `suffix(2)`) would repeat across sensors,
 and because sensor timestamps restart near 0 every session, `sensorID` collisions would make the
 store's insert-or-ignore silently drop a later sensor's readings.
+
+### 5.6 Backfill floor from the store (audit m1)
+
+**The G7 has no backfill request.** In primary mode neither xDrip4iOS 7.1.0 nor G7SensorKit sends
+one: enabling Backfill notifications after the `0x4E` makes the sensor send the records it chooses,
+then `59` (§2.3; `CGMG7Transmitter.swift:1165-1174`, `:1010-1012`; G7SensorKit
+`G7Sensor.swift:131-136`, `:285-311`). So G7Kit cannot ask for "everything since X". What it controls
+is which received records it publishes.
+
+Problem: G7Kit marks a reading as published when it yields it (and persists the newest mark). If the
+app's store is failing (D42) and iOS terminates the app, readings delivered to alerts and Trio were
+never stored; a later backfill copy of the newest one was skipped as "already published".
+
+API: `G7CGMSource.setLatestStoredReading(_ reading: GlucoseReading?, forSerial serial: String)` —
+the newest reading the app has durably stored for that sensor (nil: none). Rules:
+- A backfill record whose sensor time is **above** the floor is published again even if G7Kit
+  published it before, with the same id and date as the first delivery and `isBackfill = true`
+  (byte-identical otherwise). It must carry the date it was first published with; after a re-anchor
+  it would not, and it is withheld (one id, one date, S3). The store and Trio dedupe by id; alerts
+  never evaluate backfill.
+- Never in the connection that first published it (the app cannot have stored it yet).
+- At or below the floor: unchanged behaviour (published only if G7Kit does not know it as published,
+  e.g. gap filling after a relaunch).
+- Everything else is unchanged: authentication, the gate (`LiveReadingGate`: session start,
+  warm-up, grace end, future), the session clock, the latch (after a latched end nothing is
+  published), unsupported sensors. The floor applies only to the pipeline of the serial it names, so
+  no reading of another sensor or session is re-published; a reading whose id is not that sensor's
+  `GlucoseReading.sensorID` is ignored (logged).
+- Without any call (no store), nothing already published is re-published (the previous behaviour).
+- A floor that is too low only causes duplicates (deduped by id); one that is too high is the
+  previous behaviour.
+The app calls it once the store is readable at launch, and after each successful store write of this
+source's readings. Which records the G7 resends after a gap is the sensor's choice and is **to be
+verified on device** (§13): if it never resends a reading that was delivered live, the floor
+recovers only what it does resend, and full recovery needs the held readings persisted by the app.
+Tests `test_S3_backfillAboveTheStoredFloorIsPublishedAgain`,
+`test_S3_republishedCopyKeepsTheFirstDateOrIsWithheld`,
+`test_S3_crashWithUnstoredReadingsRepublishesFromTheStoredFloor`,
+`test_S3_backfillFloorAppliesOnlyToItsOwnSensor`.
 
 ## 6. Session timing
 
@@ -730,7 +779,7 @@ that Trio's loop cadence follows the sensor (§13).
 
 | Stripped from xDrip4iOS | Why |
 |---|---|
-| Coexistence mode (`useOtherApp`, `0x31`/`0x25` pairing, passive auth observation) | Primary only; the Dexcom app is removed (HANDOFF §4.6) |
+| Coexistence-mode *commands* (`0x52`, `0x4A`, `0x22`, calibration `0x34`/`0x32`, arming Backfill) | Listen mode (§14) never writes to the sensor; the observation itself is ported (D45) |
 | G5/G6/ONE/ONE+/Stelo/Libre/other transmitter types | Non-goals (HANDOFF §1.1); only the G7 10-day protocol is ported |
 | Battery `0x22` and firmware `0x4A` requests | Diagnostics only; not needed for readings or safety; fewer bytes in the short wake window |
 | Routine `0x32` requests without a pending calibration | Only needed for xDrip4iOS's calibration-permitted indicator |
@@ -748,6 +797,25 @@ withheld (§5.4); serial with the iOS identifier (§5.5); `0x52` before GetData 
 (§2.3, §6.1); persisted `currentSession`, ended only by a sensor-reported end on two connections
 (§6.1a); backfill state byte checked (§4.2); calibration clock pairing (§8.2).
 
+**Code from LoopKit CGMBLEKit (MIT; audit m7).** Seven ported files carry code that xDrip4iOS took
+over from CGMBLEKit (formerly xDripG5, Nathan Racklyeft / LoopKit Authors). Its MIT notice ships as
+`Packages/G7Kit/licenses/CGMBLEKit-LICENSE` (verbatim from loopandlearn/CGMBLEKit @ 98fae79, the Trio
+submodule in `vendor-ref`), and each file has a "CGMBLEKit lineage" header line (checked by
+`test_S8_cgmbleKitDerivedFilesShipItsLicense`):
+
+| G7Kit file | CGMBLEKit file | What came from it |
+|---|---|---|
+| `Messages/G7Opcode.swift` | `Opcode.swift` | the opcode enum pattern and the values 0x03-0x07 (auth request rx, challenge tx/rx, keep-alive, bond request) |
+| `Messages/G7AuthStatusMessage.swift` | `Messages/AuthChallengeRxMessage.swift` | parsing `05 authenticated paired` |
+| `Messages/G7AuthChallengeMessages.swift` | `Messages/AuthRequestRxMessage.swift` | parsing `03 tokenHash(8) challenge(8)` |
+| `Auth/G7ChallengeHash.swift` | `AESCrypt.m` | the AES-128-ECB call through CommonCrypto |
+| `Messages/G7CRC16.swift` | `NSData+CRC.swift` | CRC-16 CCITT (XModem) |
+| `Messages/G7OwnershipMessages.swift` | `Messages/KeepAliveTxMessage.swift`, `Messages/BondRequestTxMessage.swift` | the `06 <seconds>` keep-alive and `07` bond-request packets |
+| `Auth/G7AuthenticationSlot.swift` | `Messages/AuthRequestTxMessage.swift` | the slot byte enum of the `02` auth request |
+
+The CGMBLEKit release xDrip4iOS took these from is not recorded upstream; the xDrip4iOS release is
+(7.1.0, 0370937), and the copies were compared with CGMBLEKit @ 98fae79.
+
 Layering for future sensor families (HANDOFF §1.1): `Messages/` (pure parsers), `Auth/`,
 `Connection/` (link + cycle), `Session/` (clock, pipeline, status), `Calibration/`, `Credentials/`,
 `Source/` (controller, CoreBluetooth adapter, public `G7CGMSource`). Another family would add its own
@@ -759,7 +827,8 @@ package or folder behind `CGMSource`; nothing G7-specific leaks into GlucoseCore
    the prompt returns at the next wake (§2.4 error codes).
 2. Timestamps: app reading times match the receiver within seconds; a backfilled reading after a
    30-min walk-away lands exactly on the previously missing times (§5.1).
-3. **Capture a real LOW and a real HIGH packet** (export diagnostics) and confirm they show as
+3. **Capture a real LOW and a real HIGH packet**: turn on Settings › Diagnostics › "Record raw glucose
+   packets" (D47), then Export diagnostics, and confirm they show as
    LOW/HIGH, not a number, before relying on HIGH → 401 in closed loop (§5.3, D31).
 4. Receiver (slot 1) and app (slot 2) both keep receiving for 24 h — tests the slot hypothesis (§9).
 5. Calibration: accepted within one or two wakes; the following display-only value is not shown as a
@@ -775,3 +844,195 @@ package or folder behind `CGMSource`; nothing G7-specific leaks into GlucoseCore
 10. With another G7 app installed (Dexcom G7 or xDrip4iOS in primary mode), `.failed(otherAppRejected)`
     surfaces (after `.failed(rejectedAfterAuthentication)` the first time), never "Pair again" while
     this phone's key is accepted (§3.1, D35).
+11. Backfill floor (§5.6): with the store made to fail (or the app terminated right after a wake),
+    check in the diagnostics which records the G7 sends on Backfill at the next wakes — whether a
+    reading already delivered live is ever sent again — and whether "published again (m1)" lines
+    appear after a relaunch.
+12. Listen mode (§14), with raw recording on: which format the Dexcom app's traffic uses (`0x4E` or
+    `0x31`+`0x25`, "raw listen packet" lines; other opcodes are logged by number); whether the
+    `0x31`/`0x25` time base agrees with `0x4E`'s (no clock-mismatch banner when both appear); how
+    often a wake is lost because the `05` was missed (`listenNoAuthenticatedConnection`, "no
+    authenticated Dexcom app connection observed" lines) — if often, report it (D50); reading times
+    match the Dexcom app's within seconds; and the Dexcom app keeps working normally (no new
+    errors, its own readings and backfill unchanged) over a day.
+13. Listen-mode session length (D49): whether answers to **Trio's** `52` requests are observed
+    ("session length … s" without a preceding "one 52 query sent (D49)" line); if not, whether this
+    app's one `52` query (sent at the second wake with proof) is answered and the session
+    established; and whether that one query disturbs anything in the Dexcom app — judged from its
+    behaviour (alerts, readings, sensor status, errors) and, if available, its log, around the wake
+    in which "one 52 query sent" appears.
+14. Listen mode with `0x31`/`0x25` only (reviews m1, m8): at the first follow, the sensor expiry this
+    app shows must equal the Dexcom app's (to the minute); if not, the `0x25` session-start origin
+    is not the session start (§14) — report it and do not rely on listen-mode expiry. Note which
+    `0x31`/`0x25` status bytes appear ("listen: 0x31 status 0x…" lines); any reading withheld for a
+    status such as `0x81` (low battery in G6 terms) should be reported.
+15. Listen mode, first follow (review m4): if the app stays on "Searching" and the diagnostic log shows
+    "not a G7 seen advertising", iOS reports the connected G7 as "Dexcom" + 2 and this app run has
+    not yet received the sensor's "DXCM…" advertisement. Keep the app open for a sensor wake (it
+    restarts its scan every 10 s until the first follow, so each advertisement is a new discovery),
+    or relaunch it. `AllowDuplicates` was not used: iOS ignores it in the background, and the
+    foreground scan restart gives the same effect only until the first follow. Also check that after
+    a failed attach the app recovers by itself at the next wake while in the background (review N1:
+    "backoff ended" or a pending connection in the log).
+
+## 14. Listen mode (D45)
+
+**What it is.** The Dexcom app on this phone owns the sensor: it pairs, authenticates every wake,
+and asks for the readings. iOS keeps one Bluetooth link per peripheral and delivers every
+notification to every app subscribed to it, so this app can *observe* the Dexcom app's exchange.
+Ported from xDrip4iOS 7.1.0's coexistence path (`CGMG7Transmitter.swift:51-66`, `:553-571`,
+`:714-717`, `:744-750`, `:994-1013`, `:1064-1102`, `:1587-1622`, `:2082-2087`), as
+`G7ListenCycle` and the "Listen mode" section of `G7Controller`. Chosen by the app with
+`G7Configuration(mode: .listen)` or `G7CGMSource.setMode(.listen)`, then `start(pairingCode: nil)`.
+No pairing code. Used for Michael's current sensor alongside the Dexcom app (D45, D46); the next
+sensor is paired in primary mode after the Dexcom app is deleted.
+
+**Writes (hard rule, D45 + D49).** The only write listen mode ever makes is the read-only `52`
+session-length query, under the D49 conditions below, at most once per connection. Nothing else:
+no `02`/`04`/`0A`… authentication, no ownership packets, no `0x31`/`0x25` requests (they are the
+Dexcom app's responses, only observed), no GetData, no backfill, no calibration, no other control
+command. The listen cycle's link is a `G7ObservingLink`, a protocol with no write method; its one
+write capability is `G7SessionLengthQuery`, which can only send the fixed `52`. Calibration is
+refused (`.notAuthenticated`); `pair`/`pairAgain` throw `notAvailableInListenMode`. Every listen
+test fails on any write other than one `52` on Write_Control with response per connection, on a
+Write_Control subscription before an observed `05`, and on a cancel of the followed sensor's
+connection the test did not ask for (`G7ListenModeTests.tearDown`); the D49 conditions have their
+own tests. Checked by mutation (an extra write, the query one wake early, an early Write_Control
+subscription, a cancel at disconnect: each fails the suite). xDrip4iOS's coexistence writes:
+
+| xDrip4iOS writes in coexistence | Here |
+|---|---|
+| queued calibration `34` and its `32` record (`:778-780`, `:1640-1734`) | **not ported**: changes the Dexcom app's session (it shows/uses calibrations) |
+| `52` lifetime request after a reading (`requestExtendedVersionIfNeeded` `:1364-1389`, called after glucose `:1104-1108`; G7SensorKit does the same, `G7Sensor.swift:143-151`, `:160-170`) | **ported under D49** (below): only if no answer was observed by the second wake with proof, once per connection |
+| `4A` firmware and `22` battery requests (`:1181-1215`) | **not ported**: no use; each would be a write |
+| arming Backfill notifications after a reading (`:1165-1174`; G7SensorKit `G7Sensor.swift:131-136`) | **not ported**: the sensor then sends its backfill now, which may change what the Dexcom app receives |
+
+**Subscribed (CCCD only; both are subscriptions the Dexcom app itself holds on the shared link).**
+Receive_Authentication at once, to observe the `05` its exchange produces (`:1611-1622`).
+Write_Control **only after an authenticated and bonded `05` was observed**, for every sensor (D50;
+xDrip4iOS `:57-59`, `:1598-1601`; G7SensorKit `G7Sensor.swift:317-322`): an encryption-required
+characteristic is never subscribed before the Dexcom app has secured and authenticated the link.
+Not Auth_Stream (ownership payloads, `:1615-1616`), not Backfill (above), not Communication.
+
+**Connecting.** Until a sensor is followed, this app attaches only to a G7 that is already
+connected to the phone — by the Dexcom app — found with `retrieveConnectedPeripherals` for the G7
+service (`:2082-2087`, BluetoothTransmitter.swift:561-586), checked at start, at each FEBC
+advertisement (scanning is only a wake-up signal, `:562-571`) and every 10 s in the foreground. An
+attach that has not completed by the next 10 s check (the Dexcom app's link dropped and this app's
+connect became pending) is withdrawn and tried again, so it can neither connect an advertising
+sensor later nor block later attaches (review P15). An
+advertising sensor is never connected to directly (it could take another phone's sensor
+connection). Only a G7 is attached (review m4): a connected peripheral named "DXCM" + 2 characters,
+or named "Dexcom" + 2 characters — the form a connected G7 can report (G7SensorKit
+`G7Sensor.swift:246-247`), but also a G6's name — only if this app saw that same peripheral
+advertise as "DXCM" + 2 (G6 transmitters advertise as "Dexcom…"); the serial uses the advertised
+name. ONE+ ("DX02…"), Stelo ("DX01…"), unnamed peripherals and G6-style names without a G7
+advertisement are never attached. Once followed, a pending connection request to that sensor keeps
+this app awake at every wake, as primary mode does (`BluetoothTransmitter.swift:313-317`; the
+xDrip4iOS 7.1.1 coexistence fix 00c144e8 relies on the same request); iOS shares the one physical
+link with the Dexcom app. Only the followed sensor is retried after a failed connect (review m3).
+When a connect or attach to it fails before a cycle could start (e.g. service discovery failed):
+- if the Dexcom app still holds the link (the sensor is system-connected), the retry waits 30 s,
+  doubling to 5 min, never at once on that link (review m6); meanwhile the scan is restarted
+  (`restartScan`: stop and scan unconditionally, not relying on `isScanning` turning false at once),
+  so the sensor's next advertisement — it advertises again once that link drops — is a new
+  discovery, which also wakes a suspended app (a timer would not run). That discovery is a new
+  sensor wake: it ends the backoff and attaches once — also when the Dexcom app's own pending
+  connection has already reconnected the sensor by the time this app handles it (review N1b). A
+  repeated discovery in the same wake does not attach again; if the attach fails, the backoff grows
+  and the scan is restarted again. One attach per advertisement cannot loop;
+- otherwise the pending connection is armed at once (it completes only at the next advertisement,
+  so it cannot loop) — a suspended app runs no timers, and a pending connection is what lets iOS
+  wake it (review N1);
+- Bluetooth off → on ends any backoff and re-arms; a normal connection resets it. CoreBluetooth events carry their peripheral, and one for a peripheral that is
+not the current connection is dropped (review m7). This app cancels its use of the link only when
+told to stop (`stop`, `setMode`, forget); iOS keeps the physical link for the Dexcom app.
+
+**What makes a reading publishable (S2).**
+1. **Proof of an authenticated link in *this* connection (D50, amending D49):** only an observed
+   `05` with authenticated = 1 and bonded (`paired`) = 1 (`G7AuthStatusMessage`, `:1587-1609`;
+   G7SensorKit `G7Sensor.swift:317`). It proves that *a* client authenticated this link, not which
+   one (§3.1). No frame on Write_Control is proof — Write_Control is not even subscribed before the
+   `05`. **A missed `05` loses that wake** (e.g. this app's subscription came after the Dexcom app's
+   exchange): nothing is used, and two such wakes in a row show
+   `.failed(listenNoAuthenticatedConnection)`; a longer gap shows through the missed-readings alert.
+   A later `05` "not authenticated" stops forwarding for the rest of the connection (as primary N2),
+   `.failed(listenConnectionRejected)`; the link is not dropped. A reading published between the
+   observed `05` and such a rejection in the same connection stays published (review m9; as primary
+   mode, §3.1 and D35); with the `05` as the only proof, nothing reaches the pipeline before it.
+   Tests `test_S2_statusArrivingAfterOurSubscriptionIsHandled`,
+   `test_S2_writeControlIsNeverSubscribedBeforeAnObservedStatus`, `test_S2_missedStatusLosesTheWake`,
+   `test_S2_glucoseWithoutAnObservedStatusIsNeverProof`.
+2. The first such connection fixes the followed sensor: the advertised "DXCM" + 2 name (see
+   Connecting), iOS identifier, serial `G7SensorSerial.make` — the same serial primary mode would
+   give. Other sensors' connections are not attached; a delivered one is ignored
+   (`test_S2_otherSensorsPacketsAreRefused`, `test_S2_listenAttachesOnlyToG7Names`).
+3. The session must come from what the sensor sends: the start from the observed clocks (below), the
+   length and warm-up from a `52` answer (D49):
+   - first, an **observed** answer to another app's `52` — Trio's G7SensorKit on the same phone asks
+     (`G7Sensor.swift:143-151`, `:160-170`), and iOS delivers its answer to every subscriber;
+   - if none was observed by the **second wake with proof**, this app sends **one** `52` itself in
+     that connection, after proof and after a glucose report (as xDrip4iOS `:1104-1108`,
+     `:1364-1389`), at most once per connection, and only while the length is unknown, the sensor is
+     followed, supported and not ended. The answer is parsed exactly as in primary (§4.3); a
+     malformed one establishes nothing (the next connection may ask once more); a 15-day answer
+     refuses the sensor and ends the queries.
+   - "Session length from the user" was rejected (not sensor data, S2).
+   Until a length is known, nothing is published and `.failed(listenSessionLengthUnknown)` is shown.
+   Tests `test_S2_listenSessionNeedsTheObservedSessionLength`,
+   `test_S2_sessionLengthQueriedOnceFromTheSecondProvenWake`,
+   `test_S2_observedSessionLengthOrNoProofMeansNoWrite`,
+   `test_S2_malformedSessionLengthResponseEstablishesNoSession`.
+4. Then exactly the primary pipeline: response status 0, algorithm state OK, a value (D31),
+   not display-only (S1), anchor within 30 s (§5.1), date order, the end latch (§6.1a, D41), and
+   `LiveReadingGate`.
+
+**Glucose formats observed.** The Dexcom app's request decides the format:
+- `0x4E` (its GetData; what G7SensorKit observes, `G7Sensor.swift:268-276`): parsed exactly as in
+  primary mode (§4.1).
+- `0x31` glucose + `0x25` transmitter time (G6 layout; what xDrip4iOS 7.1.0 coexistence observes,
+  `:1064-1102`; captured pair in xDrip Tests/`DexcomG7CalibrationTests.swift:344-357`). Both carry a
+  CRC-16 (verified on the capture) and are dropped if it fails (CGMBLEKit `GlucoseRxMessage.swift:53`,
+  `TransmitterTimeRxMessage.swift:25`). A non-zero status byte in either half withholds the reading
+  (fails safe) and is logged; CGMBLEKit reads it as a transmitter status and still uses the glucose
+  for `0x81` "low battery" (`TransmitterStatus.swift:23-24`) — which status bytes a G7 sends is a
+  device check (§13 item 14, review m8).
+  Glucose high nibble set → display-only (CGMBLEKit `:33`), withheld (S1). Trend: signed tenths,
+  `0x7F`/`0x80` none. The G7 transmitter clock is not session time (163 days vs. a 2.7-day session in
+  the capture), so both are put in session time with the `0x25`'s session start:
+  `sensorClock = now − start`, `readingSensorTimestamp = reading − start` (xDrip4iOS `:1090-1091`),
+  dated against the `0x25`'s receipt. Reading **dates** depend only on the sensor's clock relative to
+  the receipt and are right either way. **Hypothesis to verify on device:** the `0x25` session start
+  is the session's real start, i.e. session time equals `0x4E`'s `clock − age` for the same reading.
+  When both formats appear, a disagreement shows as `.failed(sensorClockMismatch)` through the 30 s
+  anchor check (`test_S3_timeBaseDisagreementShowsAsClockMismatch`). **With `0x31`/`0x25` only, it
+  cannot be detected (review m1):** if the origin were off, the session start — and with it
+  warm-up end, expiry, grace end and reading ids — would be off by the same amount without any
+  mismatch. Device check §13 item 14: at the first follow, the app's sensor expiry must equal the
+  Dexcom app's.
+- `0x52` (an answer to another app's request, or to this app's one D49 query): adopted as in primary
+  (§4.3).
+- Anything else on Write_Control: logged by opcode and length only.
+
+**What listen mode cannot do.** No backfill (gaps stay gaps; the Dexcom app has the history), no
+calibration (`supportsCalibration == false`), no sensor control, no Trio heartbeat target
+(`heartbeatTarget == nil`; D45 turns the Trio handoff and Nightscout/Share uploads off while
+listening, app side). If the Dexcom app stops connecting (deleted, signed out, force-quit), no
+readings arrive: the state stays as last reported (or `.failed(listenNoAuthenticatedConnection)`
+after two observed wakes without its authentication) and the **missed-readings alert fires from
+reading age** (S5), as in primary mode. After the followed sensor's session ends, forget the sensor
+(or switch to primary) to follow another one; listen mode never moves to a new sensor by itself.
+
+**Mode switching.** `setMode` stops, deletes the stored record of the old mode (code, key, followed
+sensor, session start/end, newest mark) and reports `.notPaired` (primary) or `.searching`
+(listen). A record of the other mode found at launch is deleted the same way
+(`test_S5_switchingModesDropsStoredStateCleanly`). The app persists the user's choice and passes it
+as `G7Configuration.mode`.
+
+**Raw glucose packet recording (D47).** `G7Configuration.recordsRawGlucosePackets` or
+`G7CGMSource.setRecordsRawGlucosePackets(_:)`, off by default (Settings › Diagnostics): the hex of
+every received glucose packet — `0x4E` in both modes, `0x31` and `0x25` in listen mode — valid ones
+included, goes to the diagnostic log with its time ("G7: raw primary|listen packet <hex>"). These
+packets carry no code or key. Purpose: capture a real LOW/HIGH (D31, §13 item 3).
+
+Tests: `G7ListenModeTests` (S1-S5 named), `test_modeAndRecordingThroughTheSource`.

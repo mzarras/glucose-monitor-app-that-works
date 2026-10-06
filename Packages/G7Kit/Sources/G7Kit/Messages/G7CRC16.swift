@@ -6,6 +6,9 @@
 //  Copyright © 2016 Nathan Racklyeft. All rights reserved.
 //
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/NSData+CRC.swift @ 7.1.0 (0370937)
+// CGMBLEKit lineage: CGMBLEKit/NSData+CRC.swift (LoopKit CGMBLEKit, formerly xDripG5;
+//   MIT, Packages/G7Kit/licenses/CGMBLEKit-LICENSE), reached through xDrip4iOS;
+//   compared with loopandlearn/CGMBLEKit @ 98fae79 (Trio submodule).
 // Changes: free functions over [UInt8] instead of Collection/Data extensions.
 
 /// CRC-16 CCITT (XModem): polynomial 0x1021, initial value 0, no reflection, no final XOR.

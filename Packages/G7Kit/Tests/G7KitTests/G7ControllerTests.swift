@@ -254,6 +254,39 @@ final class G7CGMSourceTests: XCTestCase {
         try await source.pairAgain(code: "1234")
     }
 
+    /// D45/D47 public API: the configured mode, switching it, calibration support, raw recording.
+    func test_modeAndRecordingThroughTheSource() async throws {
+        XCTAssertEqual(G7Configuration().mode, .primary(slot: .mobileApp))
+        var configuration = G7Configuration(mode: .listen, recordsRawGlucosePackets: true)
+        XCTAssertEqual(configuration.authenticationSlot, .recommendedDefault)
+        configuration.authenticationSlot = .receiverOrPump
+        XCTAssertEqual(configuration.mode, .primary(slot: .receiverOrPump))
+        XCTAssertEqual(G7Configuration(authenticationSlot: .smartWatch).mode, .primary(slot: .smartWatch))
+
+        let source = G7CGMSource(configuration: G7Configuration(mode: .listen), credentialStore: G7InMemoryCredentialStore(),
+                                 diagnostics: RecordingDiagnosticLog(), clock: { Date() }) { _, _ in FakeCentral() }
+        let first = await collect(source.state, count: 1)
+        XCTAssertEqual(first, [.searching], "listen mode needs no pairing")
+        let mode = await source.mode
+        XCTAssertEqual(mode, .listen)
+        let calibrates = await source.supportsCalibration
+        XCTAssertFalse(calibrates)
+        do {
+            try await source.pair(code: "1234")
+            XCTFail("pairing is not available in listen mode")
+        } catch {
+            XCTAssertEqual(error as? G7StartError, .notAvailableInListenMode)
+        }
+        await source.setRecordsRawGlucosePackets(true)
+        try await source.setMode(.primary(slot: .mobileApp))
+        let switched = await source.mode
+        XCTAssertEqual(switched, .primary(slot: .mobileApp))
+        let calibratesNow = await source.supportsCalibration
+        XCTAssertTrue(calibratesNow)
+        let next = await collect(source.state, count: 1)
+        XCTAssertEqual(next, [.notPaired])
+    }
+
     /// CGMSource rule: a 288-reading backfill burst (24 h) arrives complete.
     func test_backfillBurstOf288ReadingsArrivesComplete() async throws {
         let clock = TestClock()

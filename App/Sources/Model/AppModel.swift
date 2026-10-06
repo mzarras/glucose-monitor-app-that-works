@@ -37,15 +37,18 @@ final class AppModel {
     /// G7Kit `hasStoredSensor` (review N2): whether `pairAgain(code:)` has a sensor to re-pair.
     var hasStoredSensor = false
     /// Whether a sensor was stored when the onboarding pairing started (review N1 item 3: the sensor
-    /// authenticated in this pairing once `hasStoredSensor` becomes true after that).
+    /// authenticated in this pairing once `hasStoredSensor` becomes true after that). Nil when the
+    /// pairing started before the stored sensor was known (`AppServices.storedSensorKnown`): then
+    /// nothing counts as authenticated in this pairing.
     @ObservationIgnored var hadStoredSensorAtPairingStart: Bool?
     /// A file to hand to the share sheet (CSV export, diagnostics).
     var sharedFile: SharedFile?
 
     /// Nil only for the DEBUG fixture model (`fixtures()`: previews and fixture-based tests).
     let services: (any AppServices)?
-    /// The clock the UI classifies against (staleness, the latch, "today"). The phone clock; see
-    /// OPEN QUESTIONS in docs/app-wiring.md for accelerated DEBUG replay.
+    /// The clock the UI classifies against (staleness, the latch, "today"): the phone clock, or in a
+    /// DEBUG replay run the replay clock (`AppServices.replayClockNow`), so an accelerated replay's
+    /// readings are current rather than "dated ahead of the phone clock".
     let clock: @MainActor () -> Date
     let preferences: AppUIPreferences?
     /// Whether the phone's protected data is readable (false before the first unlock after a restart,
@@ -63,7 +66,7 @@ final class AppModel {
     @ObservationIgnored private var trendsStale = true
     /// Statistics have been shown for the selected period (a recompute keeps them until the new ones
     /// are ready; the first computation shows progress instead of "no readings").
-    @ObservationIgnored private var trendsComputed = false
+    @ObservationIgnored private(set) var trendsComputed = false
     /// The model's own memoryless clock-mismatch check (defence in depth next to the facade's).
     @ObservationIgnored private var localClockLatch: Date?
     /// Local midnight of the day "Today so far" was last computed for.
@@ -76,10 +79,10 @@ final class AppModel {
     /// onboarding code was submitted, so the sensor state now describes this pairing rather than
     /// the previous sensor.
     @ObservationIgnored var pairingSawConnectionStep = false
-    /// The last `hasStoredSensor` read came from a `.sensor` change, not the facade's launch default
-    /// (review m3 hardening: bootstrap's first stored-sensor report is not a connection).
-    @ObservationIgnored private var storedSensorBaselineIsLive = false
-    @ObservationIgnored private var isApplyingSensorChange = false
+    /// The last `hasStoredSensor` read was the source's, not the facade's launch default
+    /// (`AppServices.storedSensorKnown`; review m3 hardening: bootstrap's first stored-sensor report
+    /// is not a connection).
+    @ObservationIgnored private var storedSensorReadWasKnown = false
     /// Review M1: the facade's sensor state is real. Before the source's first state reaches the
     /// facade it reports `.notPaired` by default; until a `.sensor` change arrives (or the state is
     /// anything but `.notPaired`, or a sensor is stored) nothing offers to pair.
@@ -90,6 +93,8 @@ final class AppModel {
     @ObservationIgnored private var onboardingDecided = false
     @ObservationIgnored private var launchArguments: [String] = []
     @ObservationIgnored private var protectedDataObserver: NSObjectProtocol?
+    /// Time zone and clock changes (`NSSystemTimeZoneDidChange`, `significantTimeChangeNotification`).
+    @ObservationIgnored private var timeObservers: [NSObjectProtocol] = []
     /// Alert settings sent to the facade and not yet confirmed by a `.alertSettings` change; the next
     /// edit builds on them (AppModel+Actions `editAlert`).
     @ObservationIgnored var alertSettingsDraft: AlertSettings?
@@ -154,10 +159,11 @@ final class AppModel {
         arguments: [String] = ProcessInfo.processInfo.arguments,
         preferences: AppUIPreferences = AppUIPreferences(),
         calendar: Calendar = .current,
-        clock: @escaping @MainActor () -> Date = { Date() },
+        clock: (@MainActor () -> Date)? = nil,
         protectedDataAvailable: @escaping @MainActor () -> Bool = { UIApplication.shared.isProtectedDataAvailable }
     ) -> AppModel {
-        let model = AppModel(services: services, preferences: preferences, clock: clock, protectedDataAvailable: protectedDataAvailable)
+        let model = AppModel(services: services, preferences: preferences, clock: clock ?? defaultClock(services),
+                             protectedDataAvailable: protectedDataAvailable)
         model.calendar = calendar
         model.launchArguments = arguments
         // `.notPaired` is also the facade's default before the source's first state: not evidence.
@@ -170,6 +176,15 @@ final class AppModel {
         }
         model.startObserving()
         return model
+    }
+
+    /// The phone clock; in a DEBUG replay run, the replay clock (compiled out of Release).
+    static func defaultClock(_ services: any AppServices) -> @MainActor () -> Date {
+        #if DEBUG
+        return { [weak services] in services?.replayClockNow ?? Date() }
+        #else
+        return { Date() }
+        #endif
     }
 
     // MARK: - Preferences and the onboarding decision (review M1, m2)
@@ -185,8 +200,19 @@ final class AppModel {
         }
         #if DEBUG
         if launchArguments.contains("-resetOnboardingFlag") { preferences.onboardingCompleted = false }
+        if launchArguments.contains("-resetConnectionMode") { preferences.connectionModeChosen = false }
         #endif
+        refreshConnection()
         settings.appearance = preferences.appearance
+        // Phase 3: the tab and Trends period from before the app was killed (an explicit `-tab`
+        // launch argument wins).
+        if let period = preferences.trendsPeriod, period != trends.period, !trendsComputed {
+            trends = .empty(period: period)
+            trendsStale = true
+        }
+        if !launchArguments.contains("-tab"), let tab = preferences.selectedTab {
+            selectTab(tab)
+        }
         // The stored need, or one seen since launch, kept or cleared by the state now (review minor 4).
         let needsCalibration = CalibrationNeed.update(previous: preferences.sensorNeedsCalibration || now.sensorNeedsCalibration,
                                                       sensorState: now.sensorState)
@@ -267,6 +293,23 @@ final class AppModel {
 
     private func startObserving() {
         guard let services, observation == nil else { return }
+        // Phase 3: a time zone change moves local midnight (Now's "today", Trends' days, AGP time of
+        // day); a significant time change (midnight, DST, a manual clock change) re-checks the latch
+        // and "today". Labels use `DisplayContext.current` (autoupdating) and follow on the next render.
+        for name in [Notification.Name.NSSystemTimeZoneDidChange, UIApplication.significantTimeChangeNotification] {
+            timeObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                let timeZoneChanged = notification.name == .NSSystemTimeZoneDidChange
+                Task { @MainActor in
+                    guard let self else { return }
+                    if timeZoneChanged {
+                        NSTimeZone.resetSystemTimeZone()
+                        self.calendarDidChange(.current)
+                    } else {
+                        self.tick()
+                    }
+                }
+            })
+        }
         let changes = services.changes()
         observation = Task { [weak self] in
             for await change in changes {
@@ -287,9 +330,7 @@ final class AppModel {
         if change == .sensor, !sensorStateKnown {
             sensorStateKnown = true
         }
-        isApplyingSensorChange = change == .sensor
         rebuild(change)
-        isApplyingSensorChange = false
         if !preferencesLoaded { loadPreferences() } // decides onboarding too
         if change == .sensor { decideOnboardingIfReady() }
     }
@@ -352,6 +393,17 @@ final class AppModel {
         case .replay:
             refreshReplay()
         }
+    }
+
+    /// A new calendar (the time zone changed): local midnight moves, so "Today so far", the Now
+    /// chart's data and Trends' periods, AGP buckets and day traces are recomputed in it.
+    func calendarDidChange(_ newCalendar: Calendar) {
+        guard newCalendar != calendar else { return }
+        calendar = newCalendar
+        reloadRecentReadings()
+        trendsStale = true
+        if selectedTab == .trends { refreshTrends() }
+        tick()
     }
 
     /// The UI clock (RootView: every 15 s and when the app comes to the foreground).
@@ -418,15 +470,15 @@ final class AppModel {
         guard let services else { return }
         let state = services.sensorState
         let wasStored = hasStoredSensor
-        let baselineIsLive = storedSensorBaselineIsLive
+        let baselineKnown = storedSensorReadWasKnown
         hasStoredSensor = services.hasStoredSensor
+        storedSensorReadWasKnown = services.storedSensorKnown
         if hasStoredSensor { sensorStateKnown = true }
         // Review m3 hardening: a sensor that became stored while a pairing was on its way is proof
         // the sensor answered this pairing, even if no connection step was reported. Only a change
-        // from a live "not stored" counts: a sensor stored before the pairing never flips, and the
-        // first report after launch (bootstrap reading the stored record) replaces a default.
-        if pairingInProgress, baselineIsLive, !wasStored, hasStoredSensor { pairingSawConnectionStep = true }
-        if isApplyingSensorChange { storedSensorBaselineIsLive = true }
+        // from a known "not stored" counts (`storedSensorKnown`): a sensor stored before the pairing
+        // never flips, and bootstrap's first read of the stored record replaces a default.
+        if pairingInProgress, baselineKnown, !wasStored, hasStoredSensor { pairingSawConnectionStep = true }
         now.sensorStateKnown = sensorStateKnown
         now.sensorState = state
         now.sensorSession = services.sensorSession
@@ -465,8 +517,13 @@ final class AppModel {
                                                  bluetooth: services.bluetoothAuthorization, failureSince: failure?.since,
                                                  pairingInProgress: pairingInProgress)
         settings.sensor.stateKnown = sensorStateKnown
+
+        refreshConnection()
+
         if var onboarding {
             onboarding.sensorState = state
+            onboarding.currentConnectionMode = services.connectionMode
+            onboarding.connectionSwitchNeedsConfirmation = hasStoredSensor
             onboarding.pairing = OnboardingMapping.pairing(current: onboarding.pairing, sensorState: state,
                                                            sawConnectionStep: pairingSawConnectionStep)
             // An existing sensor showed up before the person started onboarding (e.g. after an
@@ -477,6 +534,32 @@ final class AppModel {
                 self.onboarding = onboarding
             }
         }
+    }
+
+    // MARK: Connection mode (D45) and packet recording (D47)
+
+    /// The facade's mode on Now and in calibration; in Settings only once the person has chosen
+    /// (`AppUIPreferences.connectionModeChosen`): a new install's stored `.pair` is a storage default,
+    /// never shown as the choice. Listening, or a sensor stored in pairing mode (an install from
+    /// before D45), counts as chosen.
+    func refreshConnection() {
+        guard let services else { return }
+        let mode = services.connectionMode
+        if preferencesLoaded, let preferences, !preferences.connectionModeChosen, mode == .listen || hasStoredSensor {
+            preferences.connectionModeChosen = true
+        }
+        let chosen = preferencesLoaded && preferences?.connectionModeChosen == true
+        now.connection = ConnectionModeState(mode: mode)
+        now.connectionChosen = chosen
+        settings.connection = ConnectionModeState(mode: chosen ? mode : nil)
+        settings.packetRecording = PacketRecordingState(isOn: services.recordsRawGlucosePackets)
+        calibration.listening = mode == .listen
+    }
+
+    /// Remembers that the person chose (onboarding's Continue, Settings' confirmation).
+    func noteConnectionModeChosen() {
+        if preferencesLoaded { preferences?.connectionModeChosen = true }
+        refreshConnection()
     }
 
     // MARK: Health (S5)
@@ -498,7 +581,19 @@ final class AppModel {
     // MARK: Onboarding
 
     func presentOnboarding(at step: OnboardingStep) {
-        onboarding = freshOnboardingState(at: step)
+        var state = freshOnboardingState(at: step)
+        if let services {
+            // D45: the connection step. D7's "Share upload on" is for pairing mode only (the Dexcom
+            // app keeps sharing while this app listens).
+            // Nothing preselected, ever: the person chooses before any pairing step (no accidental
+            // takeover of the Dexcom app's connection).
+            let mode = services.connectionMode
+            state.connection = ConnectionModeState(mode: nil)
+            state.currentConnectionMode = mode
+            state.connectionSwitchNeedsConfirmation = services.hasStoredSensor
+            state.shareUploadEnabled = mode == .pair
+        }
+        onboarding = state
         hadStoredSensorAtPairingStart = nil
         refreshOnboardingPermissions()
     }
@@ -560,6 +655,7 @@ final class AppModel {
             return
         }
         guard period != trends.period || trends.loadError != nil else { return }
+        if preferencesLoaded { preferences?.trendsPeriod = period }
         trends = .empty(period: period)
         trendsComputed = false
         refreshTrends()
@@ -567,6 +663,7 @@ final class AppModel {
 
     func selectTab(_ tab: AppTab) {
         selectedTab = tab
+        if preferencesLoaded { preferences?.selectedTab = tab }
         if tab == .trends, trendsStale { refreshTrends() }
     }
 

@@ -51,8 +51,8 @@ final class ControllerHarness {
     var sensorClock: UInt32 { UInt32(clock.now.timeIntervalSince(sessionStart)) }
 
     /// A current `0x4E` whose reading happened `age` seconds ago.
-    func currentGlucose(_ mgdl: UInt16?, state: UInt8 = 0x06, age: UInt16 = 5, flags: UInt8 = 0x0F) -> Data {
-        Fixture.glucose(sensorClock: sensorClock, age: age, glucose: mgdl, state: state, flags: flags)
+    func currentGlucose(_ mgdl: UInt16?, state: UInt8 = 0x06, age: UInt16 = 5, trend: UInt8 = 0x7F, flags: UInt8 = 0x0F) -> Data {
+        Fixture.glucose(sensorClock: sensorClock, age: age, glucose: mgdl, state: state, trend: trend, flags: flags)
     }
 
     /// Pairs with the given code: start, discover, full J-PAKE connection, disconnect.

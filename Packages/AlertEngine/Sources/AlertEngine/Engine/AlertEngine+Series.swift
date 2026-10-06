@@ -145,6 +145,21 @@ extension AlertEngine {
         setSeries(kind, series)
     }
 
+    /// Adds one pending entry at `date` unless the series already has one there. Allowed inside the
+    /// protected minute: adding disturbs nothing that is due (D44 review m2: the snooze-end alarm
+    /// put back by a low reading in the snooze's last minute).
+    mutating func addSeriesEntry(_ kind: AlertKind, at date: Date, now: Date, isRepeat: Bool) -> [AlertAction] {
+        var series = series(kind)
+        guard !series.entries.contains(where: { $0.date == date }) else { return [] }
+        guard let sequence = Self.nextFreeSequence(&series, held: Set(series.entries.map(\.slot))) else {
+            return [.repeatsNotAllScheduled(kind, missing: 1)]
+        }
+        let entry = ScheduledRepeat(sequence: sequence, date: date)
+        series.entries = (series.entries + [entry]).sorted { $0.date < $1.date }
+        setSeries(kind, series)
+        return [.schedule(kind, [makeNotice(kind, fireDate: date, now: now, isRepeat: isRepeat, slot: entry.slot)])]
+    }
+
     /// The pending entry for a due repeat at `date`, if one was scheduled.
     func scheduledEntry(_ kind: AlertKind, at date: Date) -> ScheduledRepeat? {
         series(kind).entries.first { $0.date == date }

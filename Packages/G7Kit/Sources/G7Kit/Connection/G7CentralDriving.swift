@@ -8,6 +8,9 @@ protocol G7CentralDriving: AnyObject {
     /// Scans for the G7 advertisement service (FEBC), which also works in the background.
     func scanForSensors()
     func stopScanning()
+    /// Stops and starts the FEBC scan unconditionally, so the next advertisement of an already
+    /// reported peripheral is a new discovery (iOS coalesces repeats within one scan session).
+    func restartScan()
     /// Requests a connection to a peripheral iOS already knows. The request never times out, so
     /// iOS connects whenever the sensor next advertises, even with the app suspended — the design
     /// for the G7's ~5-minute advertise/connect cycle (HANDOFF §4.6). Returns false if iOS does not
@@ -16,6 +19,18 @@ protocol G7CentralDriving: AnyObject {
     func cancelConnection(peripheralIdentifier: UUID)
     /// Runs `action` on the controller's queue after `delay` seconds (connect timeouts).
     func schedule(after delay: TimeInterval, _ action: @escaping () -> Void)
+    /// Listen mode (D45): G7 peripherals that are connected to this phone right now — by the Dexcom
+    /// app — found by the G7 service (CBCentralManager.retrieveConnectedPeripherals, as
+    /// CGMG7Transmitter.swift:2082-2087 / BluetoothTransmitter.swift:561-586).
+    func connectedSensors() -> [G7ConnectedSensor]
+}
+
+/// A G7 peripheral another app on this phone is connected to.
+struct G7ConnectedSensor: Equatable {
+    /// `CBPeripheral.name`: "DXCMxx" or, once connected, sometimes "Dexcomxx" (G7SensorKit
+    /// G7Sensor.swift:246-247).
+    let name: String?
+    let identifier: UUID
 }
 
 /// The sensor serial used in reading ids and `SensorSession.serial`.

@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Dexcom Clarity CSV export → imported readings (HANDOFF §4.5 step 2).
 //
 // Layout of a real export (verified against public exports, e.g. GlucoseDAO/sugar-sugar

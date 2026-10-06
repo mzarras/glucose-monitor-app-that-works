@@ -673,16 +673,54 @@ final class AppModelWiringTests: XCTestCase {
         }
     }
 
-    /// Hardening (review m3): bootstrap's first stored-sensor report replaces the facade's launch
-    /// default; it is not a connection for a pairing started before it.
+    /// Hardening (review m3, Phase 3 `storedSensorKnown`): bootstrap's first stored-sensor report
+    /// replaces the facade's launch default; it is not a connection for a pairing started before
+    /// it, and that pairing has no baseline, so nothing counts as authenticated in it.
     func test_bootstrapsFirstStoredSensorReportIsNotAConnection() {
         let services = PreviewAppServices(sensorState: .notPaired)
+        services.storedSensorKnown = false // before bootstrap read the source
         let model = launch(services, onboardingCompleted: false, sensorStateArrived: false)
         model.presentOnboarding(at: .pairing)
         model.pairNewSensor(code: "1234")
+        XCTAssertNil(model.hadStoredSensorAtPairingStart, "a default is no baseline")
         services.hasStoredSensor = true // bootstrap read the record
+        services.storedSensorKnown = true
         services.sensorState = activeSensor
         model.apply(.sensor) // the first `.sensor` change
+        XCTAssertEqual(model.onboarding?.pairing, .inProgress)
+        XCTAssertFalse(model.onboardingPairingContext.authenticatedInThisPairing)
+    }
+
+    /// Phase 3 (`storedSensorKnown`): once bootstrap has read "nothing stored", that is an exact
+    /// baseline — a sensor stored after the code is a connection and authenticated in this pairing,
+    /// whichever change delivers it (not only `.sensor`).
+    func test_aKnownNothingStoredBaselineCountsTheNewSensor() async {
+        let services = PreviewAppServices(sensorState: .notPaired)
+        services.storedSensorKnown = false
+        let model = launch(services, onboardingCompleted: false, sensorStateArrived: false)
+        services.storedSensorKnown = true // bootstrap: nothing stored
+        model.apply(.sensor)
+        model.presentOnboarding(at: .pairing)
+        model.pairNewSensor(code: "1234")
+        XCTAssertEqual(model.hadStoredSensorAtPairingStart, false)
+        services.hasStoredSensor = true
+        services.sensorState = .warmingUp(endsAt: minutes(30))
+        model.rebuildAll() // e.g. a clock tick, not a `.sensor` change
+        XCTAssertEqual(model.onboarding?.pairing, .paired)
+        XCTAssertTrue(model.onboardingPairingContext.authenticatedInThisPairing)
+        await model.settle()
+    }
+
+    /// Phase 3 negative: a sensor known to be stored before the code is no proof of this pairing.
+    func test_aKnownStoredBaselineIsNotAuthenticatedByThisPairing() {
+        let services = PreviewAppServices(sensorState: .notPaired)
+        services.hasStoredSensor = true
+        let model = launch(services, onboardingCompleted: false)
+        model.presentOnboarding(at: .pairing)
+        model.pairNewSensor(code: "1234")
+        XCTAssertEqual(model.hadStoredSensorAtPairingStart, true)
+        model.apply(.sensor)
+        XCTAssertFalse(model.onboardingPairingContext.authenticatedInThisPairing)
         XCTAssertEqual(model.onboarding?.pairing, .inProgress)
     }
 

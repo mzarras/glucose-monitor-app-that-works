@@ -423,6 +423,7 @@ final class ReadingPipeline {
             }
         }
         storedReadingCount += result.stored.count
+        if !result.stored.isEmpty { outputs.readingsStored?(result.stored.map(\.reading)) }
         if let problem = result.problem {
             storeProblem = problem
             log(.store, "\(result.unstored.count) reading(s) could not be stored: \(problem)")

@@ -17,6 +17,9 @@ struct CalibrationViewState: Equatable, Sendable {
     /// Review N1: same latch as `NowViewState.clockMismatchLatchedFor`; while set for the latest
     /// reading there is no current reading to compare with.
     var clockMismatchLatchedFor: Date? = nil
+    /// D45: listening alongside the Dexcom app; this app sends nothing to the sensor, so
+    /// calibration happens in the Dexcom app.
+    var listening: Bool = false
 
     static let unavailable = CalibrationViewState(sensorState: .notPaired, latestLiveReading: nil, acceptedRange: nil, lastSubmission: nil)
 }

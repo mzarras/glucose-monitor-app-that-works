@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Turns a wall-clock time without an offset (how Clarity writes timestamps) into instants, making
 // daylight-saving transitions explicit instead of letting a date formatter guess (S3).
 

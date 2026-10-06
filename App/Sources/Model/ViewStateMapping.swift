@@ -76,6 +76,15 @@ enum NowMapping {
         )
     }
 
+    /// What the Now chart draws and scrubs at `now`: the stored points up to `now`, none dated after
+    /// it (Phase 3: after the phone's clock was set back, a stored reading can be dated in the
+    /// future; it is not drawn or selectable until the clock passes it, and the hero says "clock
+    /// doesn't match" meanwhile).
+    static func visibleChartPoints(_ points: [ChartPoint], now: Date) -> [ChartPoint] {
+        guard let last = points.last, last.date > now else { return points } // ascending: the common case is free
+        return points.filter { $0.date <= now }
+    }
+
     /// Fingerstick calibrations to mark on the chart (last 24 h). Markers, never readings (S1).
     static func fingersticks(_ records: [CalibrationRecord], now: Date) -> [FingerstickMarker] {
         let start = now.addingTimeInterval(-ChartWindow.twentyFourHours.duration)
@@ -132,7 +141,9 @@ enum SettingsMapping {
             heartbeatPublished: trio.heartbeatPublished,
             heartbeatError: trio.heartbeatError,
             pausedInDebugBuild: trio.isEnabled && !trio.liveOutputsAllowed,
-            unavailableReason: trio.isEnabled ? trio.unavailableReason : nil
+            unavailableReason: trio.isEnabled ? trio.unavailableReason : nil,
+            heldBackReadings: trio.heldBackReadings,
+            heldBackSince: trio.heldBackSince
         )
     }
 
@@ -265,6 +276,9 @@ enum OnboardingMapping {
         case .noSensorToPairAgain:
             // Surfaced, never retried as a new pairing behind the person's back (review N2).
             return "No sensor is stored on this phone to pair again. Pair it as a new sensor with the code on its applicator."
+        case .notAvailableInListenMode:
+            // D45: pairing does not exist while listening.
+            return ConnectionModeText.pairingWhileListening
         }
     }
 

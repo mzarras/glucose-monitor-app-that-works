@@ -20,6 +20,8 @@ enum ReplayScenarioNames {
 }
 
 extension LiveAppServices {
+    var replayClockNow: Date? { replayRun?.now() }
+
     func startReplay(scenario: String, speed: Double) async {
         await startReplay(scenario: scenario, speed: speed, startingAtMinute: 0)
     }
@@ -97,7 +99,7 @@ extension LiveAppServices {
     func setDeveloperLiveOutputsEnabled(_ enabled: Bool) async {
         preferences.developerLiveOutputs = enabled
         log(.app, "developer switch for live outputs (D20) turned \(enabled ? "on" : "off")")
-        trioCoordinator.configure(enabled: preferences.trioBridgeEnabled, liveOutputsAllowed: liveOutputsAllowed)
+        configureTrio()
         await applyUploadConfiguration()
         if enabled {
             await reseedTrio()

@@ -39,6 +39,8 @@ struct PipelineOutputs {
     var widget: (any WidgetSnapshotPublishing)?
     /// Called after each sensor state was handed to the consumers (Trio heartbeat re-evaluation).
     var sensorStateProcessed: (@MainActor (SensorState) -> Void)?
+    /// Called after readings were newly and durably stored (audit m1: G7Kit's backfill floor).
+    var readingsStored: (@MainActor ([GlucoseReading]) -> Void)?
 
     init() {}
 }

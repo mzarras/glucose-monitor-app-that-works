@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // How Nightscout represents glucose values, including the LOW/HIGH flags (S4).
 // This is the only file that knows the numbers 39 and 401.
 //
@@ -35,6 +36,9 @@ public enum NightscoutGlucoseEncoding {
     public static let lowSGV = 39
     /// `sgv` value Nightscout renders as HIGH (lib/sandbox.js:251-252, lib/client/index.js:546-547).
     public static let highSGV = 401
+    /// Above this an `sgv` is not a CGM value of any kind (no CGM reports beyond ~600 mg/dL); it is
+    /// a malformed entry and is skipped rather than stored as HIGH (fail closed, S1).
+    public static let maximumPlausibleSGV: Double = 1_000
     /// The sensor's numeric range, inclusive (GlucoseCore `GlucoseValue.sensorReportableRange`).
     public static let numericRange = GlucoseValue.sensorReportableRange
 
@@ -43,7 +47,7 @@ public enum NightscoutGlucoseEncoding {
         case value(GlucoseValue)
         /// Below 39: a Dexcom error code, not glucose (lib/plugins/errorcodes.js:13-22).
         case errorCode(Double)
-        /// Not a finite number.
+        /// Not a finite number, or above `maximumPlausibleSGV`.
         case invalid
     }
 
@@ -51,7 +55,7 @@ public enum NightscoutGlucoseEncoding {
     /// Non-integer values inside the numeric range are rounded to the nearest mg/dL, which is also
     /// what Nightscout displays (`scaleBg`); that is a unit representation, not a new value (S1).
     public static func decode(sgv: Double) -> Decoded {
-        guard sgv.isFinite else { return .invalid }
+        guard sgv.isFinite, sgv <= maximumPlausibleSGV else { return .invalid }
         if sgv < Double(lowSGV) { return .errorCode(sgv) }
         if sgv < Double(numericRange.lowerBound) { return .value(.belowRange) }
         if sgv > Double(numericRange.upperBound) { return .value(.aboveRange) }

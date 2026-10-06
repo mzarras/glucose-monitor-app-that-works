@@ -42,8 +42,23 @@ public struct G7PairingRecord: Sendable, Equatable, Codable {
     /// Set when the sensor's `0x52` reported a session length other than the 10-day sensor's. Optional
     /// in storage so records saved before this field existed still decode.
     private var unsupported: Bool?
+    /// Set for a listen-mode record (D45): no code, no key, no slot of this app; the sensor fields
+    /// describe the sensor the Dexcom app's connection was observed for. Optional in storage so
+    /// records saved before this field existed still decode (as primary records).
+    private var listening: Bool?
 
     public var sessionEnded: Bool { sessionEnd != nil }
+
+    /// A listen-mode record (`G7ConnectionMode.listen`).
+    public var isListenRecord: Bool { listening ?? false }
+
+    /// An empty listen-mode record: no pairing code, no key; the observed sensor is filled in once
+    /// its authenticated connection is seen.
+    public static func forListening() -> G7PairingRecord {
+        var record = G7PairingRecord(pairingCode: "", slot: .recommendedDefault)
+        record.listening = true
+        return record
+    }
 
     /// The sensor was refused as not a G7 10-day sensor (`.failed(unsupportedSensor)`).
     public var isUnsupportedSensor: Bool {

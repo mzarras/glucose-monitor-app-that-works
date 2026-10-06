@@ -45,9 +45,8 @@ final class LaunchAndSchedulingTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(dates.last.map { $0.timeIntervalSince(h.now) } ?? 0, minutes(60), "every \(repeatMinutes) min")
             XCTAssertLessThanOrEqual(dates.count, AlertLimits.maximumScheduledSlots)
         }
-        // Worst case pending: urgent low 30 + missed readings 12 + 5 expiry reminders (D43), under iOS's 64.
-        XCTAssertLessThanOrEqual(AlertLimits.maximumScheduledSlots + AlertLimits.scheduledNotificationCount
-                                 + AlertKind.sensorExpiryReminders.count, 64)
+        // Worst case pending (FailureModeTests measures it): under iOS's 64.
+        XCTAssertLessThanOrEqual(AlertLimits.worstCasePendingNotifications, 64)
     }
 
     // MARK: Wake-before-slot tolerance

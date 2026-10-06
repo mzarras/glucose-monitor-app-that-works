@@ -1,4 +1,4 @@
-// Ported from xDrip4iOS (https://github.com/JohanDegraeve/xdripswift), GPL-3.0, like this project.
+// Originally part of xDrip4iOS (https://github.com/JohanDegraeve/xdripswift), GPL-3.0, like this project.
 // The original file has no copyright header.
 // Ported from xDrip4iOS xDrip/Managers/DexcomShare/DexcomShareUploadManager.swift @ 7.1.0 (0370937)
 //   (loginAndStoreSessionId :528-679, startRemoteMonitoringSessionAndStartUpload :182-301,

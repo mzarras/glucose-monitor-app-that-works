@@ -79,7 +79,9 @@ struct NowContent: View {
                     }
                 }
             }
-            NowHeroView(hero: NowHero.make(display, now: now, context: context, sensorStateKnown: state.sensorStateKnown), now: now,
+            NowHeroView(hero: ListenModeRules.hero(NowHero.make(display, now: now, context: context, sensorStateKnown: state.sensorStateKnown),
+                                                   display: display, listening: isListening,
+                                                   chosen: state.connectionChosen), now: now,
                         pairSensor: actions.pairSensor, pairAgain: actions.pairAgain, calibrate: actions.openCalibration)
             stateLine(display)
             if let end = GraceCountdown.end(sensorState: state.sensorState, now: now) {
@@ -182,7 +184,9 @@ struct NowContent: View {
     // MARK: State line
 
     private func stateLine(_ display: GlucoseDisplayState) -> some View {
-        let line = StateLine.make(display, sensorState: state.sensorState, now: now, context: context, sensorStateKnown: state.sensorStateKnown)
+        let line = ListenModeRules.stateLine(
+            StateLine.make(display, sensorState: state.sensorState, now: now, context: context, sensorStateKnown: state.sensorStateKnown),
+            display: display, listening: isListening)
         return HStack(spacing: 8) {
             Circle()
                 .fill(dotStyle(line.dot))
@@ -208,9 +212,9 @@ struct NowContent: View {
     private var chartSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             GlucoseTraceChart(
-                points: state.chartPoints,
+                points: NowMapping.visibleChartPoints(state.chartPoints, now: now),
                 domain: now.addingTimeInterval(-state.chartWindow.duration)...now,
-                latestLive: state.latestLiveReading.map { ChartPoint(date: $0.date, value: $0.value) },
+                latestLive: state.latestLiveReading.flatMap { $0.date <= now ? ChartPoint(date: $0.date, value: $0.value) : nil },
                 fingersticks: state.fingersticks,
                 options: Self.chartOptions(state.chartWindow),
                 accessibilityTitle: state.chartWindow.spokenName,
@@ -241,15 +245,25 @@ struct NowContent: View {
             Hairline()
                 .padding(.bottom, 4)
             StatusRow(label: "SENSOR", value: state.sensorStateKnown || state.sensorState != .notPaired
-                      ? SensorStatusText.row(state.sensorState, session: state.sensorSession, now: now, context: context)
+                      ? SensorStatusText.row(state.sensorState, session: state.sensorSession, now: now, context: context, listening: isListening)
                       : "checking…")
                 .accessibilityIdentifier("now.sensorRow")
-            StatusRow(label: "TRIO", value: TrioStatusText.row(state.health.trio, context: context), valueIsAlert: isTrioFailing)
+            StatusRow(label: "TRIO", value: ListenModeRules.outputRow(TrioStatusText.row(state.health.trio, context: context), listening: isListening),
+                      valueIsAlert: isTrioFailing)
                 .accessibilityIdentifier("now.trioRow")
+            if isListening {
+                ListeningStatusLine()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+            }
         }
     }
 
+    /// D45: listening alongside the Dexcom app.
+    private var isListening: Bool { state.connection?.isListening == true }
+
     private var isTrioFailing: Bool {
+        guard !isListening else { return false }
         if case .failing = state.health.trio { return true }
         return false
     }
@@ -300,7 +314,7 @@ struct NowHeroView: View {
                 if let action {
                     Button(action.title) {
                         switch action {
-                        case .pairSensor: pairSensor()
+                        case .pairSensor, .setUpSensor: pairSensor() // both open Settings › Sensor
                         case .pairAgain: pairAgain()
                         case .calibrate: calibrate()
                         }

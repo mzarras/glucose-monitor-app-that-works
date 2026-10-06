@@ -8,7 +8,8 @@ No Trio patch is needed. In Trio, select **Settings → Devices → CGM → Add 
 **Settings → Services → Nightscout → Upload → Upload Glucose** off so only this app uploads CGM
 readings to Nightscout. LOW and HIGH reach Trio as 39 and 401 (Michael's decision, PROGRESS.md D21; see
 [LOW and HIGH](#low-and-high-s4)); 40/400 are never written for a flag. Trio must be given the heartbeat keys
-to loop in the background on DASH/Dana/Medtrum ([When Trio reads](#when-trio-reads), Phase 2 must-do).
+to loop in the background on DASH/Dana/Medtrum ([When Trio reads](#when-trio-reads)); the app publishes them
+(`TrioCoordinator.updateHeartbeat`), except in listen mode (D45), where the Trio handoff is off.
 
 ## Sources
 
@@ -87,8 +88,9 @@ it, so its readings are never labelled as xDrip4iOS's, and they would also be ac
 with a differently named App Group source. Trio's UI still calls the source "xDrip4iOS"
 (`CGMType.swift:18-19, :58-63`, `Trio/Trio/Sources/Helpers/CGMOptions.swift:14`), its CGM sheet shows an
 "Open xDrip4iOS" button that tries `xdripswift://` (`CGMType.swift:35-36`,
-`Trio/Trio/Sources/Modules/CGMSettings/View/CustomCGMOptionsView.swift:63-86`), and the source info reads
-"Group ID: …" (`AppGroupSource.swift:117-119`). All cosmetic.
+`Trio/Trio/Sources/Modules/CGMSettings/View/CustomCGMOptionsView.swift:63-86`), and its source description reads
+"Group ID: …" (`AppGroupSource.swift:117-119`) — shown only in Trio's glucose notifications, with "Add Glucose
+Source to Alarm" on (see [Setup](#setup) step 3). All cosmetic.
 
 ## When Trio reads
 
@@ -116,8 +118,8 @@ with a differently named App Group source. Trio's UI still calls the source "xDr
 Today Trio's own G7 plugin is woken by the sensor's BLE traffic every five minutes. On the App Group source the
 only wake-up is the heartbeat connection (RileyLink pumps wake Trio incidentally). `TrioBridge.setHeartbeatPeripheral(_:)`
 writes the keys (service and characteristic first, address last, because Trio caches a new address before it checks
-the UUIDs and does not retry, `HeartBeatManager.swift:33-42`). **Wiring it is a Phase 2 must-do** (PROGRESS.md);
-WS1 is assessing the safety of Trio as a second central on the sensor this app authenticates to.
+the UUIDs and does not retry, `HeartBeatManager.swift:33-42`). It is wired (Phase 2, `TrioCoordinator.updateHeartbeat`,
+below); whether it keeps Trio looping with the phone locked is verified on the device (§11 step 4).
 
 **Heartbeat wiring (Phase 2).** G7Kit exposes `G7CGMSource.heartbeatTarget`: the paired sensor's
 `CBPeripheral.identifier`, the G7 service `F8083532-849E-531C-C594-30F1F86A4EA5` and its Receive_Authentication
@@ -407,8 +409,13 @@ settings and unaffected.
    to its App ID (the group already exists from Trio's build). Check in the developer portal that the App ID
    `com.mzarras.sensor` lists both groups.
 3. **In Trio**: Settings → Devices → CGM. Delete the current CGM (the Dexcom G7 plugin). Add CGM → **xDrip4iOS**.
-   Trio's source info reads "Group ID: group.org.nightscout.<TEAM>.trio.trio-app-group" (`AppGroupSource.swift:117-119`);
-   it must be the same string as this app's `TrioAppGroupID`.
+   Trio reads the suite named by its own Info.plist `AppGroupID` (`AppGroupSource.swift:34, :122-125`),
+   `group.org.nightscout.<TEAM>.trio.trio-app-group`; it must be the same string as this app's `TrioAppGroupID`
+   (shown in this app's Settings › Trio). Trio's CGM screen does not show the group (Trio 29350e31a). It appears only
+   in Trio's glucose notifications: Settings → Notifications → Trio Notifications, set Glucose Notifications to
+   Always or Only Alarm Limits and turn on **Add Glucose Source to Alarm** (default off); the notification body then
+   ends with "Group ID: group.org.nightscout.<TEAM>.trio.trio-app-group" (`AppGroupSource.swift:117-119`,
+   `UserNotificationsManager.swift:415-423`, `GlucoseNotificationSettingsRootView.swift:228-249`).
 4. **Do not also run Trio's G7 plugin (G7SensorKit) against the same sensor.** One path in: this app authenticates
    to the sensor and hands readings to Trio; Trio's G7 plugin must be removed (step 3). Also do not run xDrip4iOS
    with "share to Trio" on: it writes the same key.
@@ -436,6 +443,12 @@ settings and unaffected.
 
 - Trio consumption cannot be observed (see Failure reporting).
 - Readings older than the newest 60 are never offered to Trio.
-- The heartbeat keys are supported by the bridge but not wired yet (Phase 2 must-do, rules above).
+- The heartbeat is wired (`TrioCoordinator.updateHeartbeat`, re-evaluated after pairing, forgetting, every sensor
+  state, bridge on/off, on foreground and by the 60 s foreground ticker; rules in [When Trio reads](#when-trio-reads)).
+  Whether Trio's heartbeat connection keeps it looping with the phone locked is not verified yet (§11 step 4).
 - One `TrioBridge` per process; it assumes it is the only writer of `latestReadings`.
+- **Listen mode (D45):** while the app listens alongside the Dexcom app, the handoff is off in the services
+  (`TrioCoordinator.activeBridge` is nil): nothing is written to Trio's App Group — no readings, no heartbeat
+  keys, no removals — whatever the switch says. Trio keeps its own CGM path (its G7 plugin alongside the Dexcom
+  app), so nothing is duplicated; what the App Group held before the switch is left as it was.
 - Behaviour documented against Trio `main` @ 29350e31a; re-check `AppGroupSource.swift` on every Trio update.

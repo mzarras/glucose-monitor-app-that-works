@@ -1,3 +1,4 @@
+import GlucoseCore
 import SwiftUI
 import WidgetCore
 import XCTest
@@ -141,6 +142,20 @@ final class ScreenshotTests: XCTestCase {
                 }
             }
             try render(gallery, name: "widget-medium-states-\(scheme.name)", scheme: scheme, width: 396, height: nil)
+            // Audit m9 (DEBUG): a replayed reading carries REPLAY on the widget.
+            let sample = WidgetSamples.content(.normal, now: live)
+            let replay = WidgetEntryContent(date: sample.date, display: sample.display, recent: sample.recent, accent: sample.accent,
+                                            snapshotWrittenAt: sample.snapshotWrittenAt, isReplay: true)
+            let replayTiles = VStack(alignment: .leading, spacing: 10) {
+                self.widgetTile(MediumWidgetView(content: replay))
+                RectangularAccessoryView(content: replay)
+                    .padding(12)
+                    .frame(width: 180, height: 80)
+                    .background(Theme.background)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(.horizontal, 16)
+            }
+            try render(replayTiles, name: "widget-replay-debug-\(scheme.name)", scheme: scheme, width: 396, height: nil)
             let small = HStack(spacing: 10) {
                 ForEach([WidgetSamples.State.normal, .lowFlag, .stale, .noData], id: \.self) { state in
                     SmallWidgetView(content: WidgetSamples.content(state, now: live))

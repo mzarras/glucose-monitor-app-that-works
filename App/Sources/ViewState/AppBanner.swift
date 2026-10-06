@@ -96,6 +96,7 @@ enum AppBanners {
         now: Date,
         clockMismatchLatched: Bool = false,
         sensorNeedsCalibration: Bool = false,
+        listening: Bool = false,
         context: DisplayContext = .current
     ) -> [AppBanner] {
         var banners: [AppBanner] = []
@@ -113,7 +114,7 @@ enum AppBanners {
         if let banner = missedReadings(sensorState: sensorState, latest: latestLiveReadingDate, now: now, clockMismatchLatched: clockMismatchLatched, context: context) {
             banners.append(banner)
         }
-        banners += sensorBanners(sensorState, now: now, context: context)
+        banners += sensorBanners(sensorState, now: now, listening: listening, context: context)
 
         switch health.trio {
         case .failing(let since, let message):
@@ -340,7 +341,8 @@ enum AppBanners {
         }
     }
 
-    private static func sensorBanners(_ state: SensorState, now: Date, context: DisplayContext) -> [AppBanner] {
+    /// - Parameter listening: D45 listen mode: its transient failures in their own words.
+    private static func sensorBanners(_ state: SensorState, now: Date, listening: Bool, context: DisplayContext) -> [AppBanner] {
         switch state {
         case .bluetoothUnavailable(.poweredOff):
             return [AppBanner(
@@ -373,6 +375,14 @@ enum AppBanners {
                 detail: "\(description) (code \(code)). Readings are paused.",
                 action: .openSensorSettings, actionTitle: "Sensor")]
         case .failed(let failure):
+            // D45: a listen-mode failure stays up (S5) with words for listening.
+            if let text = ListenModeRules.failure(failure, listening: listening) {
+                return [AppBanner(
+                    kind: .sensorInterrupted, severity: .warning,
+                    title: text.title,
+                    detail: text.detail,
+                    action: .openSensorSettings, actionTitle: "Sensor")]
+            }
             // Decisions from the kind, words from the source (D36).
             if failure.requiresSensorReplacement {
                 return [AppBanner(

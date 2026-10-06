@@ -35,6 +35,16 @@ struct SettingsViewState: Equatable, Sendable {
     var feedback = SettingsFeedback()
     /// DEBUG builds only: the replay controls (D11, D20). Always nil in Release.
     var debug: DebugSettings? = nil
+    /// D45: listen alongside the Dexcom app or pair this app (the facade's `connectionMode`; nil
+    /// only for a fixture without it).
+    var connection: ConnectionModeState? = nil
+    /// D45: a switch to this mode is on its way (the choices wait for it).
+    var connectionSwitchingTo: SensorConnectionMode? = nil
+    /// D47: Settings › Diagnostics "Record raw glucose packets" (`recordsRawGlucosePackets`).
+    var packetRecording: PacketRecordingState? = nil
+
+    /// D45: listening forces the Trio handoff and uploads off, and hides pairing-only actions.
+    var isListening: Bool { connection?.isListening == true }
 }
 
 /// What happened after a Settings action, for the page that started it. Nil = nothing to say.
@@ -43,6 +53,8 @@ struct SettingsFeedback: Equatable, Sendable {
     var dexcomShare: String?
     var pairing: String?
     var export: String?
+    /// D45: why the connection mode didn't change (`ConnectionModeText.errorText`).
+    var connection: String?
 }
 
 /// DEBUG builds: replay a ReplayKit scenario in the running app (PROGRESS D11, D19, D20).
@@ -85,7 +97,7 @@ struct SensorSettings: Equatable, Sendable {
 struct TrioSettings: Equatable, Sendable {
     var isEnabled: Bool
     var status: TrioStatus
-    /// Info.plist `TrioAppGroupID`, to compare with Trio's Settings › App Info › "Group ID".
+    /// Info.plist `TrioAppGroupID`, to compare with Trio's App Group (`SettingsText.trioAppGroupHelp`).
     var appGroupID: String? = nil
     /// Last time Trio's App Group was brought up to date, and how many readings that write held.
     var lastWriteAt: Date? = nil
@@ -98,6 +110,10 @@ struct TrioSettings: Equatable, Sendable {
     var pausedInDebugBuild: Bool = false
     /// The bridge is on but can't run in this build (e.g. no Trio App Group), and why.
     var unavailableReason: String? = nil
+    /// Readings held back at launch until Trio's App Group is re-seeded, and since when (never
+    /// written older than Trio's newest).
+    var heldBackReadings: Int = 0
+    var heldBackSince: Date? = nil
 }
 
 struct NightscoutSettings: Equatable, Sendable {
@@ -192,6 +208,18 @@ extension RetentionPolicy {
 }
 
 enum SettingsText {
+    /// Settings › Data › Export diagnostics: exactly what the log holds (RingBufferDiagnosticLog's
+    /// categories: ble, sensor, store, bridge, upload, alert, importer, app). G7Kit logs the sensor's
+    /// name and serial; "Nightscout site saved" logs the host name; alert and upload lines can carry
+    /// a glucose value. Modules log no passwords, tokens or pairing codes.
+    static let diagnosticsContents = "Bluetooth and sensor events (with the sensor's name and serial), reading and alert decisions with their times and glucose values, Trio and upload events (with the Nightscout host name). No passwords, tokens or pairing codes. For bug reports."
+
+    /// Settings › Trio › App Group: what to compare with Trio. Trio has no screen that shows its
+    /// group; it appears only in its glucose notifications as "Group ID: …" (`AppGroupSource
+    /// .sourceInfo`) with Add Glucose Source to Alarm on, and the CGM screen's "CGM address :" line
+    /// (`CustomCGMOptionsView`) appears once Trio has read this app's heartbeat from the group.
+    static let trioAppGroupHelp = "Must be Trio’s App Group: both apps signed by the same Team ID. Trio shows it only in its glucose notifications, as “Group ID: …”, with Settings › Notifications › Trio Notifications › Add Glucose Source to Alarm on. Once the heartbeat is published, Trio’s CGM screen shows a “CGM address :” line instead of “CGM is not used as heartbeat.”"
+
     static func databaseSize(_ bytes: Int64?) -> String {
         guard let bytes else { return "—" }
         return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
@@ -240,6 +268,15 @@ enum SettingsText {
         case .repeatsNotScheduled(let alert, let missing):
             return "\(alert): \(missing) \(missing == 1 ? "repeat" : "repeats") fewer than planned while the app is in the background."
         }
+    }
+
+    /// Settings › Trio, while readings wait for the launch re-seed: "3 readings held back since
+    /// 12:35 PM, until Trio's App Group is brought up to date". Nil when none are held.
+    static func trioHeldBack(_ trio: TrioSettings, context: DisplayContext = .current) -> String? {
+        guard trio.heldBackReadings > 0 else { return nil }
+        let count = trio.heldBackReadings == 1 ? "1 reading" : "\(trio.heldBackReadings) readings"
+        let since = trio.heldBackSince.map { " since \(TimeText.time($0, context))" } ?? ""
+        return "\(count) held back\(since), until Trio's App Group is brought up to date."
     }
 
     /// DEBUG builds keep the Trio bridge and uploaders off unless the developer switch is on (D20).

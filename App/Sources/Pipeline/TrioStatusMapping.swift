@@ -31,7 +31,8 @@ extension TrioBridgeSummary {
     /// the starvation threshold (review m5: a hold must count as readings Trio does not have).
     mutating func refreshStarvation(now: Date) {
         let heldTooLong = heldBackSince.map { now.timeIntervalSince($0) >= TrioBridgeStatus.starvationThreshold } ?? false
-        isStarving = bridgeIsStarving || heldTooLong
+        // D45: while listening the handoff is off on purpose; Trio has its own CGM path.
+        isStarving = !offWhileListening && (bridgeIsStarving || heldTooLong)
     }
 
     /// Words for Settings and the S5 banner.

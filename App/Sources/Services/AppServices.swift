@@ -78,6 +78,33 @@ protocol AppServices: AnyObject {
     var hasStoredSensor: Bool { get }
     /// The stored sensor's serial ("DXCMxx-1A2B3C4D"), nil when none is stored.
     var storedSensorSerial: String? { get }
+    /// False until `hasStoredSensor` / `storedSensorSerial` have been read from the source after
+    /// bootstrap (before that they are only defaults). A change sends `.sensor`. Use it to take an
+    /// exact "stored sensor before pairing" baseline.
+    var storedSensorKnown: Bool { get }
+
+    // MARK: Sensor connection (D45 listen mode, D47 raw packet recording)
+
+    /// How this app reaches the sensor: `.pair` (primary: this app pairs with the code and owns the
+    /// connection) or `.listen` (it observes the Dexcom app's authenticated connection; no pairing,
+    /// no writes to the sensor, no calibration). Saved for the next launch; a change sends
+    /// `.sensor`, `.calibration`, `.trio` and `.uploads`.
+    var connectionMode: SensorConnectionMode { get }
+    /// Switches the mode: G7Kit stops, drops the old mode's stored pairing and session and reports
+    /// `.notPaired` (pair: pair next) or `.searching` (listen: started at once). The Trio handoff and
+    /// the Nightscout/Dexcom Share uploaders follow at once: off while listening, back on (as the
+    /// switches say) when pairing. Nothing changes when it throws.
+    func setConnectionMode(_ mode: SensorConnectionMode) async throws(ConnectionModeError)
+    /// D45: true while listening — the Trio handoff and both uploaders are off in the services
+    /// (also `trio.offWhileListening`, `nightscout.upload.offWhileListening`,
+    /// `dexcomShare.upload.offWhileListening`); alerts are unchanged.
+    var sharingOffWhileListening: Bool { get }
+    /// False in listen mode: the source refuses calibrations there (calibrate in the Dexcom app).
+    var supportsCalibration: Bool { get }
+    /// D47 (Settings › Diagnostics): the hex of every received glucose packet goes to the diagnostic
+    /// log. Off by default; saved for the next launch. A change sends `.sensor`.
+    var recordsRawGlucosePackets: Bool { get }
+    func setRecordsRawGlucosePackets(_ enabled: Bool) async
 
     // MARK: Calibration (PROGRESS D16; never a reading, S1)
 
@@ -151,8 +178,9 @@ protocol AppServices: AnyObject {
     func refreshStorageSummary() async
     /// Writes every stored reading as CSV (docs/storage.md format) to a temporary file.
     func exportAllReadingsCSV() async throws -> URL
-    /// Writes the diagnostic log (BLE transitions, bridge writes, uploads, alert decisions; no
-    /// personal data beyond readings) to a temporary text file.
+    /// Writes the diagnostic log (BLE and sensor events with the sensor's name and serial, reading
+    /// and alert decisions with glucose values, bridge writes, uploads with the Nightscout host name;
+    /// no passwords, tokens or pairing codes) to a temporary text file.
     func exportDiagnostics() async throws -> URL
 
     // MARK: Appearance shared with the widget
@@ -181,5 +209,21 @@ protocol AppServices: AnyObject {
     /// D20 developer switch: let the Trio bridge and uploaders run in this DEBUG build. They still
     /// refuse every non-sensor reading (S6).
     func setDeveloperLiveOutputsEnabled(_ enabled: Bool) async
+    /// The running replay's clock (scenario time; ahead of the phone clock above 1×), nil when no
+    /// replay runs. The UI classifies against it so an accelerated replay's readings are current
+    /// rather than "dated ahead of the phone clock" (Phase 2 carry-over).
+    var replayClockNow: Date? { get }
     #endif
+}
+
+extension AppServices {
+    /// Default for stand-ins that always know (additive requirement).
+    var storedSensorKnown: Bool { true }
+    /// Defaults for stand-ins without a sensor connection choice (additive requirements, D45/D47).
+    var connectionMode: SensorConnectionMode { .pair }
+    func setConnectionMode(_ mode: SensorConnectionMode) async throws(ConnectionModeError) {}
+    var sharingOffWhileListening: Bool { connectionMode == .listen }
+    var supportsCalibration: Bool { connectionMode != .listen }
+    var recordsRawGlucosePackets: Bool { false }
+    func setRecordsRawGlucosePackets(_ enabled: Bool) async {}
 }

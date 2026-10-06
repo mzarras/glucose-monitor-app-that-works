@@ -27,10 +27,28 @@ SensorApp → AppModel.launch(services: AppEnvironment.shared.services)   one mo
   lines under the control that failed (`SettingsFeedback`, `OnboardingState.*Message`), the share
   sheet, the optimistic Alerts draft (below).
 - **Clock.** `AppModel.clock` (injected in tests) is what the UI classifies against: Now's hero and
-  banners, the tab dot, the latch, "today". It is the phone clock, so DEBUG replay runs in the UI
-  use speed 1 (`-replayStartMinute` jumps ahead instead; see Open questions).
+  banners, the tab dot, the latch, "today". It is the phone clock; in a DEBUG replay run it is the
+  replay clock (`AppServices.replayClockNow`, compiled out of Release), so an accelerated replay's
+  readings are current on screen. The UI tests still use speed 1 with `-replayStartMinute`.
+- **Time zone and clock changes (Phase 3).** `NSSystemTimeZoneDidChange` →
+  `calendarDidChange(.current)`: "Today so far" and the Now chart's data are reloaded, Trends is
+  recomputed in the new zone (now if visible, else when opened), and the latch is re-checked.
+  `significantTimeChangeNotification` (midnight, DST, a manual clock change) → `tick()`. Clock-time
+  labels use `DisplayContext.current` (autoupdating) and follow on the next render (≤ 15 s on Now).
+  The Now chart draws and scrubs only points up to `now` (`NowMapping.visibleChartPoints`), so after
+  the clock is set back a future-dated reading is never selectable; the hero shows the clock
+  mismatch.
+- **Relaunch (Phase 3).** The selected tab and Trends period are stored with the appearance
+  (`AppUIPreferences`, read once protected data is available) and restored after the app is killed;
+  an explicit `-tab` launch argument wins (the UI tests pass `-tab now`).
 - **Fixtures.** DEBUG `AppModel.fixtures()` builds fixture view states with no services, for
   previews and the fixture-based unit tests only.
+- **Stored-sensor baseline (Phase 3).** `hasStoredSensor` is only a default until
+  `storedSensorKnown` turns true (bootstrap read the source's record). Onboarding takes the
+  "sensor stored when this pairing started" baseline only from a known value (nil otherwise, so
+  nothing counts as authenticated in that pairing), and a stored sensor appearing during a pairing
+  counts as the sensor answering only when the previous read was known "not stored" — whichever
+  change delivered it.
 - **Sensor state known (review M1).** Before the source's first state reaches it, the facade
   reports `.notPaired` by default. The model treats the state as real once a `.sensor` change has
   arrived, or the state at launch is anything but `.notPaired`, or a sensor is stored
@@ -127,7 +145,11 @@ warning shows on every period and next to GMI (`TrendsText.gmiNote`); the TIR ch
 under 70 %; count/streak deltas are not shown. AGP from `AGPDisplaySmoothing.smoothedForDisplay`,
 empty buckets dropped, LOW/HIGH percentiles kept as flags (`AGPLineValue`) and drawn at the chart
 floor/ceiling; with any HIGH percentile the top is 400 (`AGPChartScale`), so a HIGH line never sits
-at a ceiling such as 250 that reads as a value (S4). 1 D / 3 D: the stored readings of each local day (`DayTrace`). Lows: level 1
+at a ceiling such as 250 that reads as a value (S4). 1 D / 3 D: the stored readings of each local day (`DayTrace`, with its time zone), plotted at
+their wall-clock hour (`TimeOfDayAxis.hourOfDay`: elapsed time since midnight plus the UTC offset
+change, audit m17), so on a DST day every reading sits at its clock time and the 3 D days line up;
+lines split at the clock change (`splitAtClockChanges`), the repeated hour's two passes share x, the
+scrub maps a finger back to the first pass (a skipped hour to the jump). Lows: level 1
 events starting in the period, mean duration, `busiestWindow(hourCount: 3)` when ≥ 2 lows.
 Imported-data footnote from `containsImportedReadings` (origins and span from the imported
 readings in the period). After-runs row hidden (v1.1).
@@ -165,10 +187,10 @@ low.").
 | Page | From | Actions |
 |---|---|---|
 | Sensor | `sensorState`, `sensorSession`, `storedSensorSerial`, `canStopSession`, `hasStoredSensor`, `bluetoothAuthorization` | `PairingGuidance.settingsOffer` → `pair(code:)` / `pairAgain(code:)` (`PairingError.noSensorToPairAgain` is shown, never retried as a new pairing); forget sensor; stop session only if `canStopSession` (G7: hidden); calibrate |
-| Trio | `trio` | `setTrioBridgeEnabled`; shows `TrioAppGroupID` to compare with Trio's Group ID, `unavailableReason`, last write, heartbeat, D20 pause note |
-| Sharing | `nightscout`, `dexcomShare` | `saveNightscout(url:token:)`, `setNightscoutUploadEnabled`, `saveDexcomShare(accountName:password:receiverSerialNumber:)`, `setDexcomShareRegion` (US default, D7), `setDexcomShareEnabled`, `retryUploads`; errors under the Save button; D29/D30 notes |
+| Trio | `trio` | `setTrioBridgeEnabled`; shows `TrioAppGroupID` to compare with Trio's App Group (`SettingsText.trioAppGroupHelp`: Trio shows it only as "Group ID: …" in glucose notifications with Add Glucose Source to Alarm on; its CGM screen's "CGM address :" line confirms the heartbeat), `unavailableReason`, last write, "N readings held back since …" (`heldBackReadings`/`heldBackSince`, the launch re-seed), heartbeat, D20 pause note |
+| Sharing | `nightscout`, `dexcomShare` (a failing uploader's line from `ServiceHealthMapping.uploadProblem`: setup, queue file, connection error, refusal, readings held because they are dated ahead of the phone's clock, readings dropped and why) | `saveNightscout(url:token:)`, `setNightscoutUploadEnabled`, `saveDexcomShare(accountName:password:receiverSerialNumber:)`, `setDexcomShareRegion` (US default, D7), `setDexcomShareEnabled`, `retryUploads`; errors under the Save button; D29/D30 notes |
 | Alert delivery | `alertDelivery` | `requestNotificationAuthorization`, `requestUrgentLowAlarmAuthorization`, open iOS Settings; `refreshAlertDelivery` on appear |
-| Data | `storage`, `historyImport` | import (sheet), `exportAllReadingsCSV` / `exportDiagnostics` → share sheet (`ActivityView`), `setRetention`; size + reading count; `refreshStorageSummary` on appear |
+| Data | `storage`, `historyImport` | import (sheet), `exportAllReadingsCSV` / `exportDiagnostics` → share sheet (`ActivityView`), `setRetention`; size + reading count; `refreshStorageSummary` on appear. The diagnostics row says what the log holds (`SettingsText.diagnosticsContents`: sensor name and serial, glucose values, the Nightscout host name; no passwords, tokens or pairing codes) |
 | Appearance | `accent`; light/dark is the app's own (`AppUIPreferences`) | `setAccent` |
 | About | `Credits` (mirrors NOTICE.md, `AboutCreditsTests`) + font licences from the bundle | — |
 | Developer (DEBUG) | `replay` | `startReplay(scenario:speed:)`, `stopReplay`, `setDeveloperLiveOutputsEnabled` (D20) |
@@ -193,7 +215,9 @@ bar and the banners one tap away; the full-screen onboarding is first-run only.
   (`saveNightscout`), then `startNightscoutImport(scope:)`. Clarity CSV via `.fileImporter`, read
   off the main actor (security-scoped), time zone picker (current zone first),
   `startClarityImport(fileData:timeZone:)`. Progress, skipped entries and rejected future-dated
-  readings from `historyImport`; stop → `cancelHistoryImport`.
+  readings from `historyImport` (`rejectedFutureDated` or `skipped["futureDated"]`, not counted again
+  as skipped entries; `OnboardingText.futureDatedNote`); a stopped import's message in full (`OnboardingText.importFailure`:
+NightscoutKit's `unusableHistory` names the date range and what to do); stop → `cancelHistoryImport`.
 - Remove the Dexcom app: the D35 "other G7 apps" warning, the Dexcom Follow note, Share upload on
   by default with US preselected; Continue saves the credentials, sets the region, turns upload on,
   and only then moves on (a save error stays on the step).
@@ -230,19 +254,70 @@ clock.
 Each reload carries a generation number; only the newest request's result is applied. The model
 tracks its async work so tests can `await model.settle()`.
 
+## Performance (Phase 3)
+
+`NinetyDayPerformanceTests` (hosted, Debug, simulator) seeds a production-role GlucoseStore on disk
+with 181 days at 5-minute cadence (52k readings — the Trends 90 D fetch window after six months) and
+measures the model's own work, median of 7 runs after a warm-up:
+
+| Work | Budget | Measured (M4 host, simulator, Debug) |
+|---|---|---|
+| Trends 90 D: fetch + compare + AGP + mapping | 500 ms | ~200 ms (fetch ~115 ms, statistics ~55 ms) |
+| Now: fetch 48 h + chart 24 H + "today so far" | 100 ms | ~3 ms |
+| One scrub hit test on 24 H (a drag update) | 2 ms | ~0.23 ms |
+
+A failure message names the median, best and budget; re-run the suite alone before treating one
+as a regression (other builds may share the machine).
+
+## D45 listen mode and D47 packet recording
+
+`refreshSensor` (every `.sensor` change; a mode switch also sends `.calibration`, `.trio`, `.uploads`)
+maps the facade's `connectionMode` into `now.connection`, `settings.connection` and
+`calibration.listening`, and `recordsRawGlucosePackets` into `settings.packetRecording`. The outputs'
+`offWhileListening` make `ServiceHealthMapping` report Trio and uploads as off (no S5 banner); the
+screens word it "off while listening".
+
+| Where | While listening | Action → facade |
+|---|---|---|
+| Onboarding | A "How to connect" step after Welcome, before any pairing step: the two choices ("Listen alongside the Dexcom app (this sensor)", "Pair this app (Dexcom app removed)"), one line each; **nothing preselected, ever**, and no Continue until one is chosen. The pairing step says before the code field: "Pairing takes over the sensor's connection: the Dexcom app on this phone will stop receiving readings. Delete the Dexcom app first." Listening skips Remove the Dexcom app and Pairing and adds a Listening step (status line, the source's problem in listen words, Continue always offered); Dexcom Share upload is not on by default (D7's default is for pairing mode). | Continue → `setConnectionMode(_:)` when the choice differs (confirmation first if a sensor is stored); a refusal stays on the step (`ConnectionModeText.errorText`, nothing changed) |
+| Settings › Sensor | Until a choice is made (`AppUIPreferences.connectionModeChosen`; a new install's stored `.pair` is only a storage default): the CONNECTION choice first, nothing selected, no code field. Pairing: the takeover warning above every code field. Listening: "Listening — the Dexcom app owns the connection"; calibrate and pairing offers replaced by one-line explanations; Forget becomes "Stop following this sensor" (confirmed; G7Kit §14: how listen mode follows the next sensor) | choice → confirmation (switching to Pair says the takeover warning) → `setConnectionMode(_:)` (the mode the facade is already in only records the choice); the choices wait while it runs; a refusal (`.replayActive`, `.couldNotSave`, `.credentialStoreFailed`) is shown under them. Stop following → `forgetSensor()` |
+| Settings main | Connection row; Trio, Nightscout, Dexcom Share rows "off while listening" | — |
+| Trio, Sharing pages | switches off and disabled, "Off while listening alongside the Dexcom app"; Retry uploads hidden; site and credentials can still be saved | — |
+| Now | Before a choice, no sensor reads "No sensor set up" with "Set up the sensor" (Settings › Sensor's choice), never "Pair a sensor". Listening: TRIO row "off while listening", the listening line under the status rows, no Pair/Calibrate button in the hero (`ListenModeRules.hero`; an ended sensor says to start the new one in the Dexcom app and stop following this one), no followed sensor reads "Not following a sensor" | — |
+| Calibration (Now menu, flow, Settings) | "Calibrate in the Dexcom app: while listening, this app sends nothing to the sensor." (`CalibrationRules.availability`) | — |
+| Banners, SENSOR rows | G7Kit's three transient listen failures (`listenSessionLengthUnknown`, `listenNoAuthenticatedConnection`, `listenConnectionRejected`, by kind while listening) stay up as warnings with their own words (`ListenModeRules.failure`): "Waiting for session details", "Connection not confirmed", "Sensor rejected the connection". Missed readings and alerts are unchanged. | — |
+| Settings › DIAGNOSTICS | "Record raw glucose packets" (D47, off by default) with its line | `setRecordsRawGlucosePackets(_:)` |
+
+`PairingError.notAvailableInListenMode` reads `ConnectionModeText.pairingWhileListening`. UI tests
+start each launch in pairing mode (DEBUG `-resetConnectionMode`, AppEnvironment) and switch on the
+simulator's live source (Bluetooth unsupported there) or are refused in a replay run.
+A choice is recorded when onboarding's Continue or Settings' confirmation succeeds; listening, or a
+sensor stored in pairing mode (an install from before D45), counts as chosen.
+
+Open (services): after `forgetSensor()` in listen mode the live facade does not start listening
+again (`g7Started` stays true, so `startG7()` returns) until the next launch.
+
+Screenshots: `docs/screenshots/listen-*.png` and `first-run-*.png` (UI tests).
+
+## Widget (DEBUG replay marker, audit m9)
+
+`WidgetSnapshot.isReplay` is set when the latest reading's source is `.replay` or `.mock` — only in
+DEBUG (`#if DEBUG` in `WidgetSnapshot.make`); the widget then shows "REPLAY" beside the reading
+(`WidgetEntryContent.showsReplayMarker`, `ReplayMarker`, the inline text), and draws nothing for
+it in Release. The field is additive: older snapshots decode as false.
+
 ## Tests
 
 `AppTests/AppModelWiringTests.swift` (the model on `PreviewAppServices`), `TrendsMappingTests`,
-`AlertsViewTests`, `AboutCreditsTests`; the Gate 4 UI suite `AppUITests/ReplayLaunchUITests.swift`
+`AlertsViewTests`, `AboutCreditsTests`; Phase 3: `TimeAndClockFailureModeTests` (time zone, DST,
+clock changes, the m17 overlay), `RelaunchAndCarryOverTests` (relaunch, carry-overs, m18 future-dated
+import display, copy fixes), `NinetyDayPerformanceTests`, `ListenModeWiringTests` (D45/D47),
+`UploadAndImportTextTests`; UI: the listen-mode tests in `ReplayLaunchUITests`;
+the Gate 4 UI suite `AppUITests/ReplayLaunchUITests.swift`
 launches the DEBUG app on every ReplayKit scenario (`-replayScenario <name> -replaySpeed 1
 -replayStartMinute <m>`) and with no sensor.
 
 ## Open questions
 
-- **Pipeline clock for accelerated replay.** At `-replaySpeed` > 1 (or the Developer page's faster
-  speeds) replay readings are dated ahead of the phone clock, so the UI shows "Phone clock doesn't
-  match" — correct for the phone clock, unhelpful for a demo. Exposing the pipeline's `now` (the
-  replay clock during a run) on the facade would let `AppModel.clock` follow it. The UI tests use
-  speed 1 with `-replayStartMinute`, so they are unaffected.
 - **Stop session.** The facade has `canStopSession` but no `stopSession()`; the row is hidden while
   no source can stop a session (G7).

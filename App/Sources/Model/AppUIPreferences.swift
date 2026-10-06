@@ -1,7 +1,8 @@
 // UI-only preferences the app keeps itself (everything else is owned by `AppServices`): whether
-// onboarding was completed, light/dark appearance, and whether the sensor is still waiting for a
-// calibration (review minor 4, kept across relaunches with the Now state). UserDefaults of the
-// app's own container; injectable for tests.
+// onboarding was completed, light/dark appearance, whether the sensor is still waiting for a
+// calibration (review minor 4, kept across relaunches with the Now state), and the selected tab
+// and Trends period (restored after the app is killed and relaunched). UserDefaults of the app's
+// own container; injectable for tests.
 
 import Foundation
 
@@ -13,6 +14,9 @@ final class AppUIPreferences {
         static let onboardingCompleted = "ui.onboardingCompleted"
         static let appearance = "ui.appearance"
         static let sensorNeedsCalibration = "ui.sensorNeedsCalibration"
+        static let selectedTab = "ui.selectedTab"
+        static let trendsPeriodDays = "ui.trendsPeriodDays"
+        static let connectionModeChosen = "ui.connectionModeChosen"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -32,5 +36,25 @@ final class AppUIPreferences {
     var sensorNeedsCalibration: Bool {
         get { defaults.bool(forKey: Key.sensorNeedsCalibration) }
         set { defaults.set(newValue, forKey: Key.sensorNeedsCalibration) }
+    }
+
+    /// The tab last selected; nil if never stored (launch on Now).
+    var selectedTab: AppTab? {
+        get { defaults.string(forKey: Key.selectedTab).flatMap(AppTab.init(rawValue:)) }
+        set { defaults.set(newValue?.rawValue, forKey: Key.selectedTab) }
+    }
+
+    /// D45: the person has chosen how the app connects (listen or pair). Until then no screen
+    /// presents pairing as the default (the facade's stored `.pair` is only a storage default) and
+    /// no pairing-code field is shown.
+    var connectionModeChosen: Bool {
+        get { defaults.bool(forKey: Key.connectionModeChosen) }
+        set { defaults.set(newValue, forKey: Key.connectionModeChosen) }
+    }
+
+    /// The Trends period last selected; nil if never stored (14 D).
+    var trendsPeriod: TrendsPeriod? {
+        get { defaults.object(forKey: Key.trendsPeriodDays).flatMap { ($0 as? Int).flatMap(TrendsPeriod.init(rawValue:)) } }
+        set { defaults.set(newValue?.rawValue, forKey: Key.trendsPeriodDays) }
     }
 }

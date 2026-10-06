@@ -3,6 +3,9 @@
 //   AuthRequestTxMessage.swift, xDrip5. Created by Nathan Racklyeft on 11/22/15.
 //   Copyright © 2015 Nathan Racklyeft. All rights reserved.
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/AuthRequestTxMessage.swift @ 7.1.0 (0370937)
+// CGMBLEKit lineage: CGMBLEKit/Messages/AuthRequestTxMessage.swift (LoopKit CGMBLEKit, formerly xDripG5;
+//   MIT, Packages/G7Kit/licenses/CGMBLEKit-LICENSE), reached through xDrip4iOS;
+//   compared with loopandlearn/CGMBLEKit @ 98fae79 (Trio submodule).
 // Changes: public, renamed cases, documentation of the slot findings (docs/g7-protocol.md "Slot choice").
 
 /// The G7 authentication slot ("Bluetooth channel" in xDrip4iOS): the last byte of the `0x02`

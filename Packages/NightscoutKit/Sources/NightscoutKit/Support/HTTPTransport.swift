@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // One seam for all HTTP in this package, so tests run against fixtures and a localhost server and
 // no code path exercised by a test can reach a real service (brief: no traffic to real services).
 
