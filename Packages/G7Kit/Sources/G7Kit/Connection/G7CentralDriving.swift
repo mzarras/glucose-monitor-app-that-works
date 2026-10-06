@@ -16,6 +16,18 @@ protocol G7CentralDriving: AnyObject {
     func cancelConnection(peripheralIdentifier: UUID)
     /// Runs `action` on the controller's queue after `delay` seconds (connect timeouts).
     func schedule(after delay: TimeInterval, _ action: @escaping () -> Void)
+    /// Listen mode (D45): G7 peripherals that are connected to this phone right now — by the Dexcom
+    /// app — found by the G7 service (CBCentralManager.retrieveConnectedPeripherals, as
+    /// CGMG7Transmitter.swift:2082-2087 / BluetoothTransmitter.swift:561-586).
+    func connectedSensors() -> [G7ConnectedSensor]
+}
+
+/// A G7 peripheral another app on this phone is connected to.
+struct G7ConnectedSensor: Equatable {
+    /// `CBPeripheral.name`: "DXCMxx" or, once connected, sometimes "Dexcomxx" (G7SensorKit
+    /// G7Sensor.swift:246-247).
+    let name: String?
+    let identifier: UUID
 }
 
 /// The sensor serial used in reading ids and `SensorSession.serial`.

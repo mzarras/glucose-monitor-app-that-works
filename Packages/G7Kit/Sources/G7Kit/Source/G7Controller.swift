@@ -5,7 +5,10 @@
 // :553-593, reconnectAfterDisconnect :595-603, didConnect :605-654, didDisconnectPeripheral
 // :656-688, authSessionDidRejectPersistedKey :969-979, authSessionRequiresCleanReconnect
 // :981-989) and BluetoothTransmitter's pending-connect reconnect (BluetoothTransmitter.swift:313-317),
-// with pairing state in G7CredentialStore instead of Core Data/UserDefaults.
+// with pairing state in G7CredentialStore instead of Core Data/UserDefaults. Listen mode (D45): the
+// coexistence attach policy of CGMG7Transmitter (connect :429-444, didDiscover :553-571,
+// startCoexistenceObservation :2082-2087, handleCoexistenceAuthentication :1587-1609) without any
+// command it sends in coexistence (see G7ListenCycle).
 
 import Foundation
 import GlucoseCore
@@ -19,12 +22,16 @@ public enum G7StartError: Error, Equatable, Sendable {
     case credentialStoreFailed(String)
     /// `pairAgain(code:)` needs a sensor this phone has connected to before; use `pair(code:)`.
     case noSensorToPairAgain
+    /// Pairing (`pair(code:)`, `pairAgain(code:)`) does not exist in listen mode (D45): the Dexcom app
+    /// owns the sensor. Switch to primary mode first (`G7CGMSource.setMode`).
+    case notAvailableInListenMode
 }
 
-/// Everything G7 primary mode decides across connections: pairing, reconnection, the reading
-/// pipeline, the persisted session, calibration and state. Not thread-safe: `G7CGMSource` calls
-/// every method on its one serial queue (the CoreBluetooth delegate queue).
-final class G7Controller: G7ConnectionCycleDelegate {
+/// Everything G7Kit decides across connections: pairing, reconnection, the reading pipeline, the
+/// persisted session, calibration and state, in primary mode, and in listen mode (D45, "Listen
+/// mode" below) the observation of the Dexcom app's connection. Not thread-safe: `G7CGMSource`
+/// calls every method on its one serial queue (the CoreBluetooth delegate queue).
+final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     struct Output {
         let reading: (GlucoseReading) -> Void
         let state: (SensorState) -> Void
@@ -48,10 +55,26 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// has authenticated, the skipped refusal is reported (`previousSensorRejectedCode`).
     static let previousSensorSkipLimit: TimeInterval = 10 * 60
 
+    /// Sensor policy (listen mode): an observed connection that ends without an observed
+    /// authenticated status can be a subscription that came too late; only this many in a row are
+    /// surfaced (`listenNoAuthenticatedConnection`). Signal loss is covered by missed readings.
+    static let listenUnauthenticatedConnectionsBeforeSurfacing = 2
+    /// Sensor policy (listen mode): while no sensor is followed yet, look for the Dexcom app's
+    /// connection this often (foreground; CoreBluetooth coalesces repeated discoveries).
+    static let listenSearchInterval: TimeInterval = 10
+
     private let store: G7CredentialStore
     private let diagnostics: DiagnosticLog
     private let now: () -> Date
-    private let slot: G7AuthenticationSlot
+    /// Primary or listen (D45); changed only by `setMode`, never automatically.
+    private(set) var mode: G7ConnectionMode
+    /// D47: log every received glucose packet's hex.
+    var recordsRawGlucosePackets: Bool
+    private var slot: G7AuthenticationSlot {
+        if case .primary(let slot) = mode { return slot }
+        return .recommendedDefault
+    }
+    private var isListening: Bool { mode == .listen }
     private let output: Output
     private let makeAuthSession: (G7Link, G7PairingRecord) -> G7AuthSession
     weak var central: G7CentralDriving?
@@ -91,12 +114,22 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// it is a clock mismatch the phone ↔ sensor time relation is not trusted, so a fingerstick
     /// cannot be converted to sensor time and calibration is refused (D37).
     private var lastPipelineFailure: SensorFailure.Kind?
+    /// Audit m1: what the app has durably stored, per sensor serial (only the latest call is kept).
+    private var backfillFloor: (serial: String, floor: G7ReadingPipeline.BackfillFloor)?
+    /// Listen mode: the observed connection, the system-connected sensor being attached while no
+    /// sensor is followed yet, and connections that ended without an observed authentication.
+    private var listenCycle: G7ListenCycle?
+    private var listenCandidate: G7ConnectedSensor?
+    private var listenConnectionsWithoutAuthentication = 0
+    private var listenSearchScheduled = false
 
     init(
         store: G7CredentialStore,
         diagnostics: DiagnosticLog,
         now: @escaping () -> Date,
-        slot: G7AuthenticationSlot,
+        slot: G7AuthenticationSlot = .recommendedDefault,
+        mode: G7ConnectionMode? = nil,
+        recordsRawGlucosePackets: Bool = false,
         output: Output,
         makeAuthSession: @escaping (G7Link, G7PairingRecord) -> G7AuthSession = { link, record in
             G7AuthSession(link: link, slot: record.slot, pairingCode: record.pairingCode, savedKey: record.sharedKey.map { [UInt8]($0) })
@@ -105,7 +138,8 @@ final class G7Controller: G7ConnectionCycleDelegate {
         self.store = store
         self.diagnostics = diagnostics
         self.now = now
-        self.slot = slot
+        self.mode = mode ?? .primary(slot: slot)
+        self.recordsRawGlucosePackets = recordsRawGlucosePackets
         self.output = output
         self.makeAuthSession = makeAuthSession
         self.calibration = G7CalibrationQueue(
@@ -117,11 +151,12 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// Emits the first element of the state stream: what is known before any Bluetooth event.
     /// A store that cannot be read is a failure, never "not paired" (safety review M3).
     func emitInitialState() {
-        switch loadRecord() {
+        switch loadRecordForMode() {
         case .failure:
             emit(.failed(G7FailureReason.credentialsUnavailable))
         case .success(nil):
-            emit(.notPaired)
+            // Listen mode needs no pairing: it is about to look for the Dexcom app's connection.
+            emit(isListening ? .searching : .notPaired)
         case .success(let stored?):
             record = stored
             if stored.requiresNewPairing {
@@ -150,14 +185,20 @@ final class G7Controller: G7ConnectionCycleDelegate {
     }
 
     /// A sensor this phone has authenticated to is stored, so `pairAgain(pairingCode:)` can target it.
-    var hasStoredSensor: Bool { record?.serial != nil && record?.peripheralIdentifier != nil }
+    /// Always false in listen mode (no pairing there).
+    var hasStoredSensor: Bool { !isListening && record?.serial != nil && record?.peripheralIdentifier != nil }
 
-    /// The stored sensor's serial (`G7SensorSerial`), once this phone has authenticated to it.
-    var storedSensorSerial: String? { hasStoredSensor ? record?.serial : nil }
+    /// The stored sensor's serial (`G7SensorSerial`), once this phone has authenticated to it
+    /// (primary) or observed its authenticated connection (listen).
+    var storedSensorSerial: String? {
+        guard let record, record.serial != nil, record.peripheralIdentifier != nil else { return nil }
+        return record.serial
+    }
 
-    /// Only for a sensor this app has authenticated to (serial fixed) and still may use.
+    /// Only for a sensor this app has authenticated to (serial fixed) and still may use. Nil in
+    /// listen mode: this app does not own the connection, and the Trio handoff is off (D45).
     var heartbeatTarget: G7HeartbeatTarget? {
-        guard let record, record.serial != nil, !record.requiresNewPairing,
+        guard !isListening, let record, record.serial != nil, !record.requiresNewPairing,
               let identifier = record.peripheralIdentifier else { return nil }
         return G7HeartbeatTarget(peripheralIdentifier: identifier)
     }
@@ -171,6 +212,11 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// (safety review M1, D37: a previous sensor that is still running may be the one being paired;
     /// `pairAgain(code:)` targets it explicitly).
     func start(pairingCode: String?) throws(G7StartError) {
+        if isListening {
+            guard pairingCode == nil else { throw .notAvailableInListenMode }
+            try startListening()
+            return
+        }
         if let pairingCode {
             guard G7PairingCode.isValid(pairingCode) else { throw .invalidPairingCode }
             let previous = try? loadRecord().get()
@@ -198,7 +244,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
             }
             log(.sensor, "pairing a new sensor in slot \(slot.rawValue)")
         } else {
-            switch loadRecord() {
+            switch loadRecordForMode() {
             case .failure(let error):
                 emit(.failed(G7FailureReason.credentialsUnavailable))
                 throw .credentialStoreFailed("\(error)")
@@ -216,9 +262,10 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// claims the phone's slot again, so another collector in the same slot loses it (the user's
     /// explicit choice; automatic reconnection never does this, §3.1).
     func pairAgain(pairingCode: String) throws(G7StartError) {
+        guard !isListening else { throw .notAvailableInListenMode }
         guard G7PairingCode.isValid(pairingCode) else { throw .invalidPairingCode }
         let stored: G7PairingRecord?
-        switch loadRecord() {
+        switch loadRecordForMode() {
         case .failure(let error):
             emit(.failed(G7FailureReason.credentialsUnavailable))
             throw .credentialStoreFailed("\(error)")
@@ -254,6 +301,8 @@ final class G7Controller: G7ConnectionCycleDelegate {
         pairingStartedAt = nil
         skippedPreviousSensorRefusal = false
         pairingGeneration += 1
+        listenCandidate = nil
+        listenConnectionsWithoutAuthentication = 0
     }
 
     /// The common tail of `start` and `pairAgain`: run with the current record.
@@ -279,7 +328,9 @@ final class G7Controller: G7ConnectionCycleDelegate {
     func stop() {
         isRunning = false
         central?.stopScanning()
-        if let identifier = cycle?.link.peripheralIdentifier ?? record?.peripheralIdentifier {
+        // In listen mode this cancels only this app's use of the Dexcom app's link; iOS keeps the
+        // physical link for the Dexcom app (CBCentralManager.cancelPeripheralConnection).
+        if let identifier = cycle?.link.peripheralIdentifier ?? listenCycle?.link.peripheralIdentifier ?? record?.peripheralIdentifier {
             central?.cancelConnection(peripheralIdentifier: identifier)
         }
         finishCycle()
@@ -299,9 +350,53 @@ final class G7Controller: G7ConnectionCycleDelegate {
         emit(.notPaired)
     }
 
+    // MARK: - Backfill floor (audit m1)
+
+    /// The app reports the newest reading it has durably stored for the sensor `serial` (nil: none of
+    /// that sensor's readings is stored). Backfill records the sensor sends for later sensor times are
+    /// published again even if G7Kit already published them (same id and date). A reading of another
+    /// sensor, or one whose id is not this sensor's `GlucoseReading.sensorID`, is ignored (logged).
+    func setLatestStoredReading(_ reading: GlucoseReading?, serial: String) {
+        let floor: G7ReadingPipeline.BackfillFloor
+        if let reading {
+            guard reading.sensorSerial == serial, let timestamp = Self.sensorTimestamp(of: reading, serial: serial) else {
+                log(.sensor, "backfill floor: reading \(reading.id) is not a reading of \(serial); ignored")
+                return
+            }
+            floor = .storedThrough(sensorTimestamp: timestamp)
+        } else {
+            floor = .nothingStored
+        }
+        if backfillFloor?.serial != serial || backfillFloor?.floor != floor {
+            log(.sensor, "backfill floor for \(serial): \(floor)")
+        }
+        backfillFloor = (serial, floor)
+        applyBackfillFloor()
+    }
+
+    /// The sensor timestamp encoded in a G7Kit reading id (`GlucoseReading.sensorID`), verified by
+    /// rebuilding the id.
+    static func sensorTimestamp(of reading: GlucoseReading, serial: String) -> UInt32? {
+        let prefix = serial + ":"
+        guard reading.id.hasPrefix(prefix), let timestamp = UInt32(reading.id.dropFirst(prefix.count)),
+              GlucoseReading.sensorID(serial: serial, sensorTimestamp: timestamp) == reading.id else { return nil }
+        return timestamp
+    }
+
+    /// A floor applies only to the pipeline of the same serial (never across sensors or sessions).
+    private func applyBackfillFloor() {
+        guard let pipeline else { return }
+        pipeline.backfillFloor = backfillFloor?.serial == pipeline.serial ? backfillFloor?.floor : nil
+    }
+
     // MARK: - Calibration
 
     func submitCalibration(_ request: CalibrationRequest) throws(CalibrationRefusal) {
+        guard !isListening else {
+            // Listen mode never writes to the sensor (D45): this app is not authenticated with it.
+            log(.sensor, "calibration refused: listen mode does not write to the sensor")
+            throw .notAuthenticated
+        }
         let context = G7CalibrationQueue.Context(
             isPaired: record != nil,
             isAuthenticated: record?.sharedKey != nil && record?.requiresNewPairing == false && pipeline?.isUnsupportedSensor == false,
@@ -333,6 +428,10 @@ final class G7Controller: G7ConnectionCycleDelegate {
     }
 
     func didDiscover(name: String?, identifier: UUID) {
+        if isListening {
+            listenDidDiscover()
+            return
+        }
         guard isRunning, cycle == nil, let record, !record.requiresNewPairing, let name else { return }
         if let knownName = record.sensorName {
             // Reconnecting a paired sensor that iOS could not retrieve by identifier.
@@ -354,6 +453,10 @@ final class G7Controller: G7ConnectionCycleDelegate {
 
     /// The link is connected and its characteristics are discovered.
     func didConnect(link: G7Link, availableCharacteristics: Set<G7Characteristic>) {
+        if isListening {
+            listenDidConnect(link: link, availableCharacteristics: availableCharacteristics)
+            return
+        }
         guard isRunning, let record, !record.requiresNewPairing else {
             link.disconnect()
             return
@@ -377,13 +480,23 @@ final class G7Controller: G7ConnectionCycleDelegate {
     }
 
     func notificationStateChanged(for characteristic: G7Characteristic, isNotifying: Bool, error: G7LinkError?) {
+        if let listenCycle {
+            listenCycle.notificationStateChanged(for: characteristic, isNotifying: isNotifying, error: error)
+            return
+        }
         cycle?.notificationStateChanged(for: characteristic, isNotifying: isNotifying, error: error)
     }
 
     func valueUpdated(for characteristic: G7Characteristic, value: Data) {
+        recordRawGlucosePacketIfEnabled(characteristic, value)
+        if let listenCycle {
+            listenCycle.valueUpdated(for: characteristic, value: value)
+            return
+        }
         cycle?.valueUpdated(for: characteristic, value: value)
     }
 
+    /// Listen mode never writes, so a write failure can only belong to a primary cycle.
     func writeFailed(for characteristic: G7Characteristic, error: G7LinkError) {
         cycle?.writeFailed(for: characteristic, error: error)
     }
@@ -392,6 +505,10 @@ final class G7Controller: G7ConnectionCycleDelegate {
     func didDisconnect(peripheralIdentifier: UUID) {
         guard isExpected(peripheralIdentifier) else {
             log(.ble, "disconnect of an unrelated peripheral ignored")
+            return
+        }
+        if isListening {
+            listenDidDisconnect()
             return
         }
         let sessionLengthUnanswered = cycle?.isAwaitingSessionLength == true
@@ -418,6 +535,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
     func didFailToConnect(peripheralIdentifier: UUID) {
         guard isExpected(peripheralIdentifier) else { return }
         log(.ble, "connection attempt failed; retrying")
+        if isListening, listenCandidate?.identifier == peripheralIdentifier { listenCandidate = nil }
         guard isRunning, record?.requiresNewPairing == false else { return }
         _ = central?.connect(peripheralIdentifier: peripheralIdentifier)
     }
@@ -457,6 +575,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
                 self?.log(.sensor, message)
             }
             pipeline?.beginConnection()
+            applyBackfillFloor()
         }
         connectionAuthenticated = true
         log(.ble, "authenticated")
@@ -551,8 +670,17 @@ final class G7Controller: G7ConnectionCycleDelegate {
     }
 
     func cycleReceivedGlucose(_ message: G7GlucoseMessage) {
+        handleGlucoseReport(message, receivedAt: now())
+    }
+
+    /// A glucose report from the primary cycle or (D45) the listen cycle: the same pipeline, gate and
+    /// state handling for both.
+    private func handleGlucoseReport(_ report: some G7GlucoseReport, receivedAt: Date) {
         guard let pipeline else { return }
-        let result = pipeline.handleGlucose(message, receivedAt: now())
+        var result = pipeline.handleGlucose(report, receivedAt: receivedAt)
+        if isListening, result.state == .failed(G7FailureReason.sessionLengthUnknown) {
+            result.state = .failed(G7FailureReason.listenSessionLengthUnknown)
+        }
         if let end = pipeline.sessionEnd {
             // N1: the latched end is the sensor's state from now on (also for Bluetooth-on and calibration).
             lastSensorState = end.state
@@ -620,9 +748,227 @@ final class G7Controller: G7ConnectionCycleDelegate {
         log(.ble, message)
     }
 
+    // MARK: - Mode and raw recording (D45, D47)
+
+    /// Switches between primary and listen mode (the app's explicit choice, never automatic). Stops,
+    /// drops every stored pairing and session (code, key, sensor, session, latched end) and starts
+    /// over in `newMode`: `.notPaired` for primary, `.searching` for listen. Call `start` afterwards.
+    func setMode(_ newMode: G7ConnectionMode) throws(G7StartError) {
+        guard newMode != mode else { return }
+        stop()
+        calibration.cancelAll(reason: "The sensor connection mode changed")
+        do { try store.delete() } catch {
+            emit(.failed(G7FailureReason.credentialsUnavailable))
+            throw .credentialStoreFailed("\(error)")
+        }
+        record = nil
+        pipeline = nil
+        lastSensorState = nil
+        resetConnectionHistory()
+        let previous = mode
+        mode = newMode
+        log(.sensor, "mode changed from \(previous.summary) to \(newMode.summary); stored pairing and session dropped")
+        emit(isListening ? .searching : .notPaired)
+    }
+
+    /// D47: every received glucose packet (`0x4E`; in listen mode also `0x31` and `0x25`), valid or
+    /// not, is logged as hex with its time when recording is on. These packets carry no pairing code
+    /// or key.
+    private func recordRawGlucosePacketIfEnabled(_ characteristic: G7Characteristic, _ value: Data) {
+        guard recordsRawGlucosePackets, characteristic == .writeControl, let opcode = value.first else { return }
+        let glucoseOpcodes: Set<UInt8> = isListening
+            ? [G7Opcode.glucose.rawValue, G7Opcode.coexistenceGlucose.rawValue, G7Opcode.transmitterTime.rawValue]
+            : [G7Opcode.glucose.rawValue]
+        guard glucoseOpcodes.contains(opcode) else { return }
+        log(.sensor, "raw \(isListening ? "listen" : "primary") packet \(value.hexString)")
+    }
+
+    // MARK: - Listen mode (D45)
+    //
+    // Ported policy: CGMG7Transmitter.swift coexistence — attach to the connection the Dexcom app made
+    // (retrieveConnectedPeripherals, :553-571, :2082-2087), observe only. Deviation: once the sensor
+    // is followed, a pending connection request to it keeps this app awake at every sensor wake, as
+    // primary mode does (BluetoothTransmitter.swift:313-317) and as the 7.1.1 coexistence fix 00c144e8
+    // relies on; iOS shares the one physical link with the Dexcom app. Nothing here writes to the
+    // sensor: the listen cycle's link has no write method, and calibration is refused above.
+
+    /// Start (or resume) listening: no pairing code; an empty listen record is created if needed.
+    private func startListening() throws(G7StartError) {
+        switch loadRecordForMode() {
+        case .failure(let error):
+            emit(.failed(G7FailureReason.credentialsUnavailable))
+            throw .credentialStoreFailed("\(error)")
+        case .success(let stored?):
+            record = stored
+        case .success(nil):
+            let fresh = G7PairingRecord.forListening()
+            do { try store.save(fresh) } catch {
+                emit(.failed(G7FailureReason.credentialsUnavailable))
+                throw .credentialStoreFailed("\(error)")
+            }
+            record = fresh
+            log(.sensor, "listen mode: looking for the Dexcom app's connection to a G7")
+        }
+        resume()
+    }
+
+    private func listenConnectIfPossible() {
+        guard isRunning, record != nil, bluetoothPower == .poweredOn, listenCycle == nil else { return }
+        emitTransient(.searching)
+        listenReconnect()
+    }
+
+    /// Follows the sensor (pending connection) or looks for the Dexcom app's connection. Emits no
+    /// state, so a failure just reported at a disconnect stays visible (S5).
+    private func listenReconnect() {
+        guard isRunning, let record, bluetoothPower == .poweredOn, listenCycle == nil else { return }
+        if let identifier = record.peripheralIdentifier, central?.connect(peripheralIdentifier: identifier) == true {
+            log(.ble, "listen: waiting for the Dexcom app's next connection to \(record.sensorName ?? "the sensor")")
+            return
+        }
+        attachToSystemConnectedSensor()
+        // Scanning is only a wake-up signal here (CGMG7Transmitter.swift:562-571): advertisements are
+        // never connected to directly, which could take the sensor's connection from its owner.
+        central?.scanForSensors()
+        scheduleListenSearch()
+    }
+
+    private func listenDidDiscover() {
+        guard isRunning, listenCycle == nil, record != nil else { return }
+        attachToSystemConnectedSensor()
+    }
+
+    /// Attach to a G7 that the Dexcom app has connected right now: the followed sensor once known,
+    /// otherwise the first such G7.
+    private func attachToSystemConnectedSensor() {
+        guard isRunning, listenCycle == nil, listenCandidate == nil, let record else { return }
+        for sensor in central?.connectedSensors() ?? [] {
+            if let followed = record.peripheralIdentifier, sensor.identifier != followed { continue }
+            listenCandidate = sensor
+            log(.ble, "listen: attaching to the Dexcom app's connection to \(sensor.name ?? "a G7")")
+            _ = central?.connect(peripheralIdentifier: sensor.identifier)
+            return
+        }
+    }
+
+    private func scheduleListenSearch() {
+        guard !listenSearchScheduled, record?.peripheralIdentifier == nil else { return }
+        listenSearchScheduled = true
+        central?.schedule(after: Self.listenSearchInterval) { [weak self] in
+            guard let self else { return }
+            self.listenSearchScheduled = false
+            guard self.isListening, self.isRunning, self.listenCycle == nil, self.record?.peripheralIdentifier == nil else { return }
+            self.listenCandidate = nil
+            self.attachToSystemConnectedSensor()
+            self.scheduleListenSearch()
+        }
+    }
+
+    private func listenDidConnect(link: G7Link, availableCharacteristics: Set<G7Characteristic>) {
+        guard isRunning, let record else {
+            central?.cancelConnection(peripheralIdentifier: link.peripheralIdentifier)
+            return
+        }
+        let expected = [record.peripheralIdentifier, listenCandidate?.identifier].compactMap { $0 }
+        guard expected.contains(link.peripheralIdentifier) else {
+            log(.ble, "listen: connection from an unexpected peripheral ignored")
+            central?.cancelConnection(peripheralIdentifier: link.peripheralIdentifier)
+            return
+        }
+        finishCycle()
+        log(.ble, "listen: attached; waiting to observe the Dexcom app's authentication")
+        emitTransient(.authenticating)
+        pipeline?.beginConnection()
+        let newCycle = G7ListenCycle(link: link, now: now)
+        newCycle.delegate = self
+        listenCycle = newCycle
+        newCycle.start(availableCharacteristics: availableCharacteristics)
+    }
+
+    private func listenDidDisconnect() {
+        let observed = listenCycle?.observedAuthenticationThisConnection
+        finishCycle()
+        listenCandidate = nil
+        if observed == false {
+            listenConnectionsWithoutAuthentication += 1
+            log(.sensor, "listen: no authenticated Dexcom app connection observed (\(listenConnectionsWithoutAuthentication) in a row)")
+            if listenConnectionsWithoutAuthentication >= Self.listenUnauthenticatedConnectionsBeforeSurfacing {
+                emit(.failed(G7FailureReason.listenNoAuthenticatedConnection))
+            }
+        }
+        guard isRunning, record != nil else { return }
+        listenReconnect()
+    }
+
+    /// G7SensorKit G7Sensor.swift:246-247: a connected G7 can report "Dexcomxx" instead of the
+    /// advertised "DXCMxx"; the serial uses the advertised form, as primary mode does.
+    static func advertisedName(_ name: String?) -> String {
+        guard let name else { return "G7" }
+        if name.hasPrefix("Dexcom"), name.count == "Dexcom".count + 2 {
+            return G7GATT.sensorNamePrefix + name.suffix(2)
+        }
+        return name
+    }
+
+    // MARK: - G7ListenCycleDelegate
+
+    func listenCycleObservedAuthentication() {
+        guard var current = record, let link = listenCycle?.link else { return }
+        listenConnectionsWithoutAuthentication = 0
+        if current.serial == nil {
+            // First observed authenticated connection: follow this sensor from now on.
+            let name = Self.advertisedName(listenCandidate?.name ?? link.peripheralName)
+            current.sensorName = name
+            current.peripheralIdentifier = link.peripheralIdentifier
+            current.serial = G7SensorSerial.make(sensorName: name, peripheralIdentifier: link.peripheralIdentifier)
+            saveRecord(current)
+            log(.sensor, "listen mode: following \(name), serial \(current.serial ?? "?")")
+        }
+        listenCandidate = nil
+        if let serial = current.serial, pipeline?.serial != serial {
+            pipeline = G7ReadingPipeline(
+                serial: serial,
+                reportedParameters: reportedParameters(current),
+                sessionStart: current.sessionStart,
+                sessionEnd: current.sessionEnd,
+                unconfirmedEnd: current.unconfirmedSessionEnd,
+                newestReading: current.newestReading
+            ) { [weak self] message in
+                self?.log(.sensor, message)
+            }
+            pipeline?.beginConnection()
+        }
+        log(.ble, "listen: the Dexcom app's authenticated, bonded connection observed")
+    }
+
+    /// As primary mode's N2: nothing more from this connection; this app does not disconnect the
+    /// Dexcom app's link.
+    func listenCycleSawRejectionAfterAuthentication() {
+        log(.sensor, "listen: authentication rejection observed after authentication; this connection is not used")
+        pipeline?.discardConnection()
+        finishCycle()
+        emit(.failed(G7FailureReason.listenConnectionRejected))
+    }
+
+    func listenCycleReceivedGlucose(_ report: any G7GlucoseReport, receivedAt: Date) {
+        handleGlucoseReport(report, receivedAt: receivedAt)
+    }
+
+    func listenCycleReceivedExtendedVersion(_ message: G7ExtendedVersionMessage) {
+        cycleReceivedExtendedVersion(message)
+    }
+
+    func listenCycleLog(_ message: String) {
+        log(.ble, message)
+    }
+
     // MARK: - Private
 
     private func connectIfPossible() {
+        if isListening {
+            listenConnectIfPossible()
+            return
+        }
         guard isRunning, let record, !record.requiresNewPairing, bluetoothPower == .poweredOn, cycle == nil else { return }
         emitTransient(.searching)
         if let identifier = record.peripheralIdentifier, central?.connect(peripheralIdentifier: identifier) == true {
@@ -656,7 +1002,9 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// Events about peripherals other than the paired sensor or the current candidate are ignored.
     private func isExpected(_ identifier: UUID) -> Bool {
         if let cycle { return cycle.link.peripheralIdentifier == identifier }
+        if let listenCycle { return listenCycle.link.peripheralIdentifier == identifier }
         return identifier == record?.peripheralIdentifier || identifier == candidate?.identifier
+            || identifier == listenCandidate?.identifier
     }
 
     /// Emits the pipeline's state, publishes its readings, then persists the session.
@@ -684,6 +1032,12 @@ final class G7Controller: G7ConnectionCycleDelegate {
     }
 
     private func finishCycle() {
+        if let listening = listenCycle {
+            listening.finish()
+            listenCycle = nil
+            if let pipeline { apply(pipeline.endConnection()) }
+            log(.ble, "listen: connection ended")
+        }
         guard let ending = cycle else { return }
         ending.finish()
         cycle = nil
@@ -711,6 +1065,24 @@ final class G7Controller: G7ConnectionCycleDelegate {
         lastEmittedState = state
         log(.sensor, "state \(state)")
         output.state(state)
+    }
+
+    /// The stored record if it belongs to the current mode. A record of the other mode is deleted
+    /// (D45: switching modes leaves no orphaned key, code or session behind).
+    private func loadRecordForMode() -> Result<G7PairingRecord?, Error> {
+        switch loadRecord() {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let stored?) where stored.isListenRecord != isListening:
+            do { try store.delete() } catch {
+                log(.sensor, "could not delete the pairing record of the other mode: \(error)")
+                return .failure(error)
+            }
+            log(.sensor, "stored \(stored.isListenRecord ? "listen-mode" : "primary-mode") pairing dropped: the mode is \(isListening ? "listen" : "primary")")
+            return .success(nil)
+        case .success(let stored):
+            return .success(stored)
+        }
     }
 
     private func loadRecord() -> Result<G7PairingRecord?, Error> {

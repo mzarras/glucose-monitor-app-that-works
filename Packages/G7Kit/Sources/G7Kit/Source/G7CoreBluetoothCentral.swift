@@ -1,10 +1,11 @@
 // Originally part of xDrip4iOS (https://github.com/JohanDegraeve/xdripswift), GPL-3.0.
 // BluetoothTransmitter.swift carries no copyright header of its own.
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/Generic/BluetoothTransmitter.swift @ 7.1.0 (0370937)
-// Changes: only what G7 primary mode uses — CBCentralManager with a FIXED restore identifier
+// Changes: only what G7 primary and listen mode use — CBCentralManager with a FIXED restore identifier
 // (xDrip4iOS derived one from the device address or a random string, :1062-1098), scan for FEBC,
-// pending connects, restoration (:1003-1040), service/characteristic discovery (:918-963), and
-// forwarding every callback to G7Controller. No signal-strength, timers or UserDefaults.
+// pending connects, restoration (:1003-1040), service/characteristic discovery (:918-963), the
+// system-connected lookup of retrieveConnectedPeripheral (:561-586, listen mode), and forwarding
+// every callback to G7Controller. No signal-strength, timers or UserDefaults.
 
 import CoreBluetooth
 import Foundation
@@ -80,6 +81,16 @@ final class G7CoreBluetoothCentral: NSObject, G7CentralDriving, CBCentralManager
     func schedule(after delay: TimeInterval, _ action: @escaping () -> Void) {
         let job = QueueBoundAction(run: action)
         queue.asyncAfter(deadline: .now() + delay) { job.run() }
+    }
+
+    func connectedSensors() -> [G7ConnectedSensor] {
+        guard let manager, manager.state == .poweredOn else { return [] }
+        let connected = manager.retrieveConnectedPeripherals(withServices: [CBUUID(string: G7GATT.serviceUUID)])
+        for peripheral in connected {
+            peripherals[peripheral.identifier] = peripheral
+            peripheral.delegate = self
+        }
+        return connected.map { G7ConnectedSensor(name: $0.name, identifier: $0.identifier) }
     }
 
     // MARK: - CBCentralManagerDelegate
