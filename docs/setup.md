@@ -2,12 +2,94 @@
 
 How to sign, build and install Sensor (working name) on an iPhone, configure it next to Trio,
 Nightscout and Dexcom Share, and validate it with a real sensor before relying on it.
-Decisions are cited as D1…D43 (`PROGRESS.md`); the plan in §5 is HANDOFF §11 with every on-device
-check from the other docs merged in.
+Decisions are cited as D1…D51 (`PROGRESS.md`); the plan in §5 is HANDOFF §11 in the order D46 sets,
+with every on-device check from the other docs merged in.
 
-**If you are going to rename the app, do it before step 1a of §5** (import) and certainly before the
-first pairing: a new bundle ID is a new app to iOS, with none of the old one's data or pairing
-(§6).
+The plan has two parts (D45, D46). **Part A, now:** the app runs on your current sensor in **listen
+mode**, alongside the Dexcom app, which stays installed and keeps the sensor; Trio stays on its own
+G7 source. **Part B, the next sensor:** delete the Dexcom app, pair this app as the sensor's primary
+device, switch Trio to it and turn on uploads. §0 is the checklist for today.
+
+**If you are going to rename the app, do it before you install it on the phone** (§6): a new bundle
+ID is a new app to iOS, with none of the old one's data, settings or pairing.
+
+---
+
+## 0. Today: run it alongside the Dexcom app (listen mode)
+
+Listen mode (D45) only *observes* the Bluetooth connection the Dexcom app on the same phone has
+authenticated (iOS shares one link per sensor among the apps using it). It needs no pairing code
+and never touches the Dexcom app's slot. Its only write to the sensor is the read-only session-length
+query (`52`), at most once per connection, and only if no answer to Trio's own `52` request was seen
+by the second authenticated wake (D49). It sends no authentication, calibration, backfill or other
+command, and it subscribes to the data characteristic only after it has seen the Dexcom app
+authenticate (D50). Readings pass the same checks as in primary mode (S2), and alerts work. While
+listening, the Trio handoff and the Nightscout and Dexcom Share uploads are off. Listen mode has no
+backfill (gaps stay gaps; the Dexcom app has the history) and no calibration (calibrate in the
+Dexcom app). Details: `docs/g7-protocol.md` §14.
+
+1. [ ] **Build and install the Release build** (§2 signing, §3.3 commands). Not a DEBUG build: it
+   must never read a live sensor (D19).
+2. [ ] **On first launch, choose "Listen alongside the Dexcom app (this sensor)"** at the "How to
+   connect" step, then Continue. Listening skips "Remove the Dexcom app" and "Pair your sensor"; a
+   "Listening" step takes their place. Allow notifications and, on iOS 26+, alarms. History import
+   (§5 step 1a) is optional here.
+   - Already set up? Settings › Sensor › CONNECTION › "Listen alongside the Dexcom app (this
+     sensor)", and confirm "Listen alongside the Dexcom app".
+   - **No "How to connect" step?** That build predates the listen-mode screens. Tap "Set up later",
+     enter **no** pairing code, and stop: a code pairs this app as the primary device and evicts the
+     Dexcom app (a new install starts in pairing mode).
+3. [ ] **Keep Trio on its own G7 source.** Don't switch Trio to xDrip4iOS, and leave Trio's Nightscout
+   settings as they are. This app's Trio handoff is off while listening: the switch is off and
+   disabled ("Off while listening alongside the Dexcom app"), Settings shows "off while listening",
+   and nothing is written to Trio's App Group (no readings, no heartbeat keys).
+4. [ ] **Uploads stay off.** Nightscout and Dexcom Share show the same "Off while listening…" note:
+   the Dexcom app keeps uploading to Dexcom Share and Trio to Nightscout, so nothing is duplicated.
+5. [ ] **Treat this app's alarms as secondary today.** Act on the Dexcom app's alerts and your
+   fingerstick. This app's alerts work as usual (urgent low can't be turned off and re-alarms at
+   snooze end, §4.5), so expect a second alarm for the same event. It can also miss a wake the
+   Dexcom app gets (a missed authentication packet loses that wake, D50), so it may raise a
+   missed-readings alert that the Dexcom app doesn't. Don't change the Dexcom app's alert settings
+   because of this app.
+6. [ ] **While it waits.** The Listening step reads "Waiting for the Dexcom app's connection… The
+   sensor talks to it about every 5 minutes; keep the Dexcom app installed and signed in." The first
+   reading can take a few sensor wakes (about 15 minutes), because the session length must come from
+   the sensor: from an observed answer to Trio's `52` request, or from this app's own query at the
+   second authenticated wake (diagnostics: `listen: session length not observed; one 52 query sent
+   (D49)`). Meanwhile you may see, as a "Readings interrupted" banner (not an alert):
+   - "Listening to the Dexcom app's connection, but the sensor's session length is not known yet, so
+     readings are held back…" (`listenSessionLengthUnknown`): expected at first;
+   - "Listening for the Dexcom app's connection, but it was not seen authenticating the sensor at the
+     last sensor wakes…" (`listenNoAuthenticatedConnection`): two wakes in a row without an observed
+     authentication. Now and then is expected; if it persists, listen mode isn't working on this
+     phone.
+
+   Plus "No readings yet" until the first reading. Once the sensor's state arrives the step reads
+   "Listening. Readings arrive whenever the Dexcom app's sensor connects." (Continue), and Now and
+   Settings › Sensor show "Listening — the Dexcom app owns the connection".
+7. [ ] **Turn on Settings › DIAGNOSTICS › "Record raw glucose packets"** (D47). Every glucose packet's
+   bytes then go to the diagnostic log (`G7: raw listen packet <hex>`), so a real LOW or HIGH is
+   captured for D31. The log keeps only the last 5 000 events: export diagnostics (§7.6) the same day
+   as a LOW or HIGH. Turn it off when done.
+8. [ ] **At the first reading, compare the sensor expiry with the Dexcom app's.** Settings › Sensor ›
+   Session reads "started … · ends <day>, <time>"; it must equal the sensor end the Dexcom app shows,
+   to the minute (`docs/g7-protocol.md` §13 item 14, review m1). If the Dexcom app's traffic uses the
+   `0x31`/`0x25` format only, a wrong session origin would shift warm-up end, expiry, grace end and
+   reading ids without any other sign. If the two differ, report it and don't rely on this app's
+   expiry, grace period or reminders (reading times are unaffected). Also check a few reading times
+   against the Dexcom app's: within seconds.
+9. [ ] **Watch the Dexcom app** all day: signal loss, a pairing request or "pair sensor" prompt, sensor
+   errors, missing readings or gaps it would normally fill, anything unusual around the wake where
+   this app's diagnostics show `one 52 query sent (D49)` (the log's times are UTC).
+10. [ ] **How to stop at once** if anything looks wrong:
+    - delete this app; or
+    - Settings › Sensor › CONNECTION › "Pair this app (Dexcom app removed)", and confirm "Pair this
+      app". That stops listening and drops the followed sensor. Then enter **no** code. "Forget this
+      sensor" isn't offered while listening.
+
+    Then tell the orchestrator what you saw, with the diagnostics export.
+
+Then continue with §5 Part A.
 
 ---
 
@@ -45,8 +127,7 @@ safe unsigned defaults (`org.example.sensor`) the gates build with. Fill in:
 | `SENSOR_APP_ENTITLEMENTS` | `App/Sensor.entitlements` (default) | switch to `App/Sensor+CriticalAlerts.entitlements` only after Apple grants Critical Alerts (§2.4) |
 
 The reading database is **not** in either App Group: it lives in the app's own container,
-`Application Support/GlucoseStore/readings.sqlite` (D25). (The comment in `Config/Base.xcconfig`
-that says otherwise predates D25.)
+`Application Support/GlucoseStore/readings.sqlite` (D25), as do the upload queues (D48).
 
 ### 2.2 Team ID
 
@@ -123,7 +204,7 @@ scripts/check-selftest.sh                                # plants defects in a t
 |---|---|---|
 | `build` | `xcodegen generate`; `plutil -lint` on both Info.plists and all entitlements; `xcodebuild` for `generic/platform=iOS`, **Debug and Release**, from a fresh DerivedData, unsigned (`CODE_SIGNING_ALLOWED=NO`) | both configurations compile under Swift 6 strict concurrency with zero project warnings (a cached build would hide warnings, hence fresh) |
 | `tests` | `swift test` per package on the Mac host, fresh scratch path, with coverage: GlucoseStats ≥ 95 %, AlertEngine ≥ 90 %, TrioBridge ≥ 90 %, G7Kit `Messages/` ≥ 90 %; a package that runs 0 tests fails. Then the app's hosted unit tests (`SensorTests`, without the replay suite) on the simulator, signed ad hoc (D40) so Keychain tests run; a skipped app test fails. App tests run only with the full `PACKAGES` list or `APP_TESTS=1` | the logic of every package and of the app's wiring, against fakes and mock servers |
-| `safety` | for each rule in `SAFETY_RULES`: ≥ 1 passing `test_S<n>_…` in this run's logs, none failing or skipped; no `XCTSkip`/`XCTExpectFailure` in files holding safety tests; `nm` on Release vs Debug objects: no ReplayKit symbols, no `validateAllowingReplay`, no GlucoseStore replay role in Release (each must exist in Debug, so the check can't pass vacuously); `validateAllowingReplay` called only from GlucoseCore, AlertEngine, App; `.writeSentinel` outside TrioBridge only on lines citing D21; `.replay`/`.mock` readings built outside ReplayKit only inside `#if DEBUG` (a line heuristic) | S1–S8 each have passing tests; Release builds contain no replay code (S6) |
+| `safety` | for each rule in `SAFETY_RULES`: ≥ 1 passing `test_S<n>_…` in this run's logs, none failing or skipped; no `XCTSkip`/`XCTExpectFailure` in files holding safety tests; `nm` on Release vs Debug objects: no ReplayKit symbols, no `validateAllowingReplay`, no GlucoseStore replay role in Release (each must exist in Debug, so the check can't pass vacuously); `validateAllowingReplay` called only from GlucoseCore, AlertEngine, App; `.writeSentinel` outside TrioBridge only on lines citing D21; `.replay`/`.mock` readings built outside ReplayKit only inside `#if DEBUG` (a line heuristic); the `test_S2_`/`test_S6_` tests of GlucoseCore, AlertEngine, TrioBridge and NightscoutKit run again in the **Release** configuration (`swift test -c release -Xswiftc -enable-testing`), and AlertEngine's Release-only `test_S6_releaseBuildRefusesReplayReadings` must pass | S1–S8 each have passing tests; Release builds contain no replay code and refuse replay readings (S6) |
 | `replay` | `SensorUITests` (the DEBUG app launched in the simulator on every ReplayKit scenario, and with no sensor) and `SensorTests/ReplayScenarioTests` (alert assertions through the app's own `ReplayRun` wiring); both suites must run | the wired app starts on each scenario and alerts fire when, and only when, expected |
 
 Logs go to `.build-logs/<timestamp>/`. Gate 5 of HANDOFF §10 (independent review) is not a script.
@@ -135,12 +216,19 @@ scheme's Run arguments, and `xcrun simctl shutdown all` when done.
 
 | Build | Use it for | Never |
 |---|---|---|
-| **DEBUG** | §5 step 1 only: replay scenarios on the phone. Contains ReplayKit and the replay-accepting alert path; shows a persistent **DEBUG BUILD** banner on every tab; the Trio handoff and uploads are paused unless Settings › Developer › Live outputs is on (D20) | with a real sensor; installed over a Release build that is feeding Trio (Trio would stop getting readings, D20) |
-| **Release** | everything else, and everything involving a real sensor: §5 steps 1a–6 | — |
+| **DEBUG** | §5 step 1 only: replay scenarios on the phone. Contains ReplayKit and the replay-accepting alert path; shows a persistent **DEBUG BUILD** banner on every tab; the Trio handoff and uploads are paused unless Settings › Developer › Live outputs is on (D20) | with a real sensor, paired or listening; installed over a Release build that is feeding Trio (Trio would stop getting readings, D20) |
+| **Release** | everything else, and everything involving a real sensor: §0, and §5 from step 1a on | — |
 
 Both configurations have the same bundle ID, so installing one replaces the other and keeps the
-data (the replay store is in memory and never touches the production database, D20). A Release
-build never shows the DEBUG banner; that is how you tell them apart on the phone.
+data and settings, **including the connection mode** (the replay store is in memory and never
+touches the production database, D20). A Release build never shows the DEBUG banner; that is how
+you tell them apart on the phone.
+
+Installing a DEBUG build over a Release build that is listening (§0) would leave the DEBUG build
+listening to your live sensor (D19). Before installing DEBUG, switch Settings › Sensor › CONNECTION to
+"Pair this app (Dexcom app removed)" and enter no code; after reinstalling Release, switch back to
+"Listen alongside the Dexcom app (this sensor)". Over a Release build that is paired (Part B), don't
+install DEBUG at all while Trio depends on it.
 
 ### 3.3 Build, install and launch on the iPhone
 
@@ -187,13 +275,15 @@ Scheme › Edit Scheme › Run › Build Configuration › Release.
 
 ### 4.1 Trio (D2, D21, D22; details in `docs/trio-bridge.md`)
 
-No Trio patch. Trio reads this app through its existing **xDrip4iOS** CGM source.
+No Trio patch. Trio reads this app through its existing **xDrip4iOS** CGM source. **This is Part B
+only** (§5): while this app listens alongside the Dexcom app (§0), Trio stays on its own G7 source,
+and the handoff is off in this app whatever its switch says (D45).
 
 1. **This app**: Settings › Trio handoff › **Hand readings to Trio** (off by default). The page
    shows the App Group this build writes to (`group.org.nightscout.<TEAM_ID>.trio.trio-app-group`),
    the status, the last write, and whether the heartbeat is published.
 2. **Trio**: Settings › Devices › CGM: delete the current CGM (the Dexcom G7 plugin), Add CGM ›
-   **xDrip4iOS**. Do this only at the switch-over in §5 step 4.
+   **xDrip4iOS**. Do this only at the Part B switch-over in §5.
 3. **Trio**: Settings › Services › Nightscout › Upload: **Allow Uploading to Nightscout on**,
    **Upload Glucose off**, so exactly one app uploads each CGM reading (D22). Check the toggle *after*
    switching the CGM: a plugin CGM overwrites it, and its model default is on although the hint says
@@ -210,15 +300,15 @@ No Trio patch. Trio reads this app through its existing **xDrip4iOS** CGM source
 LOW reaches Trio as 39 and HIGH as 401 (D21); 40/400 are never written for a flag. Imported and
 replayed readings never reach Trio (S6). In a DEBUG build the handoff is paused (D20).
 
-Trio has no "Settings › App Info › Group ID" screen in v0.8.4, despite the hint on this app's Trio
-page; Trio prints "Group ID: …" only inside its glucose notifications, when "Add Glucose Source to
-Alarm" is on (Trio Notifications, shown while glucose notifications are enabled). Use the "CGM
-address" line (step 4 above) instead.
+Trio has no screen that shows its App Group ID (v0.8.4); it prints "Group ID: …" only inside its
+glucose notifications, when "Add Glucose Source to Alarm" is on (Trio Notifications, shown while
+glucose notifications are enabled). Use the "CGM address" line (step 4 above) instead.
 
 ### 4.2 Nightscout (D6, D29; `docs/following.md`)
 
 **No writes to the live site during development** (D6): tests use local mock servers, DEBUG builds
-keep uploads paused (D20), and in §5 uploads stay off until step 4.
+keep uploads paused (D20), and in §5 uploads stay off until Part B. While listening (§0) both uploads
+are off whatever their switches say (D45): Trio keeps uploading CGM readings to Nightscout.
 
 1. In Nightscout › Admin Tools: **Roles › Add new role**, e.g. `sensor-uploader`, permissions
    `api:entries:create`. **Subjects › Add new subject**, e.g. `Sensor`, roles
@@ -228,7 +318,7 @@ keep uploads paused (D20), and in §5 uploads stay off until step 4.
    refused except for loopback hosts) and **Access token** (that subject's token) › Save. The token
    goes to the Keychain and is sent in the `api-secret` header, never in a URL. Never paste it
    anywhere else.
-3. **Upload readings** on (§5 step 4). Status, failures and "Waiting to upload N" show on the same
+3. **Upload readings** on (§5 Part B, switch-over). Status, failures and "Waiting to upload N" show on the same
    page; failures also raise a banner. Entries carry `device` = the app's display name.
 
 LOW is uploaded as sgv 39 and HIGH as 401. Nightscout's own alarms ignore 39 and send "All Clear"
@@ -238,7 +328,8 @@ when a low turns into LOW (D29): followers who rely on alarms need LoopFollow. S
 ### 4.3 Dexcom Share (D7, D30)
 
 Removing the Dexcom app stops its uploads to Dexcom Share, so Dexcom Follow stops unless this app
-uploads. Unofficial interface; it can break without notice (it then fails loud).
+uploads. Unofficial interface; it can break without notice (it then fails loud). While listening
+(§0) the Dexcom app is still installed and still uploads; this app's Share upload is off (D45).
 
 - Settings › Sharing › Dexcom Share (also offered in onboarding's "Remove the Dexcom app" step):
   **Region US** (D7), **Dexcom account name**, **Password**, **Receiver serial number** › Save, then
@@ -287,9 +378,25 @@ expired, calibration needed, Bluetooth and Trio; off for the rate alerts, warm-u
 reminders and "History isn't being saved". Every other alert is on by default except urgent low
 soon and rising/falling fast.
 
+**When an urgent-low snooze ends** (acknowledging is a snooze, ≤ 30 minutes, S7):
+
+- **D44: it re-alarms at the snooze end even without a new reading.** Acknowledging schedules the
+  alarm for the snooze end on the loudest path available (an AlarmKit alarm where allowed, otherwise
+  a Time Sensitive or Critical notification, plus the in-app sound if the app is awake), then repeats
+  at the urgent-low repeat interval (5 minutes by default) for an hour, so it keeps sounding while the
+  app is suspended or the sensor is out of range. Its text never presents the old value as current: "Snooze ended. Last reading
+  50 mg/dL at 2:00 AM. Check your glucose." Quiet hours never silence it. A reading above the
+  threshold before the end removes it; one arriving within the last minute can't (the alarm is due),
+  so it still rings.
+- **D51: in the recovery band it hands over to Low.** If at the end the latest reading is above the
+  threshold but within the 5 mg/dL recovery band (56–60 by default), urgent low re-arms and **Low**
+  (≤ 70 by default) is evaluated as usual, so it fires (subject to quiet hours, and silent if Low is
+  off). A reading at or below the threshold at the end is the urgent-low alarm alone, without Low on
+  top.
+
 ---
 
-## 5. On-device validation plan (HANDOFF §11)
+## 5. On-device validation plan (HANDOFF §11, D46 order)
 
 ### 5.1 What the automated gates cannot prove
 
@@ -298,6 +405,9 @@ The gates run on the Mac and the iOS Simulator, against fakes, a model of Trio's
 
 - that a real G7 accepts the J-PAKE exchange, certificates and proof (no captured G7 exchange
   exists; tests use Mbed TLS vectors and an independently written sensor side);
+- listen mode against the real Dexcom app: which glucose format its traffic uses (`0x4E`, or
+  `0x31`/`0x25`), how often this app sees its authentication, whether the `0x25` session start is the
+  real one, and whether listening (or the one `52` query) disturbs the Dexcom app;
 - the iOS pairing prompt and the error codes iOS reports for Cancel or timeout;
 - real Bluetooth behaviour: the 5-minute cycle, backfill after a gap, reconnecting while suspended,
   CoreBluetooth state restoration after a system termination or a reboot;
@@ -306,7 +416,8 @@ The gates run on the Mac and the iOS Simulator, against fakes, a model of Trio's
 - file protection: database writes while the phone stays locked for hours; the Keychain before the
   first unlock;
 - audibility: in-app audio from the background, the ringer switch, media volume, Focus, phone
-  calls; AlarmKit's pre-scheduled repeats and its alarm limit; Time Sensitive delivery;
+  calls; AlarmKit's pre-scheduled repeats, its alarm limit and the snooze-end alarm (D44); Time
+  Sensitive delivery;
 - that Trio reads the App Group and loops on the heartbeat, open or closed loop;
 - the live Nightscout and Dexcom Share servers, and how Dexcom Follow shows 39/401;
 - WidgetKit's real refresh lag; battery impact; statistics speed on the phone (the < 100 ms
@@ -315,16 +426,27 @@ The gates run on the Mac and the iOS Simulator, against fakes, a model of Trio's
 
 Those are this plan. They belong to you. What the host tests do cover, and where each safety rule is
 enforced, is in `docs/failure-modes.md` (the Phase 3 failure-mode pass: system kill, Bluetooth,
-permissions, reboot, disk full, clock and time-zone changes, force-quit) and `docs/safety-review.md`
-(S1–S8: where enforced, which test proves it). Where those documents say "§11", the check is in
-this plan.
+permissions, reboot, disk full, clock and time-zone changes, force-quit, listen mode) and
+`docs/safety-review.md` (S1–S8: where enforced, which test proves it). Where those documents say
+"§11", the check is in this plan.
 
-### 5.2 Before you start
+### 5.2 Order and ground rules
 
-- **Safety net throughout**: fingerstick meter on hand. A Dexcom G7 **receiver** paired to the same
-  sensor as the reference, if slot semantics allow (step 3 tests it); otherwise the meter only.
-- **Release build** for every step with a real sensor (D19). DEBUG only for step 1.
+**Part A, the current sensor, in listen mode** (§0): the Dexcom app stays installed and keeps the
+sensor, Trio stays on its own G7 source, and this app's Trio handoff and uploads are off. Steps 1,
+1a, 2L, 3L, 3a, and whatever of step 5 the rest of this sensor's session allows.
+**Part B, the next sensor, in primary mode**: delete the Dexcom app, pair this app, switch Trio to it,
+turn on uploads (switch-over below), then steps 2P, 3P, 4, 4a, 5 and 6.
+
+- **Safety net throughout**: fingerstick meter on hand. In Part A the Dexcom app is the reference
+  and stays your primary alarm. In Part B a Dexcom G7 **receiver** paired to the same sensor is the
+  reference, if slot semantics allow (step 3P tests it); otherwise the meter only.
+- **Release build** for every step with a real sensor (D19). DEBUG only for step 1, and never left
+  listening to the live sensor (§3.2).
 - **Never force-quit** the app except where a step says so; iOS doesn't restart it after that.
+- **Never change the phone's clock** while a sensor you rely on is running: it costs readings
+  (§7.3), and in listen mode it also hits the Dexcom app and Trio. The clock test needs a spare
+  sensor (end of Part B). A time-zone change is not a clock change and is fine.
 - **Record** for every item: date and time, iOS version, the build (Settings › About shows the
   version), what you did, what you saw. For anything unexpected, export diagnostics at once
   (Settings › Data › Export diagnostics, §7.6) and, for values or times, Settings › Data › Export all
@@ -332,27 +454,15 @@ this plan.
   import_origin, sensor_serial, id`.
 - Widget lag and the clock check go into the table in `docs/widgets.md` ("Measured on device").
 
-**Decide before step 2: the Dexcom app.** Steps 2–3 use a spare or end-of-life sensor that is not
-used for treatment, while your treatment sensor presumably stays on the Dexcom app and Trio's G7
-plugin. HANDOFF §4.6 says the Dexcom app must be removed before pairing in primary mode, and
-onboarding says the same. Running both on one phone, each on its own sensor, is untested:
+---
 
-- pairing tries the first advertising G7 that connects (`docs/g7-protocol.md` §2.2), which may be
-  your treatment sensor. It refuses the spare's code, and this app shows "The sensor did not accept
-  the pairing code" for it, excludes it, and keeps looking. Whether that refused attempt disturbs the
-  Dexcom app's own connection for that wake is unknown;
-- in steps 2–3 keep **Trio handoff, Nightscout upload and Dexcom Share upload off** in this app.
-  Trio, Nightscout and Dexcom Follow keep getting the treatment sensor from the Dexcom app.
-  Onboarding's "Remove the Dexcom app" step has Share upload **on** by default: switch it off there.
+### Part A — current sensor, listen mode, Dexcom app kept
 
-If you prefer not to run both, do steps 2–3 on the treatment sensor after removing the Dexcom app.
-Trio's G7 plugin then has no data (it listens to the Dexcom app's connection), so Trio doesn't loop
-and Nightscout gets no CGM readings until step 4.
+#### Step 1 — Replay on the phone (DEBUG)
 
-### Step 1 — Replay on the phone (DEBUG)
-
-DEBUG build (§3.3), no live sensor paired in this install. A replay run stops the G7 source for its
-duration and uses an in-memory store (D20).
+DEBUG build (§3.3). If a Release build is installed and listening, switch it to "Pair this app" with
+no code first, and back to listening after reinstalling Release (§3.2). A replay run stops the G7
+source for its duration and uses an in-memory store (D20).
 
 - [ ] **DEBUG banner.**
   - Do: open every tab, with and without a replay running.
@@ -401,7 +511,7 @@ duration and uses an in-memory store (D20).
 - [ ] **A wake just before and just after a repeat** (alerts.md §10.3a).
   - Do: while repeats are pending, bring the app to the foreground 30 s before a repeat is due (the
     foreground sends the alert engine a tick, as a wake does), and again 3 s after one starts
-    ringing. Repeat with a real sensor wake in step 3 if one happens to coincide.
+    ringing. Repeat with a real sensor wake in step 3L or 3P if one happens to coincide.
   - Expect: the alarm still rings / keeps ringing.
   - Record: result.
 - [ ] **Revoke alarms with a repeat pending** (alerts.md §10.3b).
@@ -423,8 +533,25 @@ duration and uses an in-memory store (D20).
   - Expect: the 2-hour reminder posts at once, written for the time left ("Sensor expires in … (at
     …)"); at +30 "Sensor session ended — 12 h grace period" arrives on time with the app suspended,
     and also after the force-quit; opening the app afterwards posts nothing a second time. The
-    24-hour reminder's silence is checked in step 5.
+    24-hour reminder's silence is checked with a real sensor (step 3L or 5).
   - Record: arrival times.
+- [ ] **Urgent low re-alarms at snooze end without a reading** (D44, alerts.md §10.7a).
+  - Do: alarms allowed (iOS 26+), quiet hours on around now, ringer off; `slowFallToUrgentLow` from
+    80; acknowledge the urgent low at +85 (Stop, or Acknowledge on the notification); lock the phone
+    at once and leave it. A suspended app gets no replay readings: the same as the sensor out of
+    range.
+  - Expect: at the snooze end (30 minutes later) urgent low rings again: an AlarmKit alarm on iOS
+    26+ (otherwise the notification, vibrate-only on silent while suspended); the notification reads
+    "Snooze ended. Last reading … mg/dL at …" with the last reading the app saw; it repeats every 5
+    minutes until acknowledged; quiet hours don't silence it.
+  - Record: ring times and texts. Quiet hours off again.
+- [ ] **Urgent low hands over to Low in the recovery band** (D51).
+  - Do: `slowFallToUrgentLow` from minute 100 (43 mg/dL: urgent low fires at once); acknowledge it
+    about 2 minutes after it fires, so the snooze ends around +132, two minutes after the 60 mg/dL
+    reading at +130. Keep the app open.
+  - Expect: at the snooze end no urgent-low alarm (the 60 removed it); **Low** fires (Dusk), because
+    60 is in the 56–60 band.
+  - Record: what sounded, and when.
 - [ ] **Trio handoff and uploads are off for replay** (S6, D20).
   - Do: with Live outputs off (default), turn on Trio handoff and Nightscout upload and run a
     scenario. Then turn Settings › Developer › Live outputs on and run it again. Use no Nightscout
@@ -435,9 +562,9 @@ duration and uses an in-memory store (D20).
     with a test site, `[upload] … refused …`.
   - Record: result. Turn Live outputs and both toggles off again.
 
-Then install the **Release** build over it (§3.3) for everything below.
+Then install the **Release** build over it (§3.3), in listen mode (§0), for everything below.
 
-### Step 1a — Import (Release; `docs/import.md`)
+#### Step 1a — Import (Release; `docs/import.md`)
 
 - [ ] **Nightscout import.**
   - Do: Settings › Data › Import history › Nightscout, Last 90 days.
@@ -460,81 +587,64 @@ Then install the **Release** build over it (§3.3) for everything below.
 - [ ] **Optional: a redacted real Clarity CSV** to confirm the parser against the current export
   format (the test fixture is synthetic).
 
-### Step 2 — Pair a spare or end-of-life sensor (Release)
+#### Step 2L — Listening on the current sensor (Release; g7-protocol §13 items 12–14)
 
-Trio handoff, Nightscout and Share uploads **off** (§5.2). Pair the receiver to this sensor first
-(slot 1), then this app (slot 2).
+Do §0 first. Then, over the first day:
 
-- [ ] **Notifications skipped at onboarding** (alerts.md §10.8).
-  - Do: in onboarding, don't allow notifications; finish pairing (below); then allow notifications in
-    iOS Settings without killing the app.
-  - Expect: "Notifications aren't set up" banner until then; afterwards diagnostics show `[alert]
-    schedule sensorExpiring…` lines (the reminders were added again); a reminder whose add was refused
-    is posted when its moment comes.
-  - Record: result.
-- [ ] **Pairing prompt: Cancel, then Accept** (`docs/g7-protocol.md` §2.4, §13.1).
-  - Do: enter the 4-digit code from the applicator; at the iOS pairing request tap **Cancel**; wait
-    for the next wake; tap **Pair**.
-  - Expect: after Cancel the banner "Pairing didn't finish" and the request again at the next wake
-    (~5 min); after Pair, "Paired." Diagnostics: `[ble] connection: notify … failed: <error>` (the
-    Cancel), `[sensor] ownership confirmed; key saved for short authentication`, `[sensor] paired with
-    DXCM…, serial DXCM…-xxxxxxxx`, `[ble] authenticated`.
-  - Record: the exact error for Cancel (to be confirmed on device); also what happens if you ignore
-    the request until it disappears (timeout).
-- [ ] **Session length and warm-up from the sensor** (`0x52`).
-  - Expect: `[sensor] session length 907200 s, warm-up <N> s`; the warm-up countdown in onboarding
-    and on Now.
-  - Record: N (the captured 10-day value is 1620 s) and the first reading's time vs `endsAt`.
-- [ ] **First reading and 5-minute cadence for 2 hours.**
-  - Expect: about 24 readings in 2 h (CSV: `source=sensor` rows), each matching the receiver.
-  - Record: a table of app time / app value / receiver time / receiver value, plus two fingersticks.
-- [ ] **Calibration round trip** (D16; g7-protocol §13.5).
-  - Do: a fresh fingerstick; Now menu › Calibrate sensor…; enter and re-type it.
-  - Expect: accepted within one or two wakes; the following display-only value is not shown as a
-    reading (`[sensor] glucose: display-only (calibration) value; not published (S1)`).
-  - Record: wakes until accepted; how many readings were withheld as display-only.
-- [ ] **Clock change — spare sensor only, never a treatment sensor** (widgets.md, g7-protocol §5.1).
-  It costs up to the size of the change in lost readings.
-  - Do: with the medium widget on the Home Screen showing a current reading, set the phone clock
-    back 1 h (Settings › General › Date & Time, Set Automatically off). Watch Now and the widget.
-    Then Set Automatically on again.
-  - Expect: Now: "Phone clock doesn't match" / banner "No current reading"; the widget: "Check phone
-    clock", not an old number as current; "Readings interrupted" with the clock message while G7Kit
-    withholds readings. After the clock is fixed: the latch clears with the next newer reading;
-    G7Kit publishes again once its re-anchor has settled (up to about the size of the change,
-    `docs/g7-protocol.md` "The wedge"); missed readings fires meanwhile.
-  - Record: how long until readings resumed; any reading published out of order; the widget's
-    behaviour (into `docs/widgets.md`).
-- [ ] **Optional, spare sensor only: another G7 app on the phone** (D35, g7-protocol §3.1, §13.10).
-  - Do: install xDrip4iOS, primary mode, "share to Trio" off, pair it to this spare sensor. Then, in
-    this app, Pair again with the code. Remove xDrip4iOS afterwards.
-  - Expect: if xDrip4iOS takes slot 2, this app shows "The sensor no longer accepts this phone…"
-    (correct; it doesn't fight back on its own). After this app's Pair again, while its own
-    authentication keeps succeeding: `[ble] auth: unsolicited … ignored` lines,
-    `rejectedAfterAuthentication` then `otherAppRejected` banners if the other app is being refused —
-    **never** "Pair the sensor again" while this phone's key is accepted.
-  - Record: what appeared, in order.
-- [ ] **Optional: a 15-day sensor**, only if you have one.
-  - Expect: "This sensor is not a G7 10-day sensor…", no readings, no calibration.
+- [ ] **The first follow.**
+  - Expect, in diagnostics: `[ble] G7: listen: attaching to the Dexcom app's connection to DXCM..`,
+    `listen: the Dexcom app's authenticated connection observed (wake N with proof)`, `[sensor] G7:
+    listen mode: following DXCM.., serial DXCM..-xxxxxxxx`; then the session length (next item) and
+    readings.
+  - Record: time from launch to the first reading.
+- [ ] **Where the session length came from** (item 13, D49).
+  - Expect: `[sensor] G7: session length 907200 s, warm-up N s` either with no `one 52 query sent
+    (D49)` line before it (an answer to Trio's own request was observed) or after one (this app's
+    single query at the second authenticated wake was answered).
+  - Record: which; and whether anything changed in the Dexcom app (alerts, readings, sensor status,
+    errors) around the wake where `one 52 query sent` appears.
+- [ ] **The glucose format the Dexcom app's traffic uses** (item 12; needs "Record raw glucose
+  packets" on).
+  - Expect: `[sensor] G7: raw listen packet <hex>` lines. Starting `4e`: the `0x4E` format; starting
+    `31` and `25`: the `0x31`/`0x25` format. If both appear, no clock-mismatch banner (the two time
+    bases agree).
+  - Record: which, and any other opcode logged.
+- [ ] **Status bytes in the `0x31`/`0x25` format** (item 14, review m8).
+  - Record: any `listen: 0x31 status 0x…, 0x25 status 0x…; reading withheld` line (for example
+    `0x81`, low battery in G6 terms): such readings are withheld, so report them.
+- [ ] **Expiry equals the Dexcom app's** (item 14, review m1; §0 step 8).
+  - Record: both, to the minute.
+- [ ] **Lost wakes** (item 12, D50).
+  - Record: per day, the count of `listen: no authenticated Dexcom app connection observed (n in a
+    row)` lines and of "Readings interrupted" banners with `listenNoAuthenticatedConnection`. Report
+    if it's often: each one is a wake without a reading in this app.
+- [ ] **Readings match the Dexcom app's.**
+  - Expect: same values; times within seconds; the trend arrow can differ at a boundary (this app
+    maps the sensor's rate with its own thresholds).
+  - Record: ten pairs.
+- [ ] **The Dexcom app keeps working normally** over a day: no new errors, its own readings and
+  backfill unchanged, no pairing prompts.
+- [ ] **Calibration is refused here.** Now menu › Calibrate sensor… says "Calibrate in the Dexcom
+  app: while listening, this app sends nothing to the sensor."
+- [ ] **A real LOW or HIGH, if one happens** (D31, item 3).
+  - Expect: this app shows LOW/HIGH (not a number); the `raw listen packet` lines around it are the
+    capture.
+  - Record: the time, this app, the Dexcom app, a fingerstick; export diagnostics the same day.
+    **HIGH → 401 to Trio isn't relied on in closed loop until a HIGH has been captured** (D31).
 
-### Step 3 — 24-hour soak (Release, app backgrounded)
+#### Step 3L — 24-hour soak, listening (Release, app backgrounded)
 
-Same sensor and receiver as step 2; the app stays in the background throughout.
+The app stays in the background throughout. Listen mode has no backfill: a wake it misses stays a
+gap in this app (the Dexcom app keeps its own history).
 
-- [ ] **No gaps beyond sensor behaviour.**
+- [ ] **No gaps beyond sensor behaviour and lost wakes.**
   - Record: from the CSV, `source=sensor` rows per hour (12 expected) and each gap > 5 min with its
-    cause (walk-away, reboot, force-quit, unknown).
-- [ ] **Receiver (slot 1) and app (slot 2) side by side for 24 h** (slot hypothesis, g7-protocol §9).
-  - Expect: both keep receiving.
-  - Record: any receiver signal loss; any "The sensor no longer accepts this phone" in this app. If
-    the receiver stops, the hypothesis is wrong: continue with the meter only.
-- [ ] **Times match the receiver within seconds** (spot-check five).
-- [ ] **Walk out of range for 30+ minutes** (g7-protocol §13.2, §13.8).
-  - Expect: sensor state stays as last reported; missed readings fires 15 min after the last reading
-    (vibrate only on silent while suspended, D17); stale at 10 min and "No data" at 20 min on the
-    widget. On return: backfilled readings at their original times (CSV `is_backfill=true`), no
-    duplicate times, the chart gap closed.
-  - Record: alert time and how it sounded; backfill count; any gap left.
+    cause (walk-away, reboot, force-quit, lost wake, unknown).
+- [ ] **Walk out of range for 30+ minutes** (g7-protocol §13 item 8).
+  - Expect: sensor state stays as last reported; missed readings fires 15 minutes after the last
+    reading (vibrate only on silent while suspended, D17); the widget turns stale at 10 min and "No
+    data" at 20. On return: readings resume; no backfill in this app.
+  - Record: alert time and how it sounded; whether the Dexcom app backfilled as usual.
 - [ ] **A staged alert at a background wake, ringer off** (D17 path while backgrounded; alerts.md
   §10.1 with a real wake).
   - Do: set High to 120 or Low to 100, whichever your current glucose will cross; ringer off; lock
@@ -543,6 +653,7 @@ Same sensor and receiver as step 2; the app stays in the background throughout.
     notification.
   - Record: heard yes/no. Restore the thresholds.
 - [ ] **Bluetooth off and on**, once with the app open and once with it suspended (phone locked).
+  Keep it to a few minutes: it interrupts the Dexcom app and Trio's G7 plugin too.
   - Expect: open: "Bluetooth is off" banner and the Bluetooth alert (Warble); readings resume when it
     is on. Suspended: iOS reports the Bluetooth state only at the next wake, so the guaranteed signal
     is the missed-readings notification 15 minutes after the last reading (vibrate only on silent,
@@ -562,9 +673,9 @@ Same sensor and receiver as step 2; the app stays in the background throughout.
     Restore the threshold.
 - [ ] **Force-quit banner.**
   - Do: swipe the app away; wait 20 minutes; open it.
-  - Expect: banner "No readings HH:MM–HH:MM" with "The app was force-quit (swiped away)…"; backfill
-    fills what the sensor still holds.
-  - Record: banner text, backfill.
+  - Expect: banner "No readings HH:MM–HH:MM" with "The app was force-quit (swiped away)…". No backfill
+    in listen mode (step 3P checks it in primary mode).
+  - Record: banner text.
 - [ ] **State restoration after a system termination.**
   - Record: any `[app] bootstrapped (launched by Bluetooth restoration: true)` line not caused by a
     reboot, and whether readings continued around it.
@@ -583,13 +694,16 @@ Same sensor and receiver as step 2; the app stays in the background throughout.
     reminder's text shows the new zone's clock time.
   - Record: result. (The rebuild on a zone change comes from the Phase 3 AlertEngine pass,
     `p3-alerts` 1f113da.)
-- [ ] **End-of-life sensor only: the session end** (g7-protocol §13.9).
-  - Expect: "Sensor expired" within two wakes (~10 min) of the real end, also if the app was
-    terminated between them, and still after a relaunch; the sensor keeps advertising (diagnostics
-    keep showing connections) and nothing is published; missed readings stays quiet while the
-    sensor-expired alert is on (D39/D41).
+- [ ] **The current sensor's end, if it comes before you switch** (g7-protocol §13 item 9; D43).
+  - Expect: the expiry reminders (24 h on the lock screen with no sound or vibration, 12 h, 2 h,
+    grace period started, sensor expired), on time against the expiry the Dexcom app shows; the live
+    grace countdown
+    on Now; "Sensor expired" within two sensor wakes (~10 min) of the real end, and still after a
+    relaunch; missed readings stays quiet while the sensor-expired alert is on (D39/D41). Listen mode
+    never moves to a new sensor by itself.
+  - Record: reminder times vs the Dexcom app's.
 
-### Step 3a — Widget (during the soak)
+#### Step 3a — Widget (during the soak)
 
 - [ ] **Medium widget on the Home Screen for the whole soak** (`docs/widgets.md`).
   - Expect: stale (muted number, "STALE · 10 min ago") at 10 min and "No data" at 20 min during the
@@ -597,20 +711,80 @@ Same sensor and receiver as step 2; the app stays in the background throughout.
   - Record: in `docs/widgets.md` › "Measured on device": typical and worst lag app → widget,
     unlocked, locked and in Low Power Mode.
 
-### Step 4 — Trio handoff (open loop first, then closed loop)
+---
 
-**Switch-over**, in this order (rollback at the end of this step):
+### Part B — next sensor, primary mode, Dexcom app deleted
+
+**Switch-over** (D46), in this order. Rollback at the end of this part.
 
 1. Tell followers (step 4a) and invite any new Dexcom Follow followers in the Dexcom app.
-2. Remove the Dexcom app from the phone.
-3. This app: Settings › Sensor › Forget this sensor (the spare), then pair the treatment sensor with
-   its code. Take the spare off first, or expect "The sensor did not accept the pairing code" from it
-   while the search continues. Optionally pair the receiver to the treatment sensor too.
-4. Trio: **open loop**. Settings › Devices › CGM: delete the G7 plugin, Add CGM › xDrip4iOS.
-5. Trio: Settings › Services › Nightscout › Upload: Allow Uploading on, Upload Glucose off (check
-   after step 4).
-6. This app, once the treatment sensor's first reading is in: Trio handoff on; Sharing › Nightscout
-   Upload readings on; Dexcom Share on (§4.2, §4.3).
+2. When the current sensor ends (or when you change it), **delete the Dexcom app** from the phone.
+3. This app: Settings › Sensor › CONNECTION › "Pair this app (Dexcom app removed)", and confirm "Pair
+   this app". Listening stops and the followed sensor is dropped. Take the old sensor off, or expect
+   "The sensor did not accept the pairing code" from it while the search continues.
+4. If you use a Dexcom receiver as the reference, pair it to the new sensor first (slot 1).
+5. Optional, for the notification check in step 2P: turn this app's notifications off in iOS Settings
+   now (glucose alerts don't run during warm-up anyway).
+6. Apply the new sensor and pair this app with its 4-digit code (step 2P). Warm-up follows.
+7. Trio: **open loop**. Settings › Devices › CGM: delete the G7 plugin, Add CGM › xDrip4iOS. Then
+   Settings › Services › Nightscout › Upload: Allow Uploading on, Upload Glucose off (check it after
+   switching the CGM).
+8. This app, once the first reading is in: Settings › Trio handoff › Hand readings to Trio on;
+   Sharing › Nightscout (URL, token) and Upload readings on; Dexcom Share (credentials) on (§4.2,
+   §4.3).
+
+#### Step 2P — Primary pairing on the new sensor
+
+- [ ] **Pairing prompt: Cancel, then Accept** (`docs/g7-protocol.md` §2.4, §13 item 1).
+  - Do: enter the 4-digit code from the applicator; at the iOS pairing request tap **Cancel**; wait
+    for the next wake; tap **Pair**.
+  - Expect: after Cancel the banner "Pairing didn't finish" and the request again at the next wake
+    (~5 min); after Pair, "Paired." Diagnostics: `[ble] G7: connection: notify … failed: <error>`
+    (the Cancel), `[sensor] G7: ownership confirmed; key saved for short authentication`, `[sensor]
+    G7: paired with DXCM…, serial DXCM…-xxxxxxxx`, `[ble] G7: authenticated`.
+  - Record: the exact error for Cancel (to be confirmed on device); also what happens if you ignore
+    the request until it disappears (timeout).
+- [ ] **Session length and warm-up from the sensor** (`0x52`).
+  - Expect: `[sensor] G7: session length 907200 s, warm-up <N> s`; the warm-up countdown in Settings
+    and on Now.
+  - Record: N (the captured 10-day value is 1620 s) and the first reading's time vs `endsAt`.
+- [ ] **Notifications allowed after pairing** (alerts.md §10.8), if you turned them off in the
+  switch-over.
+  - Do: during warm-up, allow notifications in iOS Settings without killing the app.
+  - Expect: diagnostics show `[alert] schedule sensorExpiring…` lines (the reminders were added
+    again); a reminder whose add was refused is posted when its moment comes.
+- [ ] **First reading and 5-minute cadence for 2 hours.**
+  - Expect: about 24 readings in 2 h (CSV: `source=sensor` rows), each matching the receiver.
+  - Record: a table of app time / app value / receiver time / receiver value, plus two fingersticks.
+- [ ] **Calibration round trip** (D16; g7-protocol §13 item 5).
+  - Do: a fresh fingerstick; Now menu › Calibrate sensor…; enter and re-type it.
+  - Expect: accepted within one or two wakes; the following display-only value is not shown as a
+    reading (`[sensor] G7: glucose: display-only (calibration) value; not published (S1)`).
+  - Record: wakes until accepted; how many readings were withheld as display-only.
+
+#### Step 3P — Primary-mode checks during the first days
+
+Repeat step 3L's items that apply to both modes if anything changed; in addition:
+
+- [ ] **Receiver (slot 1) and app (slot 2) side by side for 24 h** (slot hypothesis, g7-protocol §9,
+  §13 item 4).
+  - Expect: both keep receiving.
+  - Record: any receiver signal loss; any "The sensor no longer accepts this phone" in this app. If
+    the receiver stops, the hypothesis is wrong: continue with the meter only.
+- [ ] **Times match the receiver within seconds** (spot-check five).
+- [ ] **Walk out of range for 30+ minutes, with backfill** (g7-protocol §13 items 2, 8).
+  - Expect: missed readings fires at 15 minutes; on return, backfilled readings at their original
+    times (CSV `is_backfill=true`), no duplicate times, the chart gap closed; in Trio too (step 4).
+  - Record: backfill count; any gap left.
+- [ ] **Force-quit, with backfill.**
+  - Do: swipe the app away; wait 20 minutes; open it.
+  - Expect: the force-quit banner (step 3L) and backfill filling what the sensor still holds.
+- [ ] **Backfill floor** (g7-protocol §13 item 11).
+  - Do: once, terminate the app right after a wake (or while "History isn't being saved" shows).
+  - Record: which records the G7 sends on Backfill at the next wakes, whether a reading already
+    delivered live is sent again, and whether `published again (m1)` lines appear after the relaunch.
+
+#### Step 4 — Trio handoff (open loop first, then closed loop)
 
 - [ ] **Trio reads this app.**
   - Expect: this app's Trio page: App Group `group.org.nightscout.<TEAM_ID>.trio.trio-app-group`,
@@ -620,7 +794,7 @@ Same sensor and receiver as step 2; the app stays in the background throughout.
   - Expect: same value and time (to the minute) as this app; the direction arrow matches.
 - [ ] **Loop cadence, phone locked, both apps backgrounded, 30+ minutes** (heartbeat).
   - Expect: Trio's loop runs about every 5 minutes, within a minute of each sensor wake
-    (g7-protocol §13.6).
+    (g7-protocol §13 item 6).
   - Record: Trio's loop times against the reading times (CSV) for one hour.
 - [ ] **Walk out of range 30+ minutes.**
   - Expect: backfilled readings appear in Trio at their original times.
@@ -628,20 +802,13 @@ Same sensor and receiver as step 2; the app stays in the background throughout.
   normal operation.
 - [ ] **LOW/HIGH, if one happens** (D21, D31).
   - Expect: this app shows LOW/HIGH; Trio 39/401 at the reading's time.
-  - Record: the time, this app, the receiver, Trio, a fingerstick. **Capture the raw packet before
-    relying on HIGH → 401 in closed loop (D31).** The diagnostic export does **not** contain the bytes
-    of a valid glucose packet (only malformed or unknown packets are logged in hex), so it cannot
-    capture it. One option to try is Apple's iOS Bluetooth logging profile with PacketLogger;
-    otherwise this needs a dedicated log line (a code change).
+  - Record: the time, this app, the receiver, Trio, a fingerstick; with "Record raw glucose packets"
+    on, the `raw primary packet` lines around it are the capture (D47). Don't rely on HIGH → 401 in
+    closed loop until a HIGH has been captured, here or in step 2L (D31).
 - [ ] **Closed loop once satisfied.**
   - Do: repeat the locked 30+ minute cadence check in closed loop.
 
-Rollback (not tested): this app's Trio handoff off (it removes its readings and the heartbeat keys
-from Trio's group) and uploads off; in Trio, xDrip4iOS → the G7 plugin and Upload Glucose back on;
-reinstall the Dexcom app and pair the sensor (this app then reports "The sensor no longer accepts
-this phone": expected, don't Pair again); forget the sensor here.
-
-### Step 4a — Followers (`docs/following.md`)
+#### Step 4a — Followers (`docs/following.md`)
 
 - [ ] **Tell followers before switching**; send them `docs/following.md`.
 - [ ] **Each reading appears once in Nightscout within a minute.**
@@ -656,7 +823,10 @@ this phone": expected, don't Pair again); forget the sensor here.
   LOW/HIGH (not 39/401) and alarms. If not, revert to withholding LOW/HIGH (`docs/following.md`) and
   tell followers.
 
-### Step 5 — Full sensor session (10 days + 12 h grace), before removing the Dexcom app for good
+#### Step 5 — Full sensor session (10 days + 12 h grace)
+
+The first full session in primary mode. Keep the rollback below possible until it is done (your
+Dexcom account, and the Dexcom app one reinstall away).
 
 - [ ] **Missed readings per day.**
   - Record: from the CSV, 288 − `source=sensor` rows per local day; Trends data sufficiency.
@@ -672,11 +842,21 @@ this phone": expected, don't Pair again); forget the sensor here.
     after the "Sensor expired" reminder plays its sound without a second banner; the live grace
     countdown on Now while the app is open.
   - Record: arrival times.
-- [ ] **Session end** (g7-protocol §13.9): as in step 3's end-of-life item.
-- [ ] **Sensor clock drift over the session** (g7-protocol §13.7).
+- [ ] **Session end** (g7-protocol §13 item 9): "Sensor expired" within two sensor wakes (~10 min)
+  of the real end, also if the app was terminated between them, and still after a relaunch; missed
+  readings stays quiet while the sensor-expired alert is on (D39/D41).
+- [ ] **Sensor clock drift over the session** (g7-protocol §13 item 7).
   - Record: the largest "anchor differs by N s"; each re-anchor or clock-mismatch banner. Tell the
     orchestrator if it happens more than rarely.
-- [ ] **Urgent low in real life**, if one happens: the alarm, repeats, Stop; record what you heard.
+- [ ] **Urgent low in real life**, if one happens (also in Part A, as a second alarm): the alarm,
+  repeats, Stop, the snooze-end alarm (D44); record what you heard.
+- [ ] **Stop from a cold launch** (alerts.md §10.7b), if a real urgent low rings while the app isn't
+  running: tapping Stop launches the app, which acknowledges and schedules the snooze-end alarm and
+  its repeats in one batch.
+  - Expect: diagnostics `[alert] schedule urgentLow: 12 pending from <snooze end>` (at the default
+    5-minute repeat), and the snooze-end alarm rings on time.
+  - Record: if the line or the alarm is missing, report it (iOS may have suspended the app between
+    the two; a reading within ~5 min re-plans it).
 - [ ] **Optional: a DST night** (alerts.md §10.9), if the session spans one (US fall-back: Sunday
   1 November 2026): quiet hours 22:00–07:00. Expect quiet hours to start and end at the local clock
   times on both sides of the change, urgent low never silenced, and reading times unchanged.
@@ -684,34 +864,78 @@ this phone": expected, don't Pair again); forget the sensor here.
   (alerts.md §10.5, §10.10). The replay alert service runs on the replay clock without the monotonic
   clock (`App/Sources/Composition/ReplayRun.swift`), so a phone-clock change never reaches it, and the
   production engine needs a real urgent low. Expected if it ever happens: urgent low sounds again no
-  later than 30 real minutes after the snooze began. The host tests cover the logic
-  (`test_S7_clockMovedBackCannotExtendUrgentLowSnooze`, `test_S7_partialRollbackDuringSnoozeEndsIt`,
-  and the Phase 3 reboot tests). Whether `kern.bootsessionuuid` is readable on the phone isn't logged
-  by the app; it needs a debugger. Record "not tested" unless you do either.
+  later than 30 real minutes after the snooze began, and at once when a rollback is detected (D44).
+  The host tests cover the logic (`test_S7_clockMovedBackCannotExtendUrgentLowSnooze`,
+  `test_S7_aClockMovedBackDuringTheSnoozeEndsItAndReAlarmsAtOnce`, the Phase 3 reboot tests).
+  Record "not tested" unless it happens.
+- [ ] **The monotonic clock on the phone** (alerts.md §10.5). At each launch diagnostics show
+  `[alert] monotonic clock: N s since boot, boot session … (kern.bootsessionuuid readable)`, or
+  "boot session unreadable": then a clock rollback with no input in between is not detected (the
+  latest-wall-clock fallback applies). Compare two such lines from launches hours apart, with the
+  phone locked and asleep in between: the "s since boot" difference should match the wall-clock
+  difference.
+  - Record: readable or not; the two differences.
 - [ ] **Trends 90 D on the phone**: "Computing…" disappears quickly (the < 100 ms requirement is
   only measured on the Mac).
 - [ ] **Optional: dark mode** legibility on the phone (`docs/design-tokens.md`, "tune on device").
 
-### Step 6 — Report issues
+#### Step 6 — Report issues
 
 - [ ] For each issue: Settings › Data › **Export diagnostics** (also in the Now menu), and the CSV
   export when values or times matter. Read the file before posting it anywhere public (§7.6: it
-  holds readings, the sensor serial and the Nightscout host name). File it as an issue (GitHub once
-  the repository is published) with the build, iOS version, steps, expected and actual.
+  holds readings, the sensor's name and serial, and the Nightscout host name). File it as an issue
+  (GitHub once the repository is published) with the build, iOS version, steps, expected and actual.
+
+#### Optional, with a spare sensor not used for treatment
+
+This app must be paired with the spare sensor for these, so not on the phone that serves your
+treatment sensor: use a second iPhone signed by the same team, or skip them. Never in listen mode
+(they would also hit the Dexcom app).
+
+- [ ] **Clock change** (widgets.md, g7-protocol §5.1). It costs up to the size of the change in lost
+  readings.
+  - Do: with the medium widget on the Home Screen showing a current reading, set the phone clock
+    back 1 h (Settings › General › Date & Time, Set Automatically off). Watch Now and the widget.
+    Then Set Automatically on again.
+  - Expect: Now: "Phone clock doesn't match" / banner "No current reading"; the widget: "Check phone
+    clock", not an old number as current; "Readings interrupted" with the clock message while G7Kit
+    withholds readings. After the clock is fixed: the latch clears with the next newer reading;
+    G7Kit publishes again once its re-anchor has settled (up to about the size of the change,
+    `docs/g7-protocol.md` "The wedge"); missed readings fires meanwhile.
+  - Record: how long until readings resumed; any reading published out of order; the widget's
+    behaviour (into `docs/widgets.md`).
+- [ ] **Another G7 app on the phone, primary mode** (D35, g7-protocol §3.1, §13 item 10).
+  - Do: install xDrip4iOS, primary mode, "share to Trio" off, pair it to the spare sensor. Then, in
+    this app, Pair again with the code. Remove xDrip4iOS afterwards.
+  - Expect: if xDrip4iOS takes slot 2, this app shows "The sensor no longer accepts this phone…"
+    (correct; it doesn't fight back on its own). After this app's Pair again, while its own
+    authentication keeps succeeding: `[ble] G7: auth: unsolicited … ignored` lines,
+    `rejectedAfterAuthentication` then `otherAppRejected` banners if the other app is being refused —
+    **never** "Pair the sensor again" while this phone's key is accepted.
+  - Record: what appeared, in order.
+- [ ] **A 15-day sensor**, only if you have one.
+  - Expect: "This sensor is not a G7 10-day sensor…", no readings, no calibration.
+
+**Rollback from Part B** (not tested), in this order: in this app, turn the Trio handoff off (that
+removes its readings and heartbeat keys from Trio's group; switching modes alone leaves them) and
+both uploads; in Trio, xDrip4iOS → the G7 plugin, and Upload Glucose back on; reinstall the Dexcom
+app and pair it to the sensor (it takes slot 2 back; this app then reports "The sensor no longer
+accepts this phone": expected, don't Pair again); in this app, Settings › Sensor › CONNECTION ›
+"Listen alongside the Dexcom app (this sensor)".
 
 ---
 
 ## 6. Renaming the app
 
-"Sensor" is a working name (D1). Rename **before the first pairing**, ideally before step 1a.
-Keep "Dexcom" out of the name and bundle ID (trademark, HANDOFF §1.1).
+"Sensor" is a working name (D1). Rename **before you install it on the phone**, and in any case
+before the first pairing. Keep "Dexcom" out of the name and bundle ID (trademark, HANDOFF §1.1).
 
 **Display name only** (`APP_DISPLAY_NAME` in `Config/Base.xcconfig`; or override it locally in
 `Config/Signing.xcconfig`, which is included last). This loses nothing. It changes the home-screen
 name, UI copy (`AppIdentity.displayName`), export file names, and the Nightscout `device` field of
-new uploads (tell followers). Two strings in `App/Info.plist` hard-code "Sensor" and must be edited
-by hand: `NSBluetoothAlwaysUsageDescription` and `NSAlarmKitUsageDescription`. `PRODUCT_NAME` (the
-`.app`, module and test-host name, `project.yml`) can stay.
+new uploads (tell followers), and the Bluetooth and alarm permission prompts (`App/Info.plist`
+uses `$(APP_DISPLAY_NAME)`). `PRODUCT_NAME` (the `.app`, module and test-host name, `project.yml`)
+can stay.
 
 **Bundle ID** (`BUNDLE_ID_PREFIX`, and `APP_GROUP_ID` if you want a matching group). iOS treats the
 result as a different app. Nothing is migrated (there is no migration code):
@@ -720,7 +944,8 @@ result as a different app. Nothing is migrated (there is no migration code):
 |---|---|
 | reading history | the app's container (`Application Support/GlucoseStore`) |
 | settings, alert settings, snoozes, the alert engine's state, pending reminders | `UserDefaults` of the old app; the old app's pending notifications keep firing until it is deleted |
-| the sensor pairing and its J-PAKE key; the Nightscout token; Dexcom Share credentials | the old app's Keychain items |
+| the sensor pairing and its J-PAKE key (or, in listen mode, the followed sensor); the Nightscout token; Dexcom Share credentials | the old app's Keychain items |
+| the connection mode and the raw-recording switch (D45, D47); a new install starts in pairing mode | `Application Support/SensorConnection.json` |
 | the widget | must be added again |
 | diagnostics, upload queues | the old app's container |
 
@@ -761,15 +986,31 @@ covers them.
 | "The sensor reported that it has failed…" / "…its session has stopped…" | `sensorFailed` / `sessionStopped` **alert** | Reported on two wakes (latched) | Replace the sensor |
 | anything else | `other` **alert** ("Sensor problem") | A failure the source could not classify | Export diagnostics |
 
+Listen mode (D45) has three messages of its own, all banners, never the sensor alert:
+
+| Message (start) | Kind | Meaning | What to do |
+|---|---|---|---|
+| "Listening to the Dexcom app's connection, but the sensor's session length is not known yet…" | `sessionLengthUnknown` | No `52` answer observed yet; this app asks once at the second authenticated wake (D49) | Wait a few sensor wakes (about 15 minutes); if it persists, export diagnostics |
+| "Listening for the Dexcom app's connection, but it was not seen authenticating the sensor at the last sensor wakes…" | `authenticationFailed` | Two wakes in a row without an observed authenticated `05`; those wakes give no reading here (D50) | Keep the Dexcom app installed, signed in and running (not force-quit). Occasional is expected; frequent: report it |
+| "The sensor refused the Dexcom app's connection after it had started…" | `rejectedAfterAuthentication` | A rejection seen after the Dexcom app authenticated; that wake isn't used | Check the Dexcom app; the next wake is checked again |
+
+While listening, calibration and pairing are not available here: the Now hero and Settings › Sensor
+say "Calibrate in the Dexcom app…" and "Check the sensor in the Dexcom app…" instead. Listen mode
+never moves to a new sensor by itself.
+
 Before anything reaches the sensor, the app itself may refuse a code: not exactly four digits;
 the pairing couldn't be saved (Keychain unavailable); "Pair again" with no stored sensor (use a new
-pairing); or, in DEBUG, a replay run is active.
+pairing); listening (switch Settings › Sensor › CONNECTION to "Pair this app (Dexcom app removed)"
+first, after deleting the Dexcom app); or, in DEBUG, a replay run is active.
 
 The iOS pairing request appears after authentication, when the app first enables the encrypted
 characteristics. While pairing, Settings › Sensor shows "Waiting for the sensor… It connects about
 every 5 minutes." Nothing happens faster than the sensor's next advertisement.
 
 ### 7.2 Another G7 app on the phone
+
+In listen mode (§0) the Dexcom app is expected: this app follows the Dexcom app's connection and
+never competes with it. Everything below is about primary mode (Part B).
 
 Only one app can be the sensor's primary device. Remove or turn off every other app that connects to
 G7 sensors: the Dexcom G7 app, xDrip4iOS, and Trio's or Loop's own G7 connection (onboarding warns
@@ -822,6 +1063,8 @@ DEBUG replay above 1× the Now screen shows this by design.
 
 Work down the list:
 
+0. **Listening?** Then the handoff is off by design (D45) and Trio must be on its own G7 source (§0).
+   The rest of this list is for Part B.
 1. This is a **Release** build (no DEBUG banner). In DEBUG the handoff is paused (D20).
 2. This app › Settings › Trio handoff: **on**; App Group = `group.org.nightscout.<TEAM_ID>.trio.trio-app-group`
    with *your* Team ID ("missing from this build" means `TrioAppGroupID` didn't expand: fix
@@ -845,14 +1088,15 @@ Export: Settings › Data › Export diagnostics, or the Now menu › Export dia
 `<Name>-diagnostics-YYYYMMDD-HHMMSS.txt`, one event per line:
 
 ```
-2026-09-23T12:00:00.000Z [ble] connected
+2026-09-23T12:00:00.000Z [ble] G7: connected
 ```
 
 Times are **UTC**. The log keeps the last 5 000 events, is saved to
 `Application Support/Diagnostics/diagnostics.json` when the app goes to the background and every 100
 events, and is read back at launch, so events before an iOS relaunch survive (saves fail before the
 first unlock after a reboot; those events stay in memory). Categories: `ble`, `sensor`, `store`,
-`bridge`, `upload`, `alert`, `importer`, `app`.
+`bridge`, `upload`, `alert`, `importer`, `app`. G7Kit's lines start with `G7: `, the Trio bridge's
+with `Trio bridge: ` or `Trio coordinator: ` (left out in the table).
 
 | Look for | Means |
 |---|---|
@@ -869,8 +1113,16 @@ first unlock after a reboot; those events stay in memory). Categories: `ble`, `s
 | `[alert] schedule <kind>: N pending from …`, `cancel …` | pending notifications and alarms |
 | `[store] holding N reading(s) for the database…`, `stored N reading(s) that were waiting…` | §7.4 |
 | `[app] bootstrapped (launched by Bluetooth restoration: …)`, `waiting for the first unlock…`, `…force-quit gap`, `clock mismatch latched for …` | launches, reboots, force-quits, §7.3 |
+| `[alert] monotonic clock: N s since boot, boot session …` | at launch: whether clock-rollback detection has the boot session (§5 step 5) |
+| `[sensor] connection mode: …`, `[sensor] raw glucose packet recording turned on (D47)` | the CONNECTION choice and the D47 switch |
+| `[ble] listen: attaching to the Dexcom app's connection to DXCM..`, `listen: the Dexcom app's authenticated connection observed (wake N with proof)`, `[sensor] listen mode: following DXCM.., serial …` | listen mode finding and following the sensor (§0) |
+| `listen: session length not observed; one 52 query sent (D49)` | this app's single `52` query in that connection |
+| `[sensor] listen: no authenticated Dexcom app connection observed (n in a row)` | a lost wake (D50) |
+| `listen: 0x31 status 0x…, 0x25 status 0x…; reading withheld` | a `0x31`/`0x25` reading with a non-zero status, withheld |
+| `[sensor] raw listen packet <hex>`, `raw primary packet <hex>` | with "Record raw glucose packets" on: every glucose packet's bytes (D47, for D31) |
 
-Never in the log: tokens, passwords, pairing codes, keys. Also not in it: the raw bytes of a valid
-glucose packet (only malformed or unknown packets are logged in hex; see step 4's LOW/HIGH item).
-**In it**: readings (ids, dates), the sensor serial (`DXCM..-` + 8 hex characters of the iOS
-peripheral identifier) and the Nightscout host name. Review it before attaching it anywhere public.
+Never in the log: tokens, passwords, pairing codes, keys. Glucose packets' bytes are in it only while
+"Record raw glucose packets" is on (they carry no code or key); without it, only malformed or unknown
+packets are logged in hex. **In it**: readings (ids, dates, values), the sensor's name and serial
+(`DXCM..-` + 8 hex characters of the iOS peripheral identifier) and the Nightscout host name. Review
+it before attaching it anywhere public.

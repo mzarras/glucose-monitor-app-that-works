@@ -21,7 +21,8 @@ It is:
 - a primary-mode G7 collector: pairing with the sensor's 4-digit code (J-PAKE), ported from
   [xDrip4iOS](https://github.com/JohanDegraeve/xdripswift) 7.1.0. Only one app can be a sensor's
   primary device, so the Dexcom app must be removed from the phone. A Dexcom receiver is expected to
-  keep working alongside in its own slot (unverified on hardware);
+  keep working alongside in its own slot (unverified on hardware). A listen mode can instead run
+  alongside the Dexcom app (below);
 - a reader and reporter: readings, statistics, alerts, Trio handoff, Nightscout and Dexcom Share
   uploads, history import, widgets.
 
@@ -57,6 +58,9 @@ permissions, disk full, clock and time-zone changes): [`docs/failure-modes.md`](
 - **Sensor**: pairing and the iOS pairing prompt, warm-up countdown, a reading every 5 minutes,
   backfill after a gap, CoreBluetooth state restoration, session and grace-period tracking,
   fingerstick calibration sent to the sensor (never stored as a reading), "Forget sensor".
+- **Listen mode** ([`docs/g7-protocol.md`](docs/g7-protocol.md) §14): reads the sensor through the
+  Dexcom app's own connection on the same phone, with no pairing code; no backfill, no calibration,
+  and no Trio handoff or uploads while listening.
 - **Now**: current reading, trend arrow from the sensor-reported rate, 5-minute delta, a 3/6/12/24 h
   chart with the 70–180 band and scrubbing to the nearest real reading, "Today so far", sensor and
   Trio status, a live countdown during the grace period, and a banner for every problem.
