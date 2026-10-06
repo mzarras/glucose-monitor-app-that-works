@@ -65,6 +65,11 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     /// D49: the session length is first awaited from observed `52` answers; this app asks itself only
     /// from this wake with proof on.
     static let listenWakesBeforeSessionLengthQuery = 2
+    /// Sensor policy (review m6): after a listen connection that failed before a cycle could start
+    /// (service discovery failed, connect failed), the next attempt waits this long, doubling up to
+    /// `listenRetryMaximumDelay`, so a failing attach cannot loop on the Dexcom app's link.
+    static let listenRetryInitialDelay: TimeInterval = 30
+    static let listenRetryMaximumDelay: TimeInterval = 5 * 60
 
     private let store: G7CredentialStore
     private let diagnostics: DiagnosticLog
@@ -128,6 +133,15 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     /// D49: connections of the followed sensor with proof of an authenticated link; from the second
     /// one on, one `52` query per connection is allowed while the session length is unknown.
     private var listenWakesWithProof = 0
+    /// Review m4: peripherals this app saw advertising as a G7 ("DXCM" + 2 characters). A connected G7
+    /// may report "Dexcom" + 2 characters, which a G6 also uses; that name is accepted only for a
+    /// peripheral seen advertising as a G7.
+    private var advertisedG7Names: [UUID: String] = [:]
+    /// Review m6: the current retry backoff (0 = none) and whether this connection got a cycle.
+    private var listenRetryDelay: TimeInterval = 0
+    private var listenRetryGeneration = 0
+    private var listenRetryPending = false
+    private var listenConnectionHadCycle = false
 
     init(
         store: G7CredentialStore,
@@ -310,6 +324,9 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         listenCandidate = nil
         listenConnectionsWithoutAuthentication = 0
         listenWakesWithProof = 0
+        listenRetryDelay = 0
+        listenRetryGeneration += 1
+        listenRetryPending = false
     }
 
     /// The common tail of `start` and `pairAgain`: run with the current record.
@@ -436,6 +453,7 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
 
     func didDiscover(name: String?, identifier: UUID) {
         if isListening {
+            if let name, Self.isG7AdvertisedName(name) { advertisedG7Names[identifier] = name }
             listenDidDiscover()
             return
         }
@@ -484,6 +502,30 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         newCycle.delegate = self
         cycle = newCycle
         newCycle.start(availableCharacteristics: availableCharacteristics)
+    }
+
+    /// Review m7: CoreBluetooth events carry their peripheral; one for a peripheral that is not the
+    /// current connection is dropped (defence in depth; G7CoreBluetoothCentral calls these).
+    func notificationStateChanged(for characteristic: G7Characteristic, isNotifying: Bool, error: G7LinkError?, from identifier: UUID) {
+        guard isCurrentConnection(identifier) else { return }
+        notificationStateChanged(for: characteristic, isNotifying: isNotifying, error: error)
+    }
+
+    func valueUpdated(for characteristic: G7Characteristic, value: Data, from identifier: UUID) {
+        guard isCurrentConnection(identifier) else {
+            log(.ble, "value from a peripheral that is not the current connection dropped")
+            return
+        }
+        valueUpdated(for: characteristic, value: value)
+    }
+
+    func writeFailed(for characteristic: G7Characteristic, error: G7LinkError, from identifier: UUID) {
+        guard isCurrentConnection(identifier) else { return }
+        writeFailed(for: characteristic, error: error)
+    }
+
+    private func isCurrentConnection(_ identifier: UUID) -> Bool {
+        cycle?.link.peripheralIdentifier == identifier || listenCycle?.link.peripheralIdentifier == identifier
     }
 
     func notificationStateChanged(for characteristic: G7Characteristic, isNotifying: Bool, error: G7LinkError?) {
@@ -542,8 +584,15 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     /// Connection attempt failed: ask again (BluetoothTransmitter.swift:837-848).
     func didFailToConnect(peripheralIdentifier: UUID) {
         guard isExpected(peripheralIdentifier) else { return }
+        if isListening {
+            // Review m3: only the followed sensor is retried (with the m6 backoff); a candidate that
+            // failed is dropped and looked for again on the Dexcom app's connection.
+            listenCandidate = nil
+            log(.ble, "listen: connection attempt failed")
+            if peripheralIdentifier == record?.peripheralIdentifier { scheduleListenRetry() }
+            return
+        }
         log(.ble, "connection attempt failed; retrying")
-        if isListening, listenCandidate?.identifier == peripheralIdentifier { listenCandidate = nil }
         guard isRunning, record?.requiresNewPairing == false else { return }
         _ = central?.connect(peripheralIdentifier: peripheralIdentifier)
     }
@@ -830,7 +879,7 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     /// Follows the sensor (pending connection) or looks for the Dexcom app's connection. Emits no
     /// state, so a failure just reported at a disconnect stays visible (S5).
     private func listenReconnect() {
-        guard isRunning, let record, bluetoothPower == .poweredOn, listenCycle == nil else { return }
+        guard isRunning, let record, bluetoothPower == .poweredOn, listenCycle == nil, !listenRetryPending else { return }
         if let identifier = record.peripheralIdentifier, central?.connect(peripheralIdentifier: identifier) == true {
             log(.ble, "listen: waiting for the Dexcom app's next connection to \(record.sensorName ?? "the sensor")")
             return
@@ -850,13 +899,55 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     /// Attach to a G7 that the Dexcom app has connected right now: the followed sensor once known,
     /// otherwise the first such G7.
     private func attachToSystemConnectedSensor() {
-        guard isRunning, listenCycle == nil, listenCandidate == nil, let record else { return }
+        guard isRunning, listenCycle == nil, listenCandidate == nil, !listenRetryPending, let record else { return }
         for sensor in central?.connectedSensors() ?? [] {
-            if let followed = record.peripheralIdentifier, sensor.identifier != followed { continue }
-            listenCandidate = sensor
-            log(.ble, "listen: attaching to the Dexcom app's connection to \(sensor.name ?? "a G7")")
+            let name: String
+            if let followed = record.peripheralIdentifier {
+                guard sensor.identifier == followed else { continue }
+                name = record.sensorName ?? sensor.name ?? "G7"
+            } else {
+                guard let g7Name = g7Name(of: sensor) else {
+                    log(.ble, "listen: connected peripheral \(sensor.name ?? "without a name") is not a G7 seen advertising; not attached")
+                    continue
+                }
+                name = g7Name
+            }
+            listenCandidate = G7ConnectedSensor(name: name, identifier: sensor.identifier)
+            log(.ble, "listen: attaching to the Dexcom app's connection to \(name)")
             _ = central?.connect(peripheralIdentifier: sensor.identifier)
             return
+        }
+    }
+
+    /// Review m4: the advertised G7 name ("DXCM" + 2 characters) of a system-connected peripheral,
+    /// or nil if it cannot be shown to be a G7. A connected G7 may report "Dexcom" + 2 characters
+    /// (G7SensorKit G7Sensor.swift:246-247), the name a G6 uses too, so that form is accepted only
+    /// for a peripheral this app saw advertising as "DXCM" + 2 (G6 transmitters advertise as
+    /// "Dexcom…"). ONE+ ("DX02…") and Stelo ("DX01…") never match.
+    private func g7Name(of sensor: G7ConnectedSensor) -> String? {
+        guard let name = sensor.name else { return advertisedG7Names[sensor.identifier] }
+        if Self.isG7AdvertisedName(name) { return name }
+        if name.hasPrefix("Dexcom"), name.count == "Dexcom".count + 2 { return advertisedG7Names[sensor.identifier] }
+        return nil
+    }
+
+    /// "DXCM" + exactly 2 characters (CGMG7Transmitter.swift name check; G7SensorKit G7Sensor.swift:248).
+    static func isG7AdvertisedName(_ name: String) -> Bool {
+        name.hasPrefix(G7GATT.sensorNamePrefix) && name.count == G7GATT.sensorNamePrefix.count + 2
+    }
+
+    /// Review m6: retry the followed sensor (or the search) after a backoff, doubling to 5 min; no
+    /// other path attaches while it is pending. The level is kept until a connection gets a cycle.
+    private func scheduleListenRetry() {
+        listenRetryDelay = listenRetryDelay == 0 ? Self.listenRetryInitialDelay : min(listenRetryDelay * 2, Self.listenRetryMaximumDelay)
+        listenRetryGeneration += 1
+        let generation = listenRetryGeneration
+        listenRetryPending = true
+        log(.ble, "listen: attach failed; next attempt in \(Int(listenRetryDelay)) s")
+        central?.schedule(after: listenRetryDelay) { [weak self] in
+            guard let self, generation == self.listenRetryGeneration else { return }
+            self.listenRetryPending = false
+            self.listenReconnect()
         }
     }
 
@@ -888,19 +979,17 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         log(.ble, "listen: attached; waiting to observe the Dexcom app's authentication")
         emitTransient(.authenticating)
         pipeline?.beginConnection()
-        let newCycle = G7ListenCycle(
-            link: link,
-            followsSensor: record.peripheralIdentifier == link.peripheralIdentifier,
-            sessionLengthQuery: G7SessionLengthQuery(link: link),
-            now: now
-        )
+        let newCycle = G7ListenCycle(link: link, sessionLengthQuery: G7SessionLengthQuery(link: link), now: now)
         newCycle.delegate = self
+        listenConnectionHadCycle = true
         listenCycle = newCycle
         newCycle.start(availableCharacteristics: availableCharacteristics)
     }
 
     private func listenDidDisconnect() {
         let observed = listenCycle?.observedAuthenticationThisConnection
+        let hadCycle = listenConnectionHadCycle
+        listenConnectionHadCycle = false
         finishCycle()
         listenCandidate = nil
         if observed == false {
@@ -911,17 +1000,14 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
             }
         }
         guard isRunning, record != nil else { return }
-        listenReconnect()
-    }
-
-    /// G7SensorKit G7Sensor.swift:246-247: a connected G7 can report "Dexcomxx" instead of the
-    /// advertised "DXCMxx"; the serial uses the advertised form, as primary mode does.
-    static func advertisedName(_ name: String?) -> String {
-        guard let name else { return "G7" }
-        if name.hasPrefix("Dexcom"), name.count == "Dexcom".count + 2 {
-            return G7GATT.sensorNamePrefix + name.suffix(2)
+        if hadCycle {
+            listenRetryDelay = 0
+            listenReconnect()
+        } else {
+            // The link went down before a cycle could start (e.g. service discovery failed):
+            // back off instead of reattaching at once to the Dexcom app's link (review m6).
+            scheduleListenRetry()
         }
-        return name
     }
 
     // MARK: - G7ListenCycleDelegate
@@ -932,7 +1018,7 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         if current.serial == nil {
             listenWakesWithProof = 0
             // First observed authenticated connection: follow this sensor from now on.
-            let name = Self.advertisedName(listenCandidate?.name ?? link.peripheralName)
+            let name = listenCandidate?.name ?? link.peripheralName ?? "G7"
             current.sensorName = name
             current.peripheralIdentifier = link.peripheralIdentifier
             current.serial = G7SensorSerial.make(sensorName: name, peripheralIdentifier: link.peripheralIdentifier)

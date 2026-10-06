@@ -127,6 +127,9 @@ final class FakeLink: G7Link {
     var scheduled: [(delay: TimeInterval, action: () -> Void)] = []
     var disconnectCount = 0
     var acceptWrites = true
+    /// Subscriptions and delivered values in order ("notify:<characteristic>",
+    /// "value:<characteristic>:<hex>"), for checks on what came before what.
+    var events: [String] = []
 
     init(identifier: UUID = UUID(uuidString: "1A2B3C4D-0000-4000-8000-000000000001")!) {
         peripheralIdentifier = identifier
@@ -134,6 +137,7 @@ final class FakeLink: G7Link {
 
     func setNotify(_ enabled: Bool, for characteristic: G7Characteristic) {
         notifyRequests.append((characteristic, enabled))
+        if enabled { events.append("notify:\(characteristic)") }
     }
 
     func isNotifying(_ characteristic: G7Characteristic) -> Bool {
@@ -242,6 +246,12 @@ final class LinkDriver {
             }
             if !pendingValues.isEmpty {
                 let (characteristic, value) = pendingValues.removeFirst()
+                // As CoreBluetooth: a notification reaches the app only for a subscribed characteristic.
+                guard link.notifying.contains(characteristic) else {
+                    link.events.append("dropped:\(characteristic)")
+                    continue
+                }
+                link.events.append("value:\(characteristic):\(value.hexString)")
                 deliverValue(characteristic, value)
                 continue
             }

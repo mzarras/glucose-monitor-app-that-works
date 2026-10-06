@@ -14,10 +14,9 @@
 import Foundation
 
 protocol G7ListenCycleDelegate: AnyObject {
-    /// This connection is proven authenticated (D49): the `05` status the Dexcom app's own exchange
-    /// produced says authenticated and bonded, or — for the followed sensor — a valid status-0 `0x4E`
-    /// arrived on the encrypted Write_Control. Only after this does the cycle forward anything from
-    /// Write_Control (S2). Called once per connection.
+    /// The `05` status the Dexcom app's own exchange produced says the link is authenticated and
+    /// bonded (D50: the only proof). Only after this does the cycle subscribe to Write_Control and
+    /// forward anything from it (S2). Called at most once per connection.
     func listenCycleObservedAuthentication()
     /// D49: whether the one `52` query may be sent now (session length still unknown, second wake
     /// with proof or later, followed sensor).
@@ -37,33 +36,25 @@ protocol G7ListenCycleDelegate: AnyObject {
 ///
 /// Its link is a `G7ObservingLink`, which has no write method; the only write it can make is the
 /// `52` session-length query through `G7SessionLengthQuery`, at most once per connection, only
-/// after proof and only when the controller allows it (D49). It subscribes to two characteristics,
-/// both of which the Dexcom app needs for its own exchange, so its subscription is already on the
-/// shared link:
+/// after the observed `05` and only when the controller allows it (D49). It subscribes to two
+/// characteristics, both of which the Dexcom app needs for its own exchange, so its subscription is
+/// already on the shared link:
 /// 1. Receive_Authentication, at once, to observe the `05` status the Dexcom app's authentication
 ///    produces (CGMG7Transmitter.swift:1611-1622). Auth_Stream is not subscribed: it carries
 ///    ownership payloads this app has no use for (:1615-1616).
-/// 2. Write_Control: at once for the followed sensor (so a missed `05` does not lose the wake: a
-///    valid status-0 `0x4E` then proves the link, D49); for a sensor not followed yet, only after
-///    an authenticated and bonded `05` was observed (:1600-1602).
+/// 2. Write_Control, only after an authenticated and bonded `05` was observed, for every sensor
+///    (D50; CGMG7Transmitter.swift:57-59, :1598-1601; G7SensorKit G7Sensor.swift:317-322): an
+///    encryption-required characteristic is never subscribed before the Dexcom app has secured and
+///    authenticated the link. A missed `05` therefore loses that wake (missed readings shows it).
 /// Backfill is never subscribed: enabling it makes the sensor send its backfill now, which may
 /// change what the Dexcom app receives (docs/g7-protocol.md §14).
 final class G7ListenCycle {
-    /// How this connection was proven authenticated (D49).
-    enum Proof: String {
-        case observedStatus = "authenticated and bonded 05"
-        case glucoseOnWriteControl = "status-0 0x4E on Write_Control"
-    }
-
     static let required: Set<G7Characteristic> = [.receiveAuthentication, .writeControl]
 
     weak var delegate: G7ListenCycleDelegate?
     let link: G7ObservingLink
-    /// The followed sensor (a valid status-0 `0x4E` counts as proof only for it).
-    private let followsSensor: Bool
     private let sessionLengthQuery: G7SessionLengthQuery?
     private(set) var sessionLengthQuerySent = false
-    private(set) var proof: Proof?
     private let now: () -> Date
     /// The link is authenticated and bonded right now, as observed (S2 gate for every forward).
     private(set) var isObservedAuthenticated = false
@@ -74,9 +65,8 @@ final class G7ListenCycle {
     private var pendingGlucose: G7CoexistenceGlucoseMessage?
     private var pendingClock: (message: G7TransmitterTimeMessage, receivedAt: Date)?
 
-    init(link: G7ObservingLink, followsSensor: Bool, sessionLengthQuery: G7SessionLengthQuery?, now: @escaping () -> Date) {
+    init(link: G7ObservingLink, sessionLengthQuery: G7SessionLengthQuery?, now: @escaping () -> Date) {
         self.link = link
-        self.followsSensor = followsSensor
         self.sessionLengthQuery = sessionLengthQuery
         self.now = now
     }
@@ -88,7 +78,6 @@ final class G7ListenCycle {
             return
         }
         link.setNotify(true, for: .receiveAuthentication)
-        if followsSensor { link.setNotify(true, for: .writeControl) }
     }
 
     /// The connection ended: nothing from it is forwarded any more.
@@ -112,13 +101,8 @@ final class G7ListenCycle {
         case .receiveAuthentication:
             handleAuthentication(value)
         case .writeControl:
-            if !isObservedAuthenticated, !rejected, followsSensor, let message = G7GlucoseMessage(value), message.responseStatus == 0 {
-                // D49: Write_Control is encrypted and the sensor answers GetData only for an
-                // authenticated client, so a valid current reading proves the link.
-                establishProof(.glucoseOnWriteControl)
-            }
             guard isObservedAuthenticated else {
-                delegate?.listenCycleLog("listen: Write_Control data without proof of an authenticated link ignored")
+                delegate?.listenCycleLog("listen: Write_Control data without an observed authenticated status ignored")
                 return
             }
             handleControl(value)
@@ -135,7 +119,10 @@ final class G7ListenCycle {
         guard value.first == G7Opcode.authStatus.rawValue, let status = G7AuthStatusMessage(value) else { return }
         if status.authenticated, status.paired {
             guard !isObservedAuthenticated, !rejected else { return }
-            establishProof(.observedStatus)
+            isObservedAuthenticated = true
+            observedAuthenticationThisConnection = true
+            delegate?.listenCycleObservedAuthentication()
+            if !link.isNotifying(.writeControl) { link.setNotify(true, for: .writeControl) }
         } else if isObservedAuthenticated {
             // As in primary mode (safety review N2): stop forwarding at once; nothing re-enables it
             // in this connection.
@@ -149,17 +136,8 @@ final class G7ListenCycle {
         }
     }
 
-    private func establishProof(_ how: Proof) {
-        isObservedAuthenticated = true
-        observedAuthenticationThisConnection = true
-        proof = how
-        delegate?.listenCycleLog("listen: authenticated link proven by \(how.rawValue)")
-        delegate?.listenCycleObservedAuthentication()
-        if !link.isNotifying(.writeControl) { link.setNotify(true, for: .writeControl) }
-    }
-
     /// D49, ported from requestExtendedVersionIfNeeded (CGMG7Transmitter.swift:1364-1389), called
-    /// after a glucose report as :1104-1108 does: proof in this connection, Write_Control notifying,
+    /// after a glucose report as :1104-1108 does: the observed `05` in this connection, Write_Control notifying,
     /// at most once per connection, and only when the controller says the session length is still
     /// needed.
     private func querySessionLengthIfAllowed() {
@@ -215,6 +193,12 @@ final class G7ListenCycle {
         guard let pair = G7ObservedGlucosePair(glucose: glucose, clock: clock.message) else {
             delegate?.listenCycleLog("listen: 0x25 reports no running session; 0x31 not used")
             return
+        }
+        if glucose.status != 0 || clock.message.status != 0 {
+            // Fails safe: a non-zero status byte withholds the reading (G7ReadingPipeline). CGMBLEKit
+            // reads it as a transmitter status (TransmitterStatus.swift:23-24, 0x81 = low battery) and still
+            // uses the glucose; which bytes a G7 sends is a device check (docs/g7-protocol.md §13).
+            delegate?.listenCycleLog(String(format: "listen: 0x31 status 0x%02X, 0x25 status 0x%02X; reading withheld", glucose.status, clock.message.status))
         }
         delegate?.listenCycleReceivedGlucose(pair, receivedAt: clock.receivedAt)
         querySessionLengthIfAllowed()

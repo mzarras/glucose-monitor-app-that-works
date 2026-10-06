@@ -90,11 +90,13 @@ public enum G7FailureReason {
         kind: .otherAppRejected,
         message: "Another app on this phone seems to be connecting to the sensor and being refused, which cuts connections short. This phone is still accepted. Close or remove other Dexcom G7 apps."
     )
-    /// Listen mode (D45): the sensor's session length (`0x52`) has not been observed. Only the Dexcom
-    /// app can ask for it there, and without it no reading can be checked against the session (S2).
+    /// Listen mode (D45, D49): the sensor's session length (`0x52`) is not known yet: no answer to
+    /// another app's `52` was observed, and this app's one query (from the second wake with an
+    /// observed authentication) has not been answered yet. Without it no reading can be checked
+    /// against the session (S2).
     public static let listenSessionLengthUnknown = SensorFailure(
         kind: .sessionLengthUnknown,
-        message: "Listening to the Dexcom app's connection, but the sensor's session length has not been seen yet, so readings are held back. In listen mode this app never asks the sensor itself; it waits for the Dexcom app to ask."
+        message: "Listening to the Dexcom app's connection, but the sensor's session length is not known yet, so readings are held back. It is normally learned from the sensor within a few sensor wakes (about 15 minutes)."
     )
     /// Listen mode (D45): two sensor wakes in a row without an observed authenticated connection.
     public static let listenNoAuthenticatedConnection = SensorFailure(
