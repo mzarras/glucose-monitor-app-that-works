@@ -506,6 +506,24 @@ final class ReadingPipelineTests: XCTestCase {
         XCTAssertNil(state.latchedFor)
     }
 
+    /// Review m4: only a newer reading clears a latch. An older reading shown for a while (waiting
+    /// for a store that cannot open) leaves the latch for the newer one in place; a newer reading
+    /// clears it as before.
+    func test_S1_anOlderReadingNeverClearsTheLatch() {
+        let t = PipelineFixtures.start
+        let latched = PipelineFixtures.reading(.mgdl(120), at: t.addingTimeInterval(-120))
+        let older = PipelineFixtures.reading(.mgdl(118), at: t.addingTimeInterval(-420), backfill: true)
+        let newer = PipelineFixtures.reading(.mgdl(122), at: t.addingTimeInterval(-10))
+        let state = ClockMismatchState(latchedFor: latched.date, lastCheckWallClock: nil, lastCheckUptime: nil)
+        let afterOlder = ClockMismatchMonitor.check(state, latest: older, previous: nil, now: t, uptime: nil)
+        XCTAssertEqual(afterOlder.latchedFor, latched.date)
+        let afterLatched = ClockMismatchMonitor.check(afterOlder, latest: latched, previous: older, now: t, uptime: nil)
+        XCTAssertEqual(afterLatched.latchedFor, latched.date, "the latched reading is still latched when it is the latest again")
+        let afterNewer = ClockMismatchMonitor.check(afterLatched, latest: newer, previous: latched, now: t, uptime: nil)
+        XCTAssertNil(afterNewer.latchedFor, "a newer, plausible reading clears it")
+        XCTAssertEqual(ClockMismatchMonitor.check(state, latest: nil, previous: nil, now: t, uptime: nil), state, "unknown latest: untouched")
+    }
+
     private func isFiring(_ phase: AlertPhase) -> Bool {
         if case .firing = phase { return true }
         return false

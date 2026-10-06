@@ -265,10 +265,12 @@ final class LiveAppServices: AppServices {
         }
         #endif
         guard isBootstrapped else { return }
-        // B1: the latch is judged only against the stored latest reading. Until the store is open
-        // (or while it cannot be opened) the latest reading is unknown, and the persisted latch is
-        // kept as it is.
-        guard productionStore != nil else { return }
+        // B1: while the store is still opening the latest reading is unknown (only readings that
+        // arrived since launch are known), so the persisted latch is left as it is. Once the open
+        // has succeeded or failed the check runs: after a failed open, readings waiting for the
+        // store are shown as the latest, and a clock change must still latch them (review m4). An
+        // older reading never clears a latch held for a newer one (`ClockMismatchMonitor`).
+        guard productionStore != nil || storeOpenError != nil else { return }
         let next = ClockMismatchMonitor.check(clockMismatch, latest: latestLiveReading, previous: previousLiveReading, now: now, uptime: uptime())
         if next.latchedFor != clockMismatch.latchedFor {
             log(.app, next.latchedFor.map { "clock mismatch latched for the reading at \($0.ISO8601Format())" } ?? "clock mismatch cleared")
@@ -577,6 +579,8 @@ final class LiveAppServices: AppServices {
             }
             log(.store, "database could not be opened: \(error)")
             updateStorageAvailability()
+            // No re-seed is coming: readings held back from Trio at launch go out now (review m5).
+            await trioCoordinator.releaseHeldReadings(session: await g7.currentSession)
         }
     }
 
