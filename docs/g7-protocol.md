@@ -502,11 +502,14 @@ it stays non-nil across the ~5-minute disconnects and app relaunches. It is `nil
   `.error(code: raw state byte, description:)` — also for an expired state, never `.expired` (D41:
   `.expired` is a confirmed end, on which the alert engine suppresses missed readings) — and a later
   OK reading is used as usual, so one bad byte cannot end a session or silence the missed-readings
-  alert. `.expired` is emitted only for the latched end and for the grace end passing by time against
-  an established session start; a time-based expiry computed from a start that only the packet's own
-  clock supplied (the first anchor of a pairing, or a non-zero-status reply before any anchor) is an
-  unconfirmed `.error(code: 0x06, "OK, past the session end (not confirmed)")`. Tests
-  `test_S5_unconfirmedExpiryIsNotExpired`, `test_S5_unconfirmedExpiryIsNotExpiredAtTheController`.
+  alert. `.expired` is emitted only for the latched end and for the grace end passing by time in an
+  **anchored status-0 packet** (its sensor clock agrees with a session start established before it,
+  so the time is sensor-clock time). A time-based expiry that is not anchored is an unconfirmed
+  `.error(code: 0x06, "OK, past the session end (not confirmed)")`: the first anchor of a pairing
+  (its own clock supplied the start) and **every non-zero-status reply**, which is judged by the
+  phone clock — a phone clock moved forward must not show "Sensor expired" (review n1). Tests
+  `test_S5_unconfirmedExpiryIsNotExpired`, `test_S5_unconfirmedExpiryIsNotExpiredAtTheController`,
+  `test_S5_phoneClockJumpWithStatusReplyIsNotExpired`.
   Once latched, the end (`G7SessionEnd`) is persisted in the pairing record; every later `0x4E`, OK
   or not, shows it — `.expired`, `.failed(sensorFailed)` or `.failed(sessionStopped)`, never
   `.active` — and publishes nothing; the same state is shown at launch, after Bluetooth returns, and
@@ -524,7 +527,7 @@ A `0x52` session length ≠ 907 200 s (e.g. 15-day `5200406f1400880e…` = 1 339
 
 | Byte | Name | Category | `SensorState` |
 |---|---|---|---|
-| `06` | OK | ok | `.active` / `.gracePeriod` / `.expired` by the derived session (`.expired` only against an established start, else `.error(6, …)`, §6.1a) |
+| `06` | OK | ok | `.active` / `.gracePeriod` / `.expired` by the derived session (`.expired` only from an anchored status-0 packet, else `.error(6, …)`, §6.1a) |
 | `02` | warm-up | warmUp | `.warmingUp(endsAt:)` |
 | `01` | session stopped | stopped | `.warmingUp` before warm-up end (first message after activation reports it, G7SensorKit `:40-66`), else `.error(1, …)`; after two connections (§6.1a) `.failed(sessionStopped)` |
 | `04 05 07 0E` | BG(s) needed / calibration needed / outlier request | calibrationNeeded | `.calibrationNeeded(code: byte)` (D36) |
