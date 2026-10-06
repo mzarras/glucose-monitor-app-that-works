@@ -186,12 +186,14 @@ extension AppModel {
         onboarding?.shareUploadEnabled = mode == .pair
     }
 
-    /// Continue on the connection step: switches the facade to the chosen mode if it differs, then
-    /// moves on; a refusal stays on the step with its reason (nothing changed).
+    /// Continue on the connection step: switches the facade to the chosen mode if it differs (or,
+    /// while the connection setting is unresolved, always: the services rewrite it and start the
+    /// sensor connection, P3b review p2), then moves on; a refusal stays on the step with its
+    /// reason (nothing changed).
     func continueFromConnectionStep() {
         guard let chosen = onboarding?.connection?.mode else { return }
         let next = onboarding?.step(after: .connection) ?? .importHistory
-        guard let services, services.connectionMode != chosen else {
+        guard let services, services.connectionMode != chosen || services.connectionSettingProblem != nil else {
             noteConnectionModeChosen()
             goToOnboardingStep(next)
             return

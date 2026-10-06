@@ -306,6 +306,14 @@ today). An ended sensor adds "Start the new sensor in the Dexcom app, then stop 
 Calibration banners say to calibrate in the Dexcom app and have no button. Onboarding always confirms
 a switch away from listening (`OnboardingState.continueNeedsConfirmation`).
 
+**Connection setting unresolved** (`AppServices.connectionSettingProblem`, services review m2/m3).
+The critical banner names the cause (`ConnectionSettingProblem`: the file couldn't be read, the
+stored connection of the other mode was kept, or a failed switch couldn't save the previous choice)
+and hides the source's "credentials unavailable" banner, which would contradict it. Settings › Sensor
+asks for the choice again and says why; onboarding's Continue always asks first and always calls
+`setConnectionMode` (which rewrites the setting even for the mode shown); the packet-recording switch
+says a change lasts only until a restart.
+
 **Not connected (P3 review m1).** Once a mode is chosen, no paired sensor (pairing: `.notPaired`) or
 no followed sensor (listening: no followed serial and no session once the stored record is read)
 raises the calm "Not connected to a sensor" banner (warning), so it never looks like monitoring is

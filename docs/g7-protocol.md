@@ -76,7 +76,7 @@ except the lengths inside the J-PAKE hash (big-endian, §3.3).
 - **Sensor gone:** `state` is not changed when the sensor simply stops connecting — it stays
   `.active` (or whatever the sensor last reported). Signal loss is detected downstream from the age
   of the newest reading (HANDOFF S5 "no reading for 15 min"), not by G7Kit.
-- **New-pairing connect timeout (Sensor policy):** a found sensor that has not connected within 60 s
+- **New-pairing connect timeout (this app's policy):** a found sensor that has not connected within 60 s
   is given up (and, during a new pairing, not tried again) and scanning resumes. xDrip4iOS has the
   same mechanism with 5 s (`BluetoothTransmitter.swift:212`, `:643-654`).
 - Connect/disconnect callbacks for any peripheral other than the paired sensor or the current
@@ -94,7 +94,7 @@ except the lengths inside the J-PAKE hash (big-endian, §3.3).
     it is logged to `DiagnosticLog`, the sensor is excluded for the rest of this pairing and scanning
     continues, **without** `.failed(pairingCodeRejected)` (that kind raises the sensor alert; it
     would be a false alarm while the user is deliberately pairing a new sensor). Its own pairing is
-    untouched and nothing is published from it. This skip is **time-limited** (Sensor policy,
+    untouched and nothing is published from it. This skip is **time-limited** (this app's policy,
     `previousSensorSkipLimit` = 10 min from the pairing start, two sensor wakes): if no sensor has
     authenticated by then, or if the previous sensor's refusal comes after that, the state becomes
     `.failed(previousSensorRejectedCode(sensorName:))` (kind `pairingRejected`), whose message names
@@ -127,7 +127,7 @@ except the lengths inside the J-PAKE hash (big-endian, §3.3).
   `start(pairingCode: nil)` again once protected data is available (the message tells the person to
 unlock the phone, and to pair again from Settings › Sensor only if it continues after unlocking). Saving the record (at least once
   per wake) keeps working in memory when it fails, but a relaunch would lose what was not saved; after
-  3 consecutive failed saves (Sensor policy) every further failed save emits
+  3 consecutive failed saves (this app's policy) every further failed save emits
   `.failed(credentialsUnavailable)` too, and a successful save clears the count.
 
 ### 2.3 One connection, step by step (`G7ConnectionCycle`)
@@ -138,7 +138,7 @@ unlock the phone, and to pair again from Settings › Sensor only if it continue
    phase and immediately stream its payload (`Generic/DexcomG7AuthSession.swift:192-211`).
 3. Authenticate (§3).
 4. Notify Write_Control. While the sensor has never reported its session length, write `52` first
-   and wait for its answer (Sensor change: xDrip4iOS asks after the first reading,
+   and wait for its answer (this app's change: xDrip4iOS asks after the first reading,
    `CGMG7Transmitter.swift:1361-1389`, which would let a 15-day sensor publish one reading). Then
    write `4E` once (`CGMG7Transmitter.swift:952-967`, `:1624-1642`). If the connection ends with
    `52` unanswered (so no `4E` was sent), `.failed(sessionLengthUnknown)` is reported at the
@@ -184,7 +184,7 @@ this app owns is the 16-byte J-PAKE shared key (§3.4).
 | 3 | → | Receive_Auth | `04` AES-128-ECB(key, challenge‖challenge)[0..<8] | `DexcomG7AuthBridge.m:220-261`, `:579-598`; `Generic/AESCrypt.m:14-31` |
 | 4 | ← | Receive_Auth | `05` authenticated(`01`=yes) paired(`01`=yes) | `Generic/AuthChallengeRxMessage.swift:16-27`; G7SensorKit `AuthChallengeRxMessage.swift:24-25` |
 
-**Only solicited packets count (safety review B1; Sensor change).** iOS keeps one link per
+**Only solicited packets count (safety review B1; this app's change).** iOS keeps one link per
 peripheral and delivers every notification to every app subscribed to it, so another G7 app's
 authentication traffic (the Dexcom app, xDrip4iOS) reaches us too. xDrip4iOS accepted any `05`
 (`DexcomG7AuthSession.swift:262`, `:396-458`) — a stray `05 01 01` would have counted as our own
@@ -383,7 +383,7 @@ No captured G7 J-PAKE exchange exists in either repository. Tests:
   `0x4E` of the pairing and persisted with the pairing record; every reading is dated
   `sessionStart + sensor timestamp`, so dates do not jitter with transmission latency. Each later
   `0x4E` is an *anchor* checked against it:
-  - within **30 s** (Sensor policy): agrees; nothing changes (no new `.active(sessionStart:)`);
+  - within **30 s** (this app's policy): agrees; nothing changes (no new `.active(sessionStart:)`);
   - beyond 30 s: this connection's readings are withheld, `.failed(sensorClockMismatch)` is reported,
     and the session is **not** moved; only a second anchor agreeing with the first disagreeing one
     (within 30 s of it) re-anchors the session. One garbled packet can neither move nor end a session.
@@ -536,15 +536,15 @@ it stays non-nil across the ~5-minute disconnects and app relaunches. It is `nil
 - after `gracePeriodEndsAt` (a time check when read — no connection needed);
 - once the sensor itself has reported the session over — expired states, failed states, or
   "stopped" after warm-up (`G7SensorStatus.sessionEnd`) — **in two status-0 `0x4E`, the second one's
-  sensor clock at least 60 s and at most 1 h after the first one's** (safety review N1; Sensor
-  policy: the sensor wakes about every 300 s, so 60 s means a later wake, never a repeat within one
+  sensor clock at least 60 s and at most 1 h after the first one's** (safety review N1; this
+  app's policy: the sensor wakes about every 300 s, so 60 s means a later wake, never a repeat within one
   connection or a re-delivered packet). The sensor clock, not a connection count, tells the reports
   apart, and the first report is persisted in the pairing record (`G7UnconfirmedSessionEnd`), so iOS
   terminating the app between wakes cannot prevent the latch. A non-zero-status reply never counts
   (it may carry a cached state, §4.1); a second report with an earlier or too-close sensor clock
   neither confirms nor replaces the first; any status-0 report of a running session in between (OK,
   warm-up, calibration, temporary issue) clears it. A first report more than 1 h of sensor time
-  older than a new report is discarded and the new report becomes the first (Sensor policy, last
+  older than a new report is discarded and the new report becomes the first (this app's policy, last
   safety-review minor): if the save that cleared it failed and the app was relaunched, the restored
   stale report cannot let a single later report latch; a real end is reported at every wake, so this
   costs at most one wake after a long outage. A single report is shown for that connection as
@@ -662,7 +662,7 @@ awaiting the record). Then:
    (`:793-807`, `:2059-2069`).
 
 Deviations: xDrip4iOS paired the clock field with `receivedAt − age`, shifting calibration times
-`age` s into the future; G7Kit pairs it with the receipt time it describes. Sensor policy (not in
+`age` s into the future; G7Kit pairs it with the receipt time it describes. This app's policy (not in
 xDrip4iOS): a sensor record that never arrives ends the wait after 60 min as `.unknown`, and a newer
 record from another display ends it as `.unknown`. A queued fingerstick that is older than 5 min by
 the next wake (it was valid at submission) ends as `.unknown("Not sent: …")`.

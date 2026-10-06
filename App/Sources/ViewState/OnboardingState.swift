@@ -124,10 +124,16 @@ struct OnboardingState: Equatable, Sendable {
     /// D45: a sensor is stored, so switching would replace its pairing.
     var connectionSwitchNeedsConfirmation: Bool = false
 
+    /// P3b review p2: the connection setting can't be trusted (`connectionSettingProblem`); Continue
+    /// always goes to the services and always asks first, as Settings does.
+    var connectionSettingUnresolved: Bool = false
+
     /// D45 (review m1): Continue asks first when it switches modes and either a sensor is stored or
-    /// the switch leaves listening (pairing takes over the Dexcom app's connection).
+    /// the switch leaves listening (pairing takes over the Dexcom app's connection); always while the
+    /// connection setting is unresolved (p2).
     func continueNeedsConfirmation(for mode: SensorConnectionMode) -> Bool {
-        mode != currentConnectionMode && (connectionSwitchNeedsConfirmation || currentConnectionMode == .listen)
+        if connectionSettingUnresolved { return true }
+        return mode != currentConnectionMode && (connectionSwitchNeedsConfirmation || currentConnectionMode == .listen)
     }
     /// D45: a switch is on its way, or why it didn't happen (nothing changed).
     var connectionSwitching: Bool = false

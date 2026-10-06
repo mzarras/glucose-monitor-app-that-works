@@ -65,6 +65,9 @@ enum ConnectionModeText {
     /// pairing evicts the Dexcom app on this phone from the sensor (they share the slot).
     static let pairingTakeoverWarning = "Pairing takes over the sensor's connection: the Dexcom app on this phone will stop receiving readings. Delete the Dexcom app first."
 
+    /// Settings › Sensor when the saved choice can't be used (`ConnectionSettingProblem`).
+    static let chooseAgain = "Choose Listen or Pair again below; until then this app doesn't connect to the sensor."
+
     /// Settings › Sensor before a choice: no code field until "Pair this app" is chosen.
     static let chooseFirst = "Choose how this app connects before pairing anything. If the Dexcom app is on this phone, listen alongside it."
 
@@ -254,6 +257,10 @@ enum ListenModeRules {
     /// The Now state line with no sensor: "NO SENSOR SET UP" before a choice (as the hero, P3 review
     /// n5), "NOT FOLLOWING A SENSOR" while listening.
     static func stateLine(_ line: StateLine, display: GlucoseDisplayState, listening: Bool, chosen: Bool = true) -> StateLine {
+        // P3b nit: "PAIR THE SENSOR AGAIN" (and the like) in listen words while listening.
+        if listening, case .sensorFailed(let failure, _) = display, let text = Self.failure(failure, listening: true) {
+            return StateLine(text: text.title.uppercased(), dot: line.dot)
+        }
         guard case .notPaired = display else { return line }
         if !chosen, line.text == "NO SENSOR PAIRED" { return StateLine(text: ConnectionModeText.notSetUpStateLine, dot: line.dot) }
         guard listening else { return line }
@@ -266,13 +273,64 @@ enum ListenModeRules {
     }
 }
 
+/// Why the connection setting can't be trusted (`AppServices.connectionSettingProblem`), from the
+/// services' message: the saved file couldn't be read, a stored sensor connection of the other mode
+/// was kept (G7Kit's deletion refused), or a failed switch couldn't save the previous setting back.
+/// Recognised by the services' wording (LiveAppServices+Connection.swift, SensorConnectionSettings
+/// .swift); anything else reads as the generic "can't be used".
+struct ConnectionSettingProblem: Equatable, Sendable {
+    enum Cause: Equatable, Sendable { case unreadable, refusedDeletion, failedSave, other }
+
+    let cause: Cause
+
+    init(_ message: String) {
+        if message.hasPrefix("The saved connection setting does not match the stored sensor connection") {
+            cause = .refusedDeletion
+        } else if message.hasPrefix("The connection mode could not be changed and the previous setting could not be saved back") {
+            cause = .failedSave
+        } else if message.contains("could not be read") {
+            cause = .unreadable
+        } else {
+            cause = .other
+        }
+    }
+
+    var title: String {
+        switch cause {
+        case .unreadable: return "Connection setting couldn't be read"
+        case .refusedDeletion: return "Connection setting doesn't match the sensor"
+        case .failedSave: return "Connection setting couldn't be saved"
+        case .other: return "Connection setting can't be used"
+        }
+    }
+
+    /// One sentence on what happened (the banner and Settings › Sensor).
+    var explanation: String {
+        switch cause {
+        case .unreadable:
+            return "The saved choice between listening and pairing couldn't be read."
+        case .refusedDeletion:
+            return "The saved choice doesn't match the sensor connection stored on this phone, so that connection was kept rather than deleted."
+        case .failedSave:
+            return "Changing how the app connects failed, and the previous choice couldn't be saved back."
+        case .other:
+            return "The saved choice between listening and pairing can't be used."
+        }
+    }
+}
+
 /// D47: Settings › Diagnostics "Record raw glucose packets". Nil until the facade offers it.
 struct PacketRecordingState: Equatable, Sendable {
     var isOn: Bool
+    /// The connection setting is unresolved: a change applies to this run only (the services don't
+    /// write the setting until Listen or Pair is chosen again).
+    var unresolved: Bool = false
 }
 
 enum PacketRecordingText {
     static let title = "Record raw glucose packets"
     /// One line (D47: off by default; for capturing a real LOW/HIGH, D31).
     static let explanation = "Adds the bytes of every glucose message from the sensor to the diagnostic log, to capture a real LOW or HIGH for checking. Off by default; turn it off when done."
+    /// While the connection setting is unresolved.
+    static let unresolvedNote = "Until Listen or Pair is chosen again, a change here lasts only until the app restarts."
 }

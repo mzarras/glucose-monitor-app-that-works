@@ -522,6 +522,7 @@ final class AppModel {
             onboarding.sensorState = state
             onboarding.currentConnectionMode = services.connectionMode
             onboarding.connectionSwitchNeedsConfirmation = hasStoredSensor
+            onboarding.connectionSettingUnresolved = services.connectionSettingProblem != nil
             onboarding.pairing = OnboardingMapping.pairing(current: onboarding.pairing, sensorState: state,
                                                            sawConnectionStep: pairingSawConnectionStep)
             // An existing sensor showed up before the person started onboarding (e.g. after an
@@ -558,7 +559,9 @@ final class AppModel {
             : services.sensorState == .notPaired
         now.notConnected = chosen && sensorStateKnown && nothingConnected
         settings.connection = ConnectionModeState(mode: chosen ? mode : nil)
-        settings.packetRecording = PacketRecordingState(isOn: services.recordsRawGlucosePackets)
+        settings.connectionSettingProblem = services.connectionSettingProblem
+        settings.packetRecording = PacketRecordingState(isOn: services.recordsRawGlucosePackets,
+                                                        unresolved: services.connectionSettingProblem != nil)
         calibration.listening = mode == .listen
     }
 
@@ -598,6 +601,7 @@ final class AppModel {
             state.connection = ConnectionModeState(mode: nil)
             state.currentConnectionMode = mode
             state.connectionSwitchNeedsConfirmation = services.hasStoredSensor
+            state.connectionSettingUnresolved = services.connectionSettingProblem != nil
             state.shareUploadEnabled = mode == .pair
         }
         onboarding = state

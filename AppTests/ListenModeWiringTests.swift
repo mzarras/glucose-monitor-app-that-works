@@ -383,6 +383,7 @@ final class ListenModeWiringTests: XCTestCase {
             texts.append(ListenModeRules.listeningDetail(failure))
             texts.append(SensorStatusText.row(state, session: session, now: t0, listening: true))
             let display = GlucoseDisplayState.classify(latest: nil, sensorState: state, now: t0)
+            texts.append(ListenModeRules.stateLine(StateLine.make(display, sensorState: state, now: t0), display: display, listening: true).text)
             if case .message(let title, let detail, let action) = ListenModeRules.hero(NowHero.make(display, now: t0), display: display, listening: true) {
                 texts += [title, detail]
                 XCTAssertNil(action, "\(failure.kind): no pairing or replacing button while listening")
@@ -440,5 +441,73 @@ final class ListenModeWiringTests: XCTestCase {
         XCTAssertNil(midSession.waiting)
         XCTAssertTrue(midSession.lead.contains("keeps listening"))
         XCTAssertEqual(OnboardingText.lastStep(sensorState: .searching, listening: false, now: t0).waiting, "Waiting for the first reading.")
+    }
+
+    // MARK: - P3b review: unresolved connection setting
+
+    private static let unreadable = "SensorConnection.json could not be read: dataCorrupted"
+    private static let refused = "The saved connection setting does not match the stored sensor connection (delete refused)"
+    private static let failedSave = "The connection mode could not be changed and the previous setting could not be saved back (disk full)"
+
+    /// p1: while the setting is unresolved, the source's "credentials unavailable" banner is not
+    /// shown (it would say "pair again" or "waiting for the phone to unlock"); the setting banner
+    /// explains it, in either mode.
+    func test_settingProblemSuppressesTheCredentialsBanner() {
+        var health = healthy
+        health.connectionSettingProblem = Self.unreadable
+        let state = SensorState.failed(G7FailureReason.credentialsUnavailable)
+        for listening in [false, true] {
+            let banners = AppBanners.make(sensorState: state, latestLiveReadingDate: t0, health: health, now: t0, listening: listening)
+            XCTAssertEqual(banners.map(\.kind), [.connectionSettingUnreadable], "listening: \(listening)")
+            XCTAssertFalse(banners.contains { $0.detail.contains("pair the sensor again") || $0.title.contains("unlock") })
+            let unresolvedFree = AppBanners.make(sensorState: state, latestLiveReadingDate: t0, health: healthy, now: t0, listening: listening)
+            XCTAssertTrue(unresolvedFree.contains { $0.kind == .sensorInterrupted }, "without the problem the credentials banner shows (S5)")
+        }
+        // Other sensor problems still show.
+        let other = AppBanners.make(sensorState: .bluetoothUnavailable(.poweredOff), latestLiveReadingDate: t0, health: health, now: t0)
+        XCTAssertTrue(other.contains { $0.kind == .bluetoothOff })
+    }
+
+    /// Nit: the setting banner names the cause.
+    func test_settingProblemBannerNamesTheCause() {
+        let cases: [(String, String)] = [
+            (Self.unreadable, "Connection setting couldn't be read"),
+            (Self.refused, "Connection setting doesn't match the sensor"),
+            (Self.failedSave, "Connection setting couldn't be saved"),
+            ("something new", "Connection setting can't be used"),
+        ]
+        for (problem, title) in cases {
+            var health = healthy
+            health.connectionSettingProblem = problem
+            let banner = AppBanners.make(sensorState: .notPaired, latestLiveReadingDate: nil, health: health, now: t0).first { $0.kind == .connectionSettingUnreadable }
+            XCTAssertEqual(banner?.title, title)
+            XCTAssertTrue(banner?.detail.hasPrefix(ConnectionSettingProblem(problem).explanation) == true)
+            XCTAssertTrue(banner?.detail.contains(problem) == true, "the services' words, for a bug report")
+        }
+    }
+
+    /// p2: onboarding's Continue goes to the services even for the mode shown, and always asks
+    /// first, while the setting is unresolved; Settings asks again and says why; packet recording
+    /// says a change lasts only until a restart.
+    func test_unresolvedSettingInOnboardingAndSettings() async {
+        let services = PreviewAppServices(sensorState: .failed(G7FailureReason.credentialsUnavailable))
+        services.connectionSettingProblem = Self.unreadable
+        let model = launch(services, onboardingCompleted: false)
+        model.presentOnboarding(at: .connection)
+        XCTAssertEqual(model.onboarding?.connectionSettingUnresolved, true)
+        XCTAssertEqual(model.onboarding?.continueNeedsConfirmation(for: .pair), true, "always confirmed, even for the mode shown")
+        XCTAssertEqual(model.settings.connection, ConnectionModeState(mode: nil), "Settings asks again")
+        XCTAssertEqual(model.settings.connectionSettingProblem, Self.unreadable)
+        XCTAssertEqual(model.settings.packetRecording?.unresolved, true)
+
+        model.chooseOnboardingConnection(.pair) // the mode the facade reports
+        model.continueFromConnectionStep()
+        await model.settle()
+        XCTAssertTrue(services.calls.contains("setConnectionMode(pair)"), "the services rewrite the setting and start the connection")
+        XCTAssertNil(services.connectionSettingProblem)
+        _ = await eventually { model.settings.connectionSettingProblem == nil }
+        XCTAssertEqual(model.settings.connection?.mode, .pair)
+        XCTAssertEqual(model.settings.packetRecording?.unresolved, false)
+        XCTAssertEqual(model.onboarding?.step, .importHistory)
     }
 }
