@@ -53,6 +53,14 @@ import GlucoseCore
 /// `.expired` or `.failed` with the reason), nothing more is published, and the controller persists
 /// the end.
 ///
+/// `.expired` means a confirmed end (D41: the alert engine then suppresses missed readings). It is
+/// emitted only for the latched end and for the grace end passing by time against an established
+/// session start. An unconfirmed end report — the first expired report, any expired state in a
+/// non-zero-status reply — is `.error(code:description:)` (G7SensorStatus), and a time-based expiry
+/// computed from a start that only this packet's own clock supplied (first anchor of a pairing, or a
+/// non-zero-status reply before any anchor) is `.error` too: a garbled clock must not look like a
+/// confirmed end.
+///
 /// Backfill records arriving before this connection's `0x4E` are held raw until the clock is checked;
 /// undatable records are discarded at disconnect (CGMG7Transmitter.swift:656-667). Each batch is
 /// published in ascending sensor-timestamp order, flagged `isBackfill`.
@@ -171,16 +179,19 @@ final class G7ReadingPipeline {
         // the state for this connection, keep nothing else from it, never let it move the clock, and
         // never let it end the session (CGMG7Transmitter.swift:1031-1053; safety review N1).
         guard message.responseStatus == 0 else {
-            output.state = sensorState(message.algorithmState, start: sessionStart ?? anchor.sessionStart, parameters: parameters, now: receivedAt)
+            let mapped = sensorState(message.algorithmState, start: sessionStart ?? anchor.sessionStart, parameters: parameters, now: receivedAt)
+            output.state = confirmedExpiryOnly(mapped, message.algorithmState, startEstablished: sessionStart != nil)
             log("glucose: response status 0x\(String(message.responseStatus, radix: 16)) state \(message.algorithmState.name); not published")
             return output
         }
+        let startEstablished = sessionStart != nil
         guard acceptAnchor(anchor.sessionStart), let start = sessionStart else {
             output.state = .failed(G7FailureReason.sensorClockMismatch)
             return output
         }
         clock = anchor
-        let state = sensorState(message.algorithmState, start: start, parameters: parameters, now: receivedAt)
+        let mapped = sensorState(message.algorithmState, start: start, parameters: parameters, now: receivedAt)
+        let state = confirmedExpiryOnly(mapped, message.algorithmState, startEstablished: startEstablished)
         output.state = state
         if let end = G7SensorStatus.sessionEnd(for: state, algorithmState: message.algorithmState) {
             noteReportedEnd(end, sensorClock: message.sensorClock)
@@ -301,6 +312,15 @@ final class G7ReadingPipeline {
     private func sensorState(_ algorithmState: G7AlgorithmState, start: Date, parameters: G7SensorLifetime.Parameters, now: Date) -> SensorState {
         let session = G7SensorLifetime.session(serial: serial, start: start, parameters: parameters)
         return G7SensorStatus.state(for: algorithmState, session: session, now: now)
+    }
+
+    /// D41: a time-based `.expired` counts only against a session start established before this
+    /// packet; when this packet's own clock supplied the start, it is reported as an unconfirmed
+    /// `.error` (the raw state byte, e.g. 0x06 for OK, and why).
+    private func confirmedExpiryOnly(_ state: SensorState, _ algorithmState: G7AlgorithmState, startEstablished: Bool) -> SensorState {
+        guard state == .expired, !startEstablished else { return state }
+        log("glucose: past the session end by this packet's own sensor clock only; not a confirmed end")
+        return .error(code: Int(algorithmState.rawValue), description: "\(algorithmState.name), past the session end (not confirmed)")
     }
 
     /// Safety review N1: one packet never ends a session. A status-0 end report is latched only when a

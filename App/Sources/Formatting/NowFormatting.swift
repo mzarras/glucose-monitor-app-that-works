@@ -30,7 +30,12 @@ enum NowHero: Equatable, Sendable {
         }
     }
 
-    static func make(_ display: GlucoseDisplayState, now: Date, context: DisplayContext = .current) -> NowHero {
+    /// - Parameter sensorStateKnown: false while the facade still reports its launch default
+    ///   (`.notPaired` before the source's first state, review M1): no "Pair a sensor" then.
+    static func make(_ display: GlucoseDisplayState, now: Date, context: DisplayContext = .current, sensorStateKnown: Bool = true) -> NowHero {
+        if case .notPaired = display, !sensorStateKnown {
+            return .message(title: "Starting up", detail: "Checking for your sensor…", action: nil)
+        }
         switch display {
         case .current(let reading):
             return .reading(reading)
@@ -100,7 +105,11 @@ struct StateLine: Equatable, Sendable {
     let text: String
     let dot: Dot
 
-    static func make(_ display: GlucoseDisplayState, sensorState: SensorState, now: Date, context: DisplayContext = .current) -> StateLine {
+    static func make(_ display: GlucoseDisplayState, sensorState: SensorState, now: Date, context: DisplayContext = .current,
+                     sensorStateKnown: Bool = true) -> StateLine {
+        if case .notPaired = display, !sensorStateKnown {
+            return StateLine(text: "STARTING UP", dot: .muted)
+        }
         switch display {
         case .current(let reading):
             let minutes = AgeText.wholeMinutes(from: reading.date, to: now)
@@ -155,6 +164,28 @@ enum SensorStatusText {
         }
     }
 
+    /// Now screen SENSOR row with the session: while the state is a connection step or a transient
+    /// problem, the session still gives the day and time left ("day 6 of 10 · 4d 7h left ·
+    /// readings interrupted").
+    static func row(_ state: SensorState, session: SensorSession?, now: Date, context: DisplayContext = .current) -> String {
+        guard let session else { return row(state, now: now, context: context) }
+        switch state {
+        case .searching, .connecting, .authenticating, .bluetoothUnavailable, .failed:
+            if case .failed(let failure) = state, failure.requiresSensorReplacement || failure.requiresPairing || failure.raisesSensorAlert {
+                return row(state, now: now, context: context)
+            }
+            let base = row(.active(sessionStart: session.start, expiresAt: session.expiresAt), now: now, context: context)
+            return "\(base) · \(connection(state))"
+        case .notPaired, .warmingUp, .active, .gracePeriod, .expired, .error, .calibrationNeeded, .calibrationError:
+            return row(state, now: now, context: context)
+        }
+    }
+
+    /// Settings › Sensor "Session": "started Sep 17, 8:05 PM · ends Sep 27, 8:05 PM".
+    static func session(_ session: SensorSession, now: Date, context: DisplayContext = .current) -> String {
+        "started \(TimeText.shortDay(session.start, context)), \(TimeText.time(session.start, context)) · ends \(TimeText.shortDay(session.expiresAt, context)), \(TimeText.time(session.expiresAt, context))"
+    }
+
     /// Short connection word, lower case.
     static func connection(_ state: SensorState) -> String {
         switch state {
@@ -202,6 +233,8 @@ enum UploadStatusText {
         case .ok(nil): return "no upload yet"
         case .failing(let count, _, let since):
             return "\(count) \(count == 1 ? "failure" : "failures") since \(TimeText.time(since, context))"
+        case .notSetUp:
+            return "not set up"
         }
     }
 }

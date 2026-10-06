@@ -1,7 +1,8 @@
 // Status of everything around the sensor that the UI reports on: Trio handoff, uploads,
-// notification delivery, alarm volume, force-quit gaps. Phase 2 fills these from TrioBridge,
-// NightscoutKit, AlertEngine and the app lifecycle. Feeds the S5 banners (AppBanners) and the
-// status rows on Now and Settings.
+// notification delivery, alarm volume, force-quit gaps, the database, Bluetooth permission. Filled
+// by `ServiceHealthMapping` from the `AppServices` summaries (TrioBridge, NightscoutKit, AlertEngine,
+// GlucoseStore, the app lifecycle). Feeds the S5 banners (AppBanners) and the status rows on Now
+// and Settings.
 
 import Foundation
 
@@ -21,6 +22,8 @@ enum UploadStatus: Equatable, Sendable {
     case ok(lastUpload: Date?)
     /// Consecutive failures since `since`; `lastError` is the most recent error, human-readable.
     case failing(failureCount: Int, lastError: String, since: Date)
+    /// Turned on, but the site or credentials are missing, so nothing is uploaded (S5).
+    case notSetUp(String)
 }
 
 /// iOS notification authorization (`UNAuthorizationStatus`).
@@ -76,6 +79,26 @@ struct ForceQuitGap: Equatable, Sendable {
     let to: Date
 }
 
+/// A reason alerts may not be seen or heard that `notifications`, `alarmVolume` and `urgentLowAlarm`
+/// don't already say (AlertEngine `DeliveryProblem`, S5).
+enum DeliveryIssue: Equatable, Hashable, Sendable {
+    /// The notification permission prompt hasn't been answered.
+    case notificationsNotRequested
+    /// Banners/alerts are off for this app.
+    case notificationAlertsOff
+    /// Notification sounds are off for this app.
+    case notificationSoundsOff
+    /// Time Sensitive is off: Focus and summaries can hold alerts back.
+    case timeSensitiveOff
+    /// iOS 26+: alarms haven't been asked for yet, so urgent low can't ring as a system alarm (D26).
+    case urgentLowAlarmNotRequested
+    /// Scheduling the urgent-low system alarm failed (the system's message); urgent low fell back to
+    /// notification + in-app sound.
+    case urgentLowAlarmFailed(String)
+    /// Fewer pending repeats than planned are scheduled for this alert.
+    case repeatsNotScheduled(alert: String, missing: Int)
+}
+
 struct ServiceHealth: Equatable, Sendable {
     var trio: TrioStatus
     var nightscout: UploadStatus
@@ -86,6 +109,16 @@ struct ServiceHealth: Equatable, Sendable {
     var urgentLowAlarm: UrgentLowAlarmStatus
     /// Set on launch when the app detects it was force-quit; cleared when the user dismisses it.
     var forceQuitGap: ForceQuitGap?
+    /// Other delivery problems (AlertEngine), most serious first.
+    var deliveryIssues: [DeliveryIssue] = []
+    /// Trio's heartbeat keys could not be written or removed: Trio may not loop in the background
+    /// (docs/trio-bridge.md "Heartbeat wiring"). Only while the bridge is on.
+    var trioHeartbeatError: String? = nil
+    /// Whether the reading database is open (S5: readings held in memory before the first unlock,
+    /// or opening failed).
+    var storage: StoreAvailability = .open
+    /// iOS Bluetooth permission for this app.
+    var bluetoothAuthorization: BluetoothAuthorization = .notDetermined
 
     /// Nothing configured, nothing wrong (used before Phase 2 wiring and in Release until then).
     static let unconfigured = ServiceHealth(

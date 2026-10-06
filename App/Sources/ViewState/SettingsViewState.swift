@@ -1,9 +1,10 @@
-// The Settings screen (HANDOFF §7.3.4, §8A, §11 step 6, PROGRESS D4/D7/D17). Secrets (Nightscout
-// token, Share password) never appear here: only whether one is saved. They go to the Keychain
-// through SettingsActions.
+// The Settings screen (HANDOFF §7.3.4, §8A, §11 step 6, PROGRESS D4/D7/D17/D20). Built by
+// `SettingsMapping` from the `AppServices` summaries. Secrets (Nightscout token, Share password)
+// never appear here: only whether one is saved. They go to the Keychain through SettingsActions.
 
 import Foundation
 import GlucoseCore
+import GlucoseStore
 import SwiftUI
 import WidgetCore
 
@@ -24,6 +25,37 @@ struct SettingsViewState: Equatable, Sendable {
     var databaseSizeBytes: Int64?
     /// "0.1.0 (1)"
     var appVersion: String
+    /// Readings stored, from every source; nil until known.
+    var readingCount: Int? = nil
+    /// Whether the database is open (S5).
+    var storageAvailability: StoreAvailability = .open
+    /// A history import running now (Settings › Import history shows its progress).
+    var runningImport: ImportProgress? = nil
+    /// Result lines after actions (saving sharing settings, pairing, exports).
+    var feedback = SettingsFeedback()
+    /// DEBUG builds only: the replay controls (D11, D20). Always nil in Release.
+    var debug: DebugSettings? = nil
+}
+
+/// What happened after a Settings action, for the page that started it. Nil = nothing to say.
+struct SettingsFeedback: Equatable, Sendable {
+    var nightscout: String?
+    var dexcomShare: String?
+    var pairing: String?
+    var export: String?
+}
+
+/// DEBUG builds: replay a ReplayKit scenario in the running app (PROGRESS D11, D19, D20).
+struct DebugSettings: Equatable, Sendable {
+    var availableScenarios: [String]
+    var activeScenario: String?
+    var speed: Double?
+    /// D20: let the Trio bridge and uploaders run in this DEBUG build (they still refuse every
+    /// non-sensor reading, S6).
+    var developerLiveOutputsEnabled: Bool
+
+    /// Replay speeds offered: scenario seconds per real second.
+    static let speeds: [Double] = [1, 10, 60, 300]
 }
 
 struct SensorSettings: Equatable, Sendable {
@@ -33,11 +65,39 @@ struct SensorSettings: Equatable, Sendable {
     /// When the current `.failed` state began (Phase 2 fills it); used to offer "Pair again" for a
     /// `credentialsUnavailable` that persists (`PairingGuidance.credentialsRetryWindow`).
     var failureSince: Date? = nil
+    /// Whether the source can stop a session (G7: no — the row is hidden).
+    var canStopSession: Bool = false
+    /// The authenticated session, nil when none is valid (D28).
+    var session: SensorSession? = nil
+    /// iOS Bluetooth permission for this app.
+    var bluetooth: BluetoothAuthorization = .notDetermined
+    /// A pairing request is on its way to the sensor (code accepted by the app, sensor not yet
+    /// connected).
+    var pairingInProgress: Bool = false
+    /// Review M1: `state` is the source's, not the facade's launch default; while false nothing
+    /// offers to pair.
+    var stateKnown: Bool = true
+
+    /// `.notPaired` before the source has reported: say so instead of offering to pair.
+    var isWaitingForFirstState: Bool { !stateKnown && state == .notPaired }
 }
 
 struct TrioSettings: Equatable, Sendable {
     var isEnabled: Bool
     var status: TrioStatus
+    /// Info.plist `TrioAppGroupID`, to compare with Trio's Settings › App Info › "Group ID".
+    var appGroupID: String? = nil
+    /// Last time Trio's App Group was brought up to date, and how many readings that write held.
+    var lastWriteAt: Date? = nil
+    var readingsInLastWrite: Int = 0
+    /// Newest reading Trio has from this app.
+    var newestReadingWrittenAt: Date? = nil
+    var heartbeatPublished: Bool = false
+    var heartbeatError: String? = nil
+    /// DEBUG builds keep the bridge off unless the developer switch is on (D20).
+    var pausedInDebugBuild: Bool = false
+    /// The bridge is on but can't run in this build (e.g. no Trio App Group), and why.
+    var unavailableReason: String? = nil
 }
 
 struct NightscoutSettings: Equatable, Sendable {
@@ -47,17 +107,19 @@ struct NightscoutSettings: Equatable, Sendable {
     var hasToken: Bool
     var uploadEnabled: Bool
     var status: UploadStatus
+    /// Readings waiting to be uploaded.
+    var queueDepth: Int = 0
+    /// DEBUG builds keep uploaders off unless the developer switch is on (D20).
+    var pausedInDebugBuild: Bool = false
 }
 
-/// Dexcom Share regions (xDrip4iOS Share uploader: US vs. outside-US servers).
-enum ShareRegion: String, CaseIterable, Identifiable, Sendable {
-    case us
-    case outsideUS
+/// Dexcom Share regions (xDrip4iOS Share uploader: US vs. outside-US servers): the facade's type.
+typealias ShareRegion = DexcomShareRegion
 
+extension DexcomShareRegion {
     /// PROGRESS D7: US preselected.
-    static let `default`: ShareRegion = .us
+    static let `default`: DexcomShareRegion = .us
 
-    var id: String { rawValue }
     var label: String {
         switch self {
         case .us: return "United States"
@@ -73,6 +135,11 @@ struct DexcomShareSettings: Equatable, Sendable {
     var hasPassword: Bool
     var region: ShareRegion
     var status: UploadStatus
+    /// The receiver/upload serial number assigned to the Dexcom account (docs/following.md) — not
+    /// the G7 pairing code. Empty if not set.
+    var receiverSerialNumber: String = ""
+    var queueDepth: Int = 0
+    var pausedInDebugBuild: Bool = false
 }
 
 /// Settings → Alert delivery (PROGRESS D17).
@@ -82,6 +149,8 @@ struct AlertDeliveryStatus: Equatable, Sendable {
     var urgentLowAlarm: UrgentLowAlarmStatus
     var criticalAlerts: CriticalAlertsStatus
     var alarmVolume: AlarmVolumeStatus
+    /// Everything else AlertEngine reports (banners, sounds, Time Sensitive, alarm scheduling).
+    var issues: [DeliveryIssue] = []
 }
 
 struct ImportSummary: Equatable, Sendable {
@@ -108,19 +177,13 @@ enum AppearancePreference: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// How long readings are kept (HANDOFF §4.5: default 2 years).
-enum DataRetention: String, CaseIterable, Identifiable, Sendable {
-    case ninetyDays
-    case oneYear
-    case twoYears
-    case forever
+/// How long readings are kept (HANDOFF §4.5: default 2 years): GlucoseStore's policy.
+typealias DataRetention = RetentionPolicy
 
-    static let `default`: DataRetention = .twoYears
-
-    var id: String { rawValue }
+extension RetentionPolicy {
     var label: String {
         switch self {
-        case .ninetyDays: return "90 days"
+        case .days90: return "90 days"
         case .oneYear: return "1 year"
         case .twoYears: return "2 years"
         case .forever: return "Forever"
@@ -133,6 +196,54 @@ enum SettingsText {
         guard let bytes else { return "—" }
         return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
+
+    /// "18.4 MB · 25,412 readings"
+    static func database(bytes: Int64?, readings: Int?) -> String {
+        guard let readings else { return databaseSize(bytes) }
+        return "\(databaseSize(bytes)) · \(readings.formatted()) \(readings == 1 ? "reading" : "readings")"
+    }
+
+    /// Settings › Data line when the database isn't open (S5), nil when it is.
+    static func storageProblem(_ availability: StoreAvailability) -> String? {
+        switch availability {
+        case .open: return nil
+        case .opening: return "Opening the reading database…"
+        case .waitingForFirstUnlock(let held):
+            return "The database opens after the first unlock since the phone restarted. \(held) \(held == 1 ? "reading is" : "readings are") held until then."
+        case .failed(let message):
+            // D42: history isn't being saved, but live readings still reach alerts and Trio.
+            return "History isn't being saved: \(message) Alerts and Trio still get new readings; charts, statistics and uploads catch up once it recovers."
+        }
+    }
+
+    /// Trio row details: "Last write 12:35 · 1 reading · newest 12:35".
+    static func trioLastWrite(_ trio: TrioSettings, context: DisplayContext = .current) -> String {
+        guard let last = trio.lastWriteAt else { return "No write yet" }
+        var parts = ["Last write \(TimeText.time(last, context))", "\(trio.readingsInLastWrite) \(trio.readingsInLastWrite == 1 ? "reading" : "readings")"]
+        if let newest = trio.newestReadingWrittenAt { parts.append("newest \(TimeText.time(newest, context))") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Settings › Alert delivery line for a delivery problem not shown elsewhere on that page.
+    static func deliveryIssue(_ issue: DeliveryIssue) -> String? {
+        switch issue {
+        case .notificationsNotRequested, .urgentLowAlarmNotRequested:
+            return nil // the page's own rows offer "Allow"
+        case .notificationAlertsOff:
+            return "Banners are off for this app: alerts arrive silently in Notification Center."
+        case .notificationSoundsOff:
+            return "Notification sounds are off for this app."
+        case .timeSensitiveOff:
+            return "Time Sensitive is off: Focus and summaries can hold alerts back."
+        case .urgentLowAlarmFailed(let message):
+            return "The urgent low alarm couldn't be scheduled (\(message)); urgent low uses a notification and the in-app sound instead."
+        case .repeatsNotScheduled(let alert, let missing):
+            return "\(alert): \(missing) \(missing == 1 ? "repeat" : "repeats") fewer than planned while the app is in the background."
+        }
+    }
+
+    /// DEBUG builds keep the Trio bridge and uploaders off unless the developer switch is on (D20).
+    static let pausedInDebugBuild = "Paused: this is a DEBUG build. Turn on Settings › Developer › Live outputs to use it (it still accepts only live sensor readings)."
 
     static func notifications(_ permission: NotificationPermission) -> (status: String, note: String?) {
         switch permission {

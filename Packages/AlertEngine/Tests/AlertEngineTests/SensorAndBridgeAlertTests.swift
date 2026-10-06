@@ -272,6 +272,12 @@ final class TrioBridgeAlertTests: XCTestCase {
         XCTAssertEqual(alert.firedNotice(.trioBridge)?.body, "Trio has not read a new reading since 12:00 PM.")
     }
 
+    func test_bridgeOffNeverAlerts_storageDefaultsToOk() {
+        let h = EngineHarness()
+        XCTAssertFalse(h.advance(minutes: 60).fired.contains(.storageFailing), "no storage input yet: assumed fine")
+        XCTAssertEqual(h.phase(.storageFailing), .armed)
+    }
+
     func test_bridgeOffNeverAlerts() {
         let h = EngineHarness()
         h.send(.trioBridge(.off))
@@ -282,6 +288,45 @@ final class TrioBridgeAlertTests: XCTestCase {
         let h = EngineHarness()
         h.send(.trioBridge(.writeFailing(since: h.now, reason: "x")))
         XCTAssertEqual(h.settings { $0.trioBridge.isEnabled = false }.cancelled, [.trioBridge])
+    }
+}
+
+/// D42: the store failing must be visible, and must not stop anything else.
+@MainActor
+final class StorageAlertTests: XCTestCase {
+    func test_S5_storageFailingAlertsAfterFiveMinutesAndClearsOnRecovery() {
+        let h = EngineHarness()
+        XCTAssertEqual(h.send(.storage(.failing(since: h.now))).fired, [], "one failure is not yet an alarm")
+        XCTAssertEqual(h.advance(minutes: 4).fired, [])
+        let alert = h.advance(minutes: 1)
+        XCTAssertEqual(alert.fired, [.storageFailing])
+        let notice = alert.firedNotice(.storageFailing)
+        XCTAssertEqual(notice?.title, "History isn't being saved")
+        XCTAssertEqual(notice?.body, "Readings could not be saved on the phone since 12:00 PM. Alerts and Trio still get them; "
+                       + "history and charts will have a gap. Check free storage.")
+        XCTAssertEqual(notice?.soundsOnSilent, false, "off by default: history is lost, alerts and Trio are not")
+        XCTAssertEqual(h.advance(minutes: 29).fired, [])
+        XCTAssertEqual(h.advance(minutes: 1).fired, [.storageFailing], "re-alerts every 30 minutes, like the Trio bridge alert")
+        XCTAssertEqual(h.send(.storage(.ok)).cancelled, [.storageFailing])
+        XCTAssertEqual(h.phase(.storageFailing), .armed)
+    }
+
+    func test_storageFailingDoesNotStopGlucoseAlerts() {
+        let h = EngineHarness()
+        h.send(.storage(.failing(since: h.now)))
+        h.clock.advance(minutes: 10)
+        XCTAssertEqual(Set(h.mgdl(50).fired), [.urgentLow, .storageFailing])
+    }
+
+    func test_storageAlertCanBeTurnedOffAndSurvivesARelaunch() throws {
+        let h = EngineHarness()
+        h.send(.storage(.failing(since: h.now)))
+        h.advance(minutes: 5)
+        let restored = try XCTUnwrap(AlertEngineSnapshot.decode(h.engine.snapshot.encoded()))
+        let later = h.now.addingTimeInterval(60)
+        let engine = AlertEngine(settings: .defaults, configuration: Fixtures.configuration, restoring: restored, now: later)
+        XCTAssertEqual(engine.phase(of: .storageFailing), .firing(since: Fixtures.t0.addingTimeInterval(minutes(5))))
+        XCTAssertEqual(h.settings { $0.storageFailing.isEnabled = false }.cancelled, [.storageFailing])
     }
 }
 

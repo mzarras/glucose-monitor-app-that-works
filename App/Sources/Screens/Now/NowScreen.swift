@@ -33,11 +33,14 @@ struct NowScreen: View {
     let state: NowViewState
     let calibration: CalibrationViewState
     let actions: NowActions
+    /// The clock to classify against (AppModel.clock); read on every 15-second tick and every
+    /// state change.
+    var clock: @MainActor () -> Date = { Date() }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 15)) { timeline in
+        TimelineView(.periodic(from: .now, by: 15)) { _ in
             ScrollView {
-                NowContent(state: state, calibration: calibration, now: timeline.date, actions: actions)
+                NowContent(state: state, calibration: calibration, now: clock(), actions: actions)
             }
         }
         .editorialScreen()
@@ -61,14 +64,16 @@ struct NowContent: View {
                 VStack(spacing: 8) {
                     ForEach(banners) { banner in
                         BannerView(banner: banner, perform: actions.performBannerAction)
+                            .accessibilityIdentifier("banner.\(banner.kind)")
                     }
                 }
             }
-            NowHeroView(hero: NowHero.make(display, now: now, context: context), now: now,
+            NowHeroView(hero: NowHero.make(display, now: now, context: context, sensorStateKnown: state.sensorStateKnown), now: now,
                         pairSensor: actions.pairSensor, pairAgain: actions.pairAgain, calibrate: actions.openCalibration)
             stateLine(display)
             chartSection
             TodaySoFarView(today: state.today)
+                .accessibilityIdentifier("now.today")
             statusRows
         }
         .padding(.horizontal, Layout.sideMargin)
@@ -163,7 +168,7 @@ struct NowContent: View {
     // MARK: State line
 
     private func stateLine(_ display: GlucoseDisplayState) -> some View {
-        let line = StateLine.make(display, sensorState: state.sensorState, now: now, context: context)
+        let line = StateLine.make(display, sensorState: state.sensorState, now: now, context: context, sensorStateKnown: state.sensorStateKnown)
         return HStack(spacing: 8) {
             Circle()
                 .fill(dotStyle(line.dot))
@@ -172,6 +177,7 @@ struct NowContent: View {
             Text(verbatim: line.text)
                 .monoLabel(size: 11)
                 .foregroundStyle(Theme.ink)
+                .accessibilityIdentifier("now.stateLine")
         }
     }
 
@@ -220,8 +226,12 @@ struct NowContent: View {
         VStack(spacing: 6) {
             Hairline()
                 .padding(.bottom, 4)
-            StatusRow(label: "SENSOR", value: SensorStatusText.row(state.sensorState, now: now, context: context))
+            StatusRow(label: "SENSOR", value: state.sensorStateKnown || state.sensorState != .notPaired
+                      ? SensorStatusText.row(state.sensorState, session: state.sensorSession, now: now, context: context)
+                      : "checking…")
+                .accessibilityIdentifier("now.sensorRow")
             StatusRow(label: "TRIO", value: TrioStatusText.row(state.health.trio, context: context), valueIsAlert: isTrioFailing)
+                .accessibilityIdentifier("now.trioRow")
         }
     }
 
@@ -260,14 +270,19 @@ struct NowHeroView: View {
             readingView(reading)
         case .message(let title, let detail, let action):
             VStack(alignment: .leading, spacing: 10) {
-                Text(verbatim: title)
-                    .font(Typography.title(size: 36))
-                    .foregroundStyle(Theme.ink)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(verbatim: detail)
-                    .font(Typography.body(size: 14))
-                    .foregroundStyle(Theme.ink)
-                    .fixedSize(horizontal: false, vertical: true)
+                // The message reads as one element; the button stays its own (VoiceOver, UI tests).
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(verbatim: title)
+                        .font(Typography.title(size: 36))
+                        .foregroundStyle(Theme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(verbatim: detail)
+                        .font(Typography.body(size: 14))
+                        .foregroundStyle(Theme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("now.hero.message")
                 if let action {
                     Button(action.title) {
                         switch action {
@@ -278,6 +293,7 @@ struct NowHeroView: View {
                     }
                     .buttonStyle(PrimaryButtonStyle())
                     .frame(maxWidth: 220)
+                    .accessibilityIdentifier("now.hero.action")
                 }
             }
             .padding(.leading, 12)
@@ -285,7 +301,6 @@ struct NowHeroView: View {
                 Rectangle().fill(Theme.alert).frame(width: 3).accessibilityHidden(true)
             }
             .frame(maxWidth: .infinity, minHeight: 106, alignment: .leading)
-            .accessibilityElement(children: .combine)
         }
     }
 
@@ -320,6 +335,7 @@ struct NowHeroView: View {
         .accessibilityLabel(Text(verbatim: HeroSpeech.label(for: reading, now: now)))
         .accessibilityValue(Text(verbatim: reading.delta.map(DeltaText.spoken) ?? ""))
         .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityIdentifier("now.hero.reading")
     }
 
     private func sideBySide(_ reading: LatestReading) -> some View {

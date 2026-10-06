@@ -30,10 +30,13 @@ enum G7SensorStatus {
     /// The sensor's own status for one `0x4E` (algorithm state, byte 14) within `session`.
     ///
     /// - ok: active until the rated life ends, then grace period, then expired (session bounds are
-    ///   derived from the sensor clock, G7SessionClock).
+    ///   derived from the sensor clock, G7SessionClock): the grace end passing by time.
     /// - warm-up, and "stopped" before warm-up has ended (the first message after activation reports
     ///   0x01, G7SensorKit G7GlucoseMessageTests.swift:40-66): warming up.
-    /// - expired states: expired.
+    /// - expired states (0x0F, 0x18, 0x1A, 0x24): `.error(code: raw state byte, description:)`, like a
+    ///   failed state. One report is not a confirmed end (D41): `.expired` makes the alert engine
+    ///   suppress missed readings, so it is emitted only for the latched end (`G7SessionEnd.state`,
+    ///   two reports, G7ReadingPipeline) or for the grace end passing by time.
     /// - calibration needed (0x04, 0x05, 0x07, 0x0E) / calibration error (0x08, 0x09, 0x0A, 0x0D),
     ///   categories from G7AlgorithmState (xDrip4iOS DexcomAlgorithmState.swift:19-49):
     ///   `.calibrationNeeded(code:)` / `.calibrationError(code:)` with the raw state byte (contract D36).
@@ -49,13 +52,11 @@ enum G7SensorStatus {
             return .warmingUp(endsAt: session.warmUpEndsAt)
         case .stopped where now < session.warmUpEndsAt:
             return .warmingUp(endsAt: session.warmUpEndsAt)
-        case .expired:
-            return .expired
         case .calibrationNeeded:
             return .calibrationNeeded(code: Int(algorithmState.rawValue))
         case .calibrationError:
             return .calibrationError(code: Int(algorithmState.rawValue))
-        case .stopped, .temporaryIssue, .sensorFailed, .unknown:
+        case .stopped, .temporaryIssue, .sensorFailed, .expired, .unknown:
             return .error(code: Int(algorithmState.rawValue), description: algorithmState.name)
         }
     }

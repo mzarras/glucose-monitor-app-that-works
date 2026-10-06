@@ -4,6 +4,7 @@
 // All values are made up. Curves are deterministic so screenshots are stable.
 
 #if DEBUG
+import AlertEngine
 import Foundation
 import GlucoseCore
 import WidgetCore
@@ -325,39 +326,11 @@ enum Fixtures {
 
     // MARK: - Alerts
 
-    static let sounds: [AlertSound] = [
-        AlertSound(id: "siren", name: "Siren"),
-        AlertSound(id: "low-chime", name: "Low chime"),
-        AlertSound(id: "horn", name: "Horn"),
-        AlertSound(id: "rising-bell", name: "Rising bell"),
-        AlertSound(id: "pulse", name: "Pulse"),
-        AlertSound(id: "sonar", name: "Sonar"),
-        AlertSound(id: "knock", name: "Knock"),
-        AlertSound(id: "marimba", name: "Marimba"),
-        AlertSound(id: "warble", name: "Warble"),
-    ]
+    /// The bundled sounds, as the Alerts screen lists them.
+    static var sounds: [AlertSound] { alerts.sounds }
 
-    static let alerts = AlertsViewState(
-        rows: [
-            AlertRow(kind: .urgentLow, isEnabled: true, threshold: .glucose(mgdl: 55, isBelow: true, allowed: AlertKind.urgentLow.glucoseThresholdRange!), soundID: "siren", soundOnSilent: true, snoozeMinutes: 30, delayMinutes: nil, repeatMinutes: 5),
-            AlertRow(kind: .urgentLowSoon, isEnabled: false, threshold: .projected(mgdl: 55, minutes: 20), soundID: "rising-bell", soundOnSilent: true, snoozeMinutes: 15, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .low, isEnabled: true, threshold: .glucose(mgdl: 70, isBelow: true, allowed: AlertKind.low.glucoseThresholdRange!), soundID: "low-chime", soundOnSilent: true, snoozeMinutes: 15, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .high, isEnabled: true, threshold: .glucose(mgdl: 250, isBelow: false, allowed: AlertKind.high.glucoseThresholdRange!), soundID: "horn", soundOnSilent: false, snoozeMinutes: 60, delayMinutes: 15, repeatMinutes: nil),
-            AlertRow(kind: .rateOfChange, isEnabled: false, threshold: .rate(mgdlPerMinute: 3, allowed: 2...5), soundID: "pulse", soundOnSilent: false, snoozeMinutes: 30, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .missedReadings, isEnabled: true, threshold: .window(minutes: 15, allowed: 10...60), soundID: "sonar", soundOnSilent: true, snoozeMinutes: 30, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .trioBridge, isEnabled: true, threshold: nil, soundID: "knock", soundOnSilent: true, snoozeMinutes: 30, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .sensorWarmUpComplete, isEnabled: true, threshold: nil, soundID: "marimba", soundOnSilent: false, snoozeMinutes: nil, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .sensorExpiring24h, isEnabled: true, threshold: nil, soundID: "marimba", soundOnSilent: false, snoozeMinutes: nil, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .sensorExpiring2h, isEnabled: true, threshold: nil, soundID: "marimba", soundOnSilent: false, snoozeMinutes: nil, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .sensorGracePeriod, isEnabled: true, threshold: nil, soundID: "marimba", soundOnSilent: false, snoozeMinutes: nil, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .sensorFailed, isEnabled: true, threshold: nil, soundID: "knock", soundOnSilent: true, snoozeMinutes: nil, delayMinutes: nil, repeatMinutes: nil),
-            AlertRow(kind: .sensorError, isEnabled: true, threshold: nil, soundID: "knock", soundOnSilent: true, snoozeMinutes: nil, delayMinutes: nil, repeatMinutes: nil),
-            // AlertEngine defaults (D36): on, sound on silent, re-alerts every 30 min, Warble.
-            AlertRow(kind: .calibrationNeeded, isEnabled: true, threshold: nil, soundID: "warble", soundOnSilent: true, snoozeMinutes: nil, delayMinutes: nil, repeatMinutes: 30),
-        ],
-        sounds: sounds,
-        quietHours: QuietHours(isEnabled: false, start: TimeOfDay(hour: 22, minute: 0), end: TimeOfDay(hour: 7, minute: 0))
-    )
+    /// AlertEngine's own defaults (HANDOFF §5), mapped exactly as the running app maps them.
+    static let alerts = AlertsMapping.make(AlertSettings.defaults)
 
     // MARK: - Settings
 

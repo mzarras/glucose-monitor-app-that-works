@@ -1,5 +1,6 @@
-// Everything the Trends screen shows for one period (HANDOFF §6, §7.3.2). Phase 2 fills it from
-// GlucoseStats for the selected period; every percentage is 0...100.
+// Everything the Trends screen shows for one period (HANDOFF §6, §7.3.2). Filled by
+// `TrendsMapping.make` from GlucoseStats for the selected period (off the main actor); every
+// percentage is 0...100.
 
 import Foundation
 import GlucoseCore
@@ -32,6 +33,9 @@ struct TrendsViewState: Equatable, Sendable {
     /// Change in time in range, percentage points, vs the immediately preceding equal-length
     /// period (HANDOFF §6). Nil if the prior period has no data.
     var timeInRangeChange: Double?
+    /// The prior period has readings but under 70 % of the expected ones, so the change rests on
+    /// thin data (`PeriodComparison.previousHasSufficientData`); the change line says so.
+    var priorPeriodIsSparse: Bool = false
     /// The five consensus bins; nil when there are no readings.
     var rangeBins: RangeBins?
     /// "A typical day": percentile bands for ≥ 7 D, the actual daily traces for 1 D / 3 D.
@@ -55,6 +59,11 @@ struct TrendsViewState: Equatable, Sendable {
     var dataSufficiency: Double
     /// Set when the period includes imported history (HANDOFF §4.5 step 4: footnote).
     var importedData: ImportedDataNote?
+    /// Statistics for `period` are being computed (a period was just selected); the screen shows a
+    /// progress note instead of "no readings".
+    var isComputing: Bool = false
+    /// Why the statistics could not be computed (e.g. the database is not open yet, S5).
+    var loadError: String? = nil
 
     static func empty(period: TrendsPeriod) -> TrendsViewState {
         TrendsViewState(
@@ -94,16 +103,55 @@ enum DailyProfile: Equatable, Sendable {
     case days([DayTrace])
 }
 
-/// One time-of-day bucket of the AGP (HANDOFF §6: 5/25/50/75/95th percentiles, e.g. 15-min
-/// buckets, lightly smoothed for display by GlucoseStats). Statistics, not readings.
+/// One time-of-day bucket of the AGP (HANDOFF §6: 5/25/50/75/95th percentiles, 15-min buckets,
+/// lightly smoothed for display by `AGPDisplaySmoothing`). Chart geometry, not readings (S1).
 struct AGPBucket: Equatable, Sendable {
     /// Start of the bucket, minutes after midnight (0 ..< 1440).
     var minuteOfDay: Int
-    var p5: Double
-    var p25: Double
-    var p50: Double
-    var p75: Double
-    var p95: Double
+    var p5: AGPLineValue
+    var p25: AGPLineValue
+    var p50: AGPLineValue
+    var p75: AGPLineValue
+    var p95: AGPLineValue
+
+    init(minuteOfDay: Int, p5: AGPLineValue, p25: AGPLineValue, p50: AGPLineValue, p75: AGPLineValue, p95: AGPLineValue) {
+        self.minuteOfDay = minuteOfDay
+        self.p5 = p5
+        self.p25 = p25
+        self.p50 = p50
+        self.p75 = p75
+        self.p95 = p95
+    }
+
+    /// All-numeric bucket (fixtures, previews).
+    init(minuteOfDay: Int, p5: Double, p25: Double, p50: Double, p75: Double, p95: Double) {
+        self.init(minuteOfDay: minuteOfDay, p5: .mgdl(p5), p25: .mgdl(p25), p50: .mgdl(p50), p75: .mgdl(p75), p95: .mgdl(p95))
+    }
+}
+
+/// A point on an AGP percentile line. A percentile can be the sensor's LOW or HIGH flag (GlucoseStats
+/// orders flags as the extremes, S4); it stays a flag here and is drawn at the chart's floor or
+/// ceiling, never as 40 or 400.
+enum AGPLineValue: Equatable, Sendable {
+    case mgdl(Double)
+    case belowRange
+    case aboveRange
+
+    /// The number, if this is one.
+    var mgdl: Double? {
+        if case .mgdl(let value) = self { return value }
+        return nil
+    }
+
+    /// Where the chart draws it: numbers as themselves, LOW at `floor`, HIGH at `ceiling`. Chart
+    /// geometry only; never shown as a value.
+    func chartY(floor: Double, ceiling: Double) -> Double {
+        switch self {
+        case .mgdl(let value): return min(max(value, floor), ceiling)
+        case .belowRange: return floor
+        case .aboveRange: return ceiling
+        }
+    }
 }
 
 /// One day's real readings for the 1 D / 3 D overlay.

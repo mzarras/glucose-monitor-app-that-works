@@ -44,6 +44,8 @@ public enum AlertKind: String, Sendable, Equatable, Hashable, Codable, CaseItera
     case bluetoothUnavailable
     /// Writes to Trio's App Group fail, or Trio has stopped consuming readings. S5.
     case trioBridge
+    /// The reading store has failed for 5 minutes or more: history is not being saved (D42). S5.
+    case storageFailing
 
     /// Lower number = more important. Used only to decide which sound keeps the speaker.
     public var priority: Int { Self.allCases.firstIndex(of: self) ?? Int.max }

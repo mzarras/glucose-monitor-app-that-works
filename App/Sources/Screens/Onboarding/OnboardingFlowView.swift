@@ -1,6 +1,7 @@
-// Onboarding / pairing (HANDOFF §4.5, §4.6, §7.3.5, §8A; PROGRESS D7): welcome → optional history
-// import (Nightscout or Clarity CSV, with progress) → remove the Dexcom app (and keep Dexcom
-// Follow working with Share upload) → permissions → pairing code → warm-up countdown.
+// Onboarding / pairing (HANDOFF §4.5, §4.6, §7.3.5, §8A; PROGRESS D7, D26, D35): welcome →
+// optional history import (Nightscout or Clarity CSV, with progress) → remove the Dexcom app (and
+// other G7 apps; keep Dexcom Follow working with Share upload) → permissions → alarms (iOS 26+) →
+// pairing code → warm-up countdown. Actions go to `AppServices` through `AppModel`.
 
 import GlucoseCore
 import SwiftUI
@@ -11,19 +12,26 @@ struct OnboardingActions {
     var goTo: @MainActor (OnboardingStep) -> Void
     var startNightscoutImport: @MainActor (_ url: String, _ token: String, _ depth: ImportDepth) -> Void
     var startClarityImport: @MainActor (_ file: URL, _ recordedIn: TimeZone) -> Void
+    /// Bluetooth can't be requested on demand (iOS asks when the app first uses it); this opens the
+    /// app's page in iOS Settings for a denied permission.
     var requestBluetooth: @MainActor () -> Void
     var requestNotifications: @MainActor () -> Void
     /// D26: AlarmKit authorization (iOS 26+).
     var requestAlarms: @MainActor () -> Void
-    var setShareUpload: @MainActor (_ enabled: Bool, _ username: String, _ password: String, _ region: ShareRegion) -> Void
+    /// Saves the Share credentials and turns upload on (or turns it off), then moves to the next
+    /// step; a failure stays on the step with `OnboardingState.shareMessage`.
+    var setShareUpload: @MainActor (_ enabled: Bool, _ username: String, _ password: String, _ receiverSerialNumber: String, _ region: ShareRegion) -> Void
     var submitPairingCode: @MainActor (String) -> Void
     /// Pair the worn sensor again (G7Kit `pairAgain(code:)`, review M1).
     var pairAgain: @MainActor (String) -> Void
     var finish: @MainActor () -> Void
+    var cancelImport: @MainActor () -> Void = {}
+    /// "Set up later": leaves onboarding without completing it (review M1).
+    var dismiss: @MainActor () -> Void = {}
 
     static var noop: OnboardingActions {
         OnboardingActions(goTo: { _ in }, startNightscoutImport: { _, _, _ in }, startClarityImport: { _, _ in }, requestBluetooth: {},
-                          requestNotifications: {}, requestAlarms: {}, setShareUpload: { _, _, _, _ in }, submitPairingCode: { _ in },
+                          requestNotifications: {}, requestAlarms: {}, setShareUpload: { _, _, _, _, _ in }, submitPairingCode: { _ in },
                           pairAgain: { _ in }, finish: {})
     }
 }
@@ -66,10 +74,17 @@ struct OnboardingContent: View {
                 Text(verbatim: "STEP \((state.visibleSteps.firstIndex(of: state.step) ?? 0) + 1) OF \(state.visibleSteps.count)")
                     .monoLabel(size: 11)
                     .foregroundStyle(Theme.muted)
+                    .accessibilityIdentifier("onboarding.step")
                 Spacer()
                 if let previous = state.step.previous(alarmsAvailable: state.alarmsAvailable), state.step != .warmUp {
                     Button("Back") { actions.goTo(previous) }
                         .buttonStyle(LinkButtonStyle())
+                }
+                if state.isDismissible, state.step != .warmUp {
+                    // Review M1: never a trap. (Warm-up has its own Done.)
+                    Button("Set up later", action: actions.dismiss)
+                        .buttonStyle(LinkButtonStyle())
+                        .accessibilityIdentifier("onboarding.dismiss")
                 }
             }
             Hairline().padding(.bottom, 12)
@@ -77,7 +92,7 @@ struct OnboardingContent: View {
                 VStack(alignment: .leading, spacing: 16) {
                     switch state.step {
                     case .welcome: WelcomeStep(next: { actions.goTo(.importHistory) })
-                    case .importHistory: ImportStep(state: state, actions: actions)
+                    case .importHistory: ImportStep(state: state, actions: actions, next: { actions.goTo(.removeDexcomApp) })
                     case .removeDexcomApp: RemoveDexcomAppStep(state: state, actions: actions)
                     case .permissions: PermissionsStep(state: state, actions: actions)
                     case .alarms: AlarmsStep(state: state, actions: actions)
@@ -125,12 +140,16 @@ struct WelcomeStep: View {
             .foregroundStyle(Theme.muted)
             .fixedSize(horizontal: false, vertical: true)
         Button("Get started", action: next).buttonStyle(PrimaryButtonStyle())
+            .accessibilityIdentifier("onboarding.welcome.start")
     }
 }
 
 struct ImportStep: View {
     let state: OnboardingState
     let actions: OnboardingActions
+    /// Where "Continue"/"Skip" goes: the next onboarding step, or closing Settings' import sheet.
+    let next: @MainActor () -> Void
+    var skipTitle = "Skip — start without history"
     @State private var url = ""
     @State private var token = ""
     @State private var depth: ImportDepth = .ninetyDays
@@ -138,55 +157,76 @@ struct ImportStep: View {
     @State private var timeZone = TimeZone.current
 
     var body: some View {
-        StepTitle(title: "Bring your history", lead: "Import past readings so Trends has 90 days of patterns from day one. Imported history is used for charts and statistics only — never for alerts or Trio.")
+        StepTitle(title: "Bring your history", lead: "Import past readings so Trends has 90 days of patterns from day one. Imported history is used for charts and statistics only — never for alerts, Trio or uploads.")
         if let progress = state.importProgress {
             ImportProgressView(progress: progress)
-            if progress.isFinished || progress.errorMessage != nil {
-                Button("Continue") { actions.goTo(.removeDexcomApp) }.buttonStyle(PrimaryButtonStyle())
+            if progress.isRunning {
+                Button("Stop import", action: actions.cancelImport).buttonStyle(SecondaryButtonStyle())
+            } else {
+                Button("Continue", action: next).buttonStyle(PrimaryButtonStyle())
+                    .accessibilityIdentifier("onboarding.import.continue")
             }
+        }
+        if state.importProgress?.isRunning != true {
+            sources
+        }
+    }
+
+    @ViewBuilder
+    private var sources: some View {
+        SectionLabel("FROM NIGHTSCOUT")
+        if let site = state.nightscoutSiteURL, state.nightscoutHasToken {
+            Text(verbatim: "Saved site: \(site)")
+                .font(Typography.body(size: 13))
+                .fixedSize(horizontal: false, vertical: true)
         } else {
-            SectionLabel("FROM NIGHTSCOUT")
             LabeledField(label: "Site URL") {
                 TextField(text: $url) { Text(verbatim: "https://your-site.example.com") }
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             }
-            LabeledField(label: "Access token (read)") {
+            LabeledField(label: "Access token (read and write)") {
                 SecureField(text: $token) { Text(verbatim: "Token") }
             }
-            Picker(selection: $depth) {
-                ForEach(ImportDepth.allCases) { Text(verbatim: $0.label).tag($0) }
-            } label: {
-                Text(verbatim: "How much")
-            }
-            .pickerStyle(.segmented)
-            Button("Import from Nightscout") { actions.startNightscoutImport(url, token, depth) }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(url.isEmpty || token.isEmpty)
-            Hairline()
-            SectionLabel("FROM A DEXCOM CLARITY EXPORT")
-            Text(verbatim: "Clarity CSV times have no time zone. Choose the zone the data was recorded in.")
-                .font(Typography.body(size: 13))
-                .fixedSize(horizontal: false, vertical: true)
-            Picker(selection: $timeZone) {
-                ForEach(Self.timeZoneChoices, id: \.identifier) { zone in
-                    Text(verbatim: zone.identifier).tag(zone)
-                }
-            } label: {
-                Text(verbatim: "Recorded in")
-            }
-            .pickerStyle(.menu)
-            Button("Choose CSV file…") { choosingFile = true }
-                .buttonStyle(SecondaryButtonStyle())
-                .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
-                    if case .success(let file) = result { actions.startClarityImport(file, timeZone) }
-                }
-            Hairline()
-            Button("Skip — start without history") { actions.goTo(.removeDexcomApp) }
-                .buttonStyle(LinkButtonStyle())
         }
+        Picker(selection: $depth) {
+            ForEach(ImportDepth.allCases) { Text(verbatim: $0.label).tag($0) }
+        } label: {
+            Text(verbatim: "How much")
+        }
+        .pickerStyle(.segmented)
+        Button("Import from Nightscout") { actions.startNightscoutImport(url, token, depth) }
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(!hasSavedSite && (url.isEmpty || token.isEmpty))
+        if let message = state.nightscoutMessage {
+            FieldMessage(text: message)
+        }
+        Hairline()
+        SectionLabel("FROM A DEXCOM CLARITY EXPORT")
+        Text(verbatim: "Clarity CSV times have no time zone. Choose the zone the data was recorded in.")
+            .font(Typography.body(size: 13))
+            .fixedSize(horizontal: false, vertical: true)
+        Picker(selection: $timeZone) {
+            ForEach(Self.timeZoneChoices, id: \.identifier) { zone in
+                Text(verbatim: zone.identifier).tag(zone)
+            }
+        } label: {
+            Text(verbatim: "Recorded in")
+        }
+        .pickerStyle(.menu)
+        Button("Choose CSV file…") { choosingFile = true }
+            .buttonStyle(SecondaryButtonStyle())
+            .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+                if case .success(let file) = result { actions.startClarityImport(file, timeZone) }
+            }
+        Hairline()
+        Button(skipTitle, action: next)
+            .buttonStyle(LinkButtonStyle())
+            .accessibilityIdentifier("onboarding.import.skip")
     }
+
+    private var hasSavedSite: Bool { state.nightscoutSiteURL != nil && state.nightscoutHasToken }
 
     /// Current zone first, then every known zone.
     static var timeZoneChoices: [TimeZone] {
@@ -202,14 +242,21 @@ struct ImportProgressView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                if !progress.isFinished && progress.errorMessage == nil {
+                if progress.isRunning {
                     ProgressView().accessibilityHidden(true)
                 }
-                Text(verbatim: progress.isFinished ? "Import finished" : progress.errorMessage == nil ? "Importing…" : "Import stopped")
+                Text(verbatim: title)
                     .font(Typography.body(size: 15, weight: .semibold))
             }
             Text(verbatim: OnboardingText.importProgress(progress))
                 .font(Typography.label(size: 12))
+            if let note = progress.skippedNote {
+                Text(verbatim: note).font(Typography.label(size: 11)).foregroundStyle(Theme.muted)
+            }
+            if progress.rejectedFutureDated > 0 {
+                // A wrong time zone or a clock fault: never stored as readings (PROGRESS D33).
+                FieldMessage(text: "\(progress.rejectedFutureDated) \(progress.rejectedFutureDated == 1 ? "reading was" : "readings were") dated in the future and left out. Check the time zone chosen for the import.")
+            }
             if let error = progress.errorMessage {
                 FieldMessage(text: "\(error) Already-imported readings are kept; running the import again continues where it stopped.")
             }
@@ -218,6 +265,14 @@ struct ImportProgressView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(Rectangle().stroke(Theme.rule, lineWidth: 1))
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("import.progress")
+    }
+
+    private var title: String {
+        if progress.isFinished { return "Import finished" }
+        if progress.isCancelled { return "Import stopped" }
+        if progress.errorMessage != nil { return "Import stopped" }
+        return "Importing…"
     }
 }
 
@@ -227,23 +282,25 @@ struct RemoveDexcomAppStep: View {
     @State private var shareEnabled = true
     @State private var username = ""
     @State private var password = ""
+    @State private var receiverSerial = ""
     @State private var region: ShareRegion = .default
 
     var body: some View {
         StepTitle(title: "Remove the Dexcom app", lead: "Only one app can be the sensor's primary device. Delete the Dexcom G7 app from this phone before pairing. A Dexcom receiver can stay paired.")
-        WarningNote(text: "Dexcom Follow stops when the Dexcom app is gone: it was the app uploading to Dexcom Share. People following you in Dexcom Follow stop getting readings unless this app uploads to Share instead.")
+        WarningNote(text: OnboardingState.otherG7AppsWarning)
+        WarningNote(text: "Dexcom Follow stops when the Dexcom app is gone: it was the app uploading to Dexcom Share. People following you in Dexcom Follow stop getting readings unless this app uploads to Share instead. Invite anyone new in the Dexcom app before you delete it.")
         Toggle(isOn: $shareEnabled) {
             Text(verbatim: "Upload to Dexcom Share").font(Typography.body(size: 15, weight: .medium))
         }
         .frame(minHeight: Layout.minTarget)
         if shareEnabled {
             Picker(selection: $region) {
-                ForEach(ShareRegion.allCases) { Text(verbatim: $0.label).tag($0) }
+                ForEach(ShareRegion.allCases, id: \.self) { Text(verbatim: $0.label).tag($0) }
             } label: {
                 Text(verbatim: "Region")
             }
             .pickerStyle(.segmented)
-            LabeledField(label: "Dexcom username") {
+            LabeledField(label: "Dexcom account name") {
                 TextField(text: $username) { Text(verbatim: "Username") }
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -252,12 +309,20 @@ struct RemoveDexcomAppStep: View {
             LabeledField(label: "Password") {
                 SecureField(text: $password) { Text(verbatim: "Password") }.textContentType(.password)
             }
+            LabeledField(label: "Receiver serial number") {
+                TextField(text: $receiverSerial) { Text(verbatim: "From the Dexcom account, not the sensor code") }
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+            }
+        }
+        if let message = state.shareMessage {
+            FieldMessage(text: message)
         }
         Button("I've removed the Dexcom app") {
-            actions.setShareUpload(shareEnabled, username, password, region)
-            actions.goTo(.permissions)
+            actions.setShareUpload(shareEnabled, username, password, receiverSerial, region)
         }
         .buttonStyle(PrimaryButtonStyle())
+        .accessibilityIdentifier("onboarding.removeDexcom.continue")
         .onAppear {
             shareEnabled = state.shareUploadEnabled
             region = state.shareRegion
@@ -271,7 +336,24 @@ struct PermissionsStep: View {
 
     var body: some View {
         StepTitle(title: "Permissions", lead: "Bluetooth to hear the sensor, including while the phone is locked. Notifications so alerts reach you.")
-        permissionRow(title: "Bluetooth", state: state.bluetooth, allow: actions.requestBluetooth)
+        HStack {
+            Text(verbatim: "Bluetooth").font(Typography.body(size: 15, weight: .medium))
+            Spacer()
+            switch state.bluetooth {
+            case .granted:
+                Text(verbatim: "ALLOWED").monoLabel(size: 11, medium: true).foregroundStyle(Theme.accent)
+            case .denied:
+                Button("Open Settings", action: actions.requestBluetooth).buttonStyle(LinkButtonStyle())
+            case .notDetermined:
+                Text(verbatim: "IOS WILL ASK").monoLabel(size: 11).foregroundStyle(Theme.muted)
+            }
+        }
+        .frame(minHeight: Layout.minTarget)
+        if state.bluetooth == .notDetermined {
+            Text(verbatim: "iOS asks the first time the app looks for the sensor. Tap Allow.")
+                .font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
         permissionRow(title: "Notifications", state: notificationState, allow: actions.requestNotifications)
         let critical = SettingsText.criticalAlerts(state.criticalAlerts)
         VStack(alignment: .leading, spacing: 4) {
@@ -284,7 +366,8 @@ struct PermissionsStep: View {
         }
         Button("Continue") { actions.goTo(state.step.next(alarmsAvailable: state.alarmsAvailable) ?? .pairing) }
             .buttonStyle(PrimaryButtonStyle())
-            .disabled(state.bluetooth != .granted)
+            .disabled(state.bluetooth == .denied)
+            .accessibilityIdentifier("onboarding.permissions.continue")
         if state.bluetooth == .denied {
             FieldMessage(text: "Bluetooth is required. Allow it in iOS Settings to continue.")
         }
@@ -353,8 +436,15 @@ struct PairingStep: View {
 
     var body: some View {
         StepTitle(title: "Pair your sensor", lead: "Apply the sensor first. iOS will ask to pair with it; tap Pair.")
+        Text(verbatim: OnboardingState.otherG7AppsWarning)
+            .font(Typography.body(size: 12))
+            .foregroundStyle(Theme.muted)
+            .fixedSize(horizontal: false, vertical: true)
         switch state.pairing {
         case .idle:
+            PairingCodeEntry(pair: actions.submitPairingCode)
+        case .couldNotStart(let message):
+            FieldMessage(text: message)
             PairingCodeEntry(pair: actions.submitPairingCode)
         case .inProgress:
             HStack(spacing: 10) {
