@@ -131,6 +131,40 @@ final class AlertsViewTests: XCTestCase {
         XCTAssertFalse(s.storageFailing.isEnabled)
     }
 
+    /// D43: the five expiry reminders are grouped in the order they come due, with the new 12 h one;
+    /// the one-off ones have a Sound switch (24 h off by default); "expired" always sounds; urgent low
+    /// never gets a Sound switch (S7).
+    func test_sensorExpiryRemindersGroupAndSoundSwitch() {
+        let state = AlertsMapping.make(.defaults)
+        XCTAssertEqual(state.rows(in: .expiryReminders).map(\.kind), AlertKind.sensorExpiryReminders)
+        XCTAssertEqual(AlertKind.sensorExpiryReminders,
+                       [.sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod, .sensorExpired])
+        XCTAssertEqual(AlertKind.sensorExpiringIn12Hours.title, "Sensor expires in 12 h")
+        XCTAssertEqual(state.row(.sensorExpiringIn12Hours)?.isEnabled, true)
+        XCTAssertEqual(state.row(.sensorExpiringIn12Hours)?.soundID, .doorbell)
+        XCTAssertEqual(state.row(.sensorExpiringIn24Hours)?.playsSound, false, "24 h: no sound by default")
+        for kind in [AlertKind.sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod] {
+            XCTAssertEqual(state.row(kind)?.playsSound, true, "\(kind)")
+        }
+        XCTAssertNil(state.row(.sensorExpired)?.playsSound, "expired always sounds")
+        XCTAssertNil(state.row(.urgentLow)?.playsSound, "S7: urgent low has no Sound switch")
+        for kind in AlertKind.allCases where !kind.isEventAlert {
+            XCTAssertNil(state.row(kind)?.playsSound, "\(kind)")
+        }
+        XCTAssertFalse(state.rows(in: .sensor).contains { AlertKind.sensorExpiryReminders.contains($0.kind) })
+
+        var s = AlertSettings.defaults
+        s = AlertsMapping.apply(.playsSound(.sensorExpiringIn24Hours, true), to: s)
+        s = AlertsMapping.apply(.playsSound(.sensorExpiringIn12Hours, false), to: s)
+        s = AlertsMapping.apply(.enabled(.sensorExpiringIn12Hours, false), to: s)
+        XCTAssertTrue(s.playsSound(.sensorExpiringIn24Hours))
+        XCTAssertFalse(s.playsSound(.sensorExpiringIn12Hours))
+        XCTAssertFalse(s.isEnabled(.sensorExpiringIn12Hours))
+        // S7: a Sound edit for urgent low (or any non-announcement) changes nothing.
+        XCTAssertEqual(AlertsMapping.apply(.playsSound(.urgentLow, false), to: .defaults), .defaults)
+        XCTAssertEqual(AlertsMapping.apply(.playsSound(.sensorExpired, false), to: .defaults), .defaults)
+    }
+
     /// Every alert the engine can raise has a row (S5: Bluetooth and "sensor expired" included), in
     /// a section, with the engine's default sound.
     func test_everyEngineAlertHasARowInASection() {

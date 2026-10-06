@@ -6,14 +6,14 @@ extension AlertEngine {
     mutating func apply(_ action: AlertUserAction, now: Date) -> [AlertAction] {
         switch action {
         case .acknowledge(let kind):
-            if kind.isEventAlert { return [.cancel(kind)] }
+            if kind.isEventAlert { return acknowledgeAnnouncement(kind, now: now) }
             guard episode(kind).isActive, let minutes = settings.snoozeMinutes(kind) else {
                 return [.userActionIgnored(action)]
             }
             return snooze(kind, minutes: minutes, now: now)
 
         case .snooze(let kind, let minutes):
-            if kind.isEventAlert { return [.cancel(kind)] }
+            if kind.isEventAlert { return acknowledgeAnnouncement(kind, now: now) }
             // No pre-emptive snooze: every new episode sounds. In particular urgent low cannot be
             // silenced before it fires (S7).
             guard episode(kind).isActive else { return [.userActionIgnored(action)] }
@@ -22,6 +22,12 @@ extension AlertEngine {
         case .silence(let kind):
             return [.stopSound(kind)]
         }
+    }
+
+    /// Removes the announcement's notification. `.cancel` also removes the kind's pending one, so an
+    /// expiry reminder still pending for later in the session is written again (D43).
+    private mutating func acknowledgeAnnouncement(_ kind: AlertKind, now: Date) -> [AlertAction] {
+        [.cancel(kind)] + rebuildPendingExpiryReminders(now: now, kinds: [kind])
     }
 
     /// Snoozes an active alert. S7: urgent low is clamped to at most 30 minutes here, whatever
@@ -36,6 +42,8 @@ extension AlertEngine {
     }
 
     mutating func apply(_ newSettings: AlertSettings, now: Date) -> [AlertAction] {
+        let expiryRemindersBefore = pendingExpiryReminderNotices(now: now)
+        let unchanged = newSettings == settings
         settings = newSettings
         // Pending repeats carry the sound, text and quiet-hours decision they were built with, so
         // the ones due later than a minute are removed and rebuilt; a due or ringing one stays.
@@ -46,6 +54,10 @@ extension AlertEngine {
             actions += planUrgentLowRepeats(anchor: firing.lastSoundedAt, now: now)
         }
         // Missed readings are planned again by evaluation (or stay removed if now off).
+        // Expiry reminders (D43): rebuild only those the change affects; all of them when the
+        // settings arrive unchanged (the service does that when the delivery level changed).
+        // Evaluation removes the ones turned off.
+        actions += rebuildPendingExpiryReminders(now: now, unlessUnchangedFrom: unchanged ? nil : expiryRemindersBefore)
         return actions
     }
 
@@ -63,6 +75,7 @@ extension AlertEngine {
         }
         // Evaluation plans missed readings again from the restored state.
         actions += resetSeriesAfterLaunch(.missedReadings, now: now)
+        actions += reconcileExpiryRemindersAfterLaunch(now: now)
         return actions
     }
 }

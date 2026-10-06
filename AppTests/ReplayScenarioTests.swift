@@ -53,6 +53,15 @@ final class ReplayScenarioTests: XCTestCase {
             center.posted(kind).map { $0.at.timeIntervalSince(origin) }
         }
 
+        /// D43: when each sensor expiry reminder of `kind` reaches the person, as scenario offsets —
+        /// posted at once (its moment had already passed when it became known), or a pending
+        /// notification scheduled for its moment, which iOS posts even while the app is suspended.
+        func reminderOffsets(_ kind: String) -> [TimeInterval] {
+            (center.posted(kind).map(\.at) + center.pending(kind).compactMap(\.fireDate))
+                .map { $0.timeIntervalSince(origin) }
+                .sorted()
+        }
+
         /// When the in-app (ringer-off) sound `file` played, as scenario offsets.
         func soundOffsets(_ file: String) -> [TimeInterval] {
             audio.plays.filter { $0.fileName == file }.map { $0.at.timeIntervalSince(origin) }
@@ -292,9 +301,11 @@ final class ReplayScenarioTests: XCTestCase {
         let expired = run.milestone(.expired)
         await play(run, through: expired + 20 * 60)
 
-        XCTAssertEqual(run.postedOffsets("sensorExpiringIn2Hours"), [0], "the sensor expires 30 min after the start: one 2-hour notice")
-        XCTAssertTrue(run.postedOffsets("sensorExpiringIn24Hours").isEmpty, "the 2-hour notice replaces the 24-hour one")
-        XCTAssertEqual(run.postedOffsets("sensorGracePeriod"), [graceStarts])
+        XCTAssertEqual(run.reminderOffsets("sensorExpiringIn2Hours"), [0], "the sensor expires 30 min after the start: one 2-hour notice")
+        XCTAssertTrue(run.reminderOffsets("sensorExpiringIn24Hours").isEmpty, "the 2-hour notice replaces the 24-hour one")
+        XCTAssertTrue(run.reminderOffsets("sensorExpiringIn12Hours").isEmpty, "the 2-hour notice replaces the 12-hour one (D43)")
+        // D43: the grace-start reminder is scheduled ahead for its moment.
+        XCTAssertEqual(run.reminderOffsets("sensorGracePeriod"), [graceStarts])
 
         XCTAssertEqual(run.recorder.firingOffsets["high"]?.min(), firstHigh)
         XCTAssertEqual(run.recorder.episodeStarts["high"], [run.date(firstHigh)], "the HIGH flags are the same high episode (S4)")
@@ -303,7 +314,9 @@ final class ReplayScenarioTests: XCTestCase {
         XCTAssertFalse(run.postedOffsets("high").contains { $0 < firstHigh || $0 >= backBelow })
 
         XCTAssertEqual(run.recorder.firingOffsets["sensorExpired"]?.min(), expired)
-        XCTAssertEqual(run.postedOffsets("sensorExpired"), [expired])
+        // D43: the expired reminder was scheduled for the grace end; when the sensor reports the end
+        // the alert plays its sound on that notification instead of posting a second one.
+        XCTAssertEqual(run.reminderOffsets("sensorExpired"), [expired])
         XCTAssertTrue(run.recorder.isFiring("sensorExpired", at: expired + 20 * 60), "the sensor alert stays until a new sensor")
         // D41: after the confirmed end the expired alert speaks; missed readings does not add to it,
         // although the last reading is now 25 minutes old (it would fire at +15 min otherwise).

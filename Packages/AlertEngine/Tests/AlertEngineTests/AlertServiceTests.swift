@@ -233,6 +233,7 @@ final class AlertServiceTests: XCTestCase {
     func test_executorDescribesEachPath() {
         XCTAssertEqual(AlertDeliveryExecutor.describe(DeliveryDecision(interruption: .passive, notificationSound: .none, inAppSound: nil)), "passive (quiet hours)")
         XCTAssertEqual(AlertDeliveryExecutor.describe(DeliveryDecision(interruption: .critical, notificationSound: .none, inAppSound: nil)), "critical")
+        XCTAssertEqual(AlertDeliveryExecutor.describe(DeliveryDecision(interruption: .active, notificationSound: .none, inAppSound: nil)), "active, no sound")
         XCTAssertEqual(AlertDeliveryExecutor.describe(DeliveryDecision(interruption: .timeSensitive, notificationSound: .none,
                                                                        inAppSound: InAppSound(fileName: "x", loopSeconds: 0))), "time-sensitive + in-app sound")
     }

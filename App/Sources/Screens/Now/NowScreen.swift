@@ -38,12 +38,19 @@ struct NowScreen: View {
     var clock: @MainActor () -> Date = { Date() }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 15)) { _ in
+        // Every 15 s, and exactly at the grace period's end (D43), so "Sensor expired" takes over
+        // the moment the countdown reaches zero.
+        TimelineView(NowRefreshSchedule(interval: 15, extraDates: graceEnd.map { [$0] } ?? [])) { _ in
             ScrollView {
-                NowContent(state: state, calibration: calibration, now: clock(), actions: actions)
+                NowContent(state: state, calibration: calibration, now: clock(), actions: actions, liveClock: clock)
             }
         }
         .editorialScreen()
+    }
+
+    private var graceEnd: Date? {
+        if case .gracePeriod(let endsAt) = state.sensorState { return endsAt }
+        return nil
     }
 }
 
@@ -53,6 +60,8 @@ struct NowContent: View {
     let now: Date
     let actions: NowActions
     var context: DisplayContext = .current
+    /// The running app's clock, for the live (1 s) grace countdown; nil renders it at `now`.
+    var liveClock: (@MainActor () -> Date)? = nil
     @State private var isMenuPresented = false
 
     var body: some View {
@@ -63,7 +72,7 @@ struct NowContent: View {
             if !banners.isEmpty {
                 VStack(spacing: 8) {
                     ForEach(banners) { banner in
-                        BannerView(banner: banner, perform: actions.performBannerAction)
+                        BannerView(banner: banner, perform: actions.performBannerAction, now: now, liveClock: liveClock)
                             .accessibilityIdentifier("banner.\(banner.kind)")
                     }
                 }
@@ -71,6 +80,9 @@ struct NowContent: View {
             NowHeroView(hero: NowHero.make(display, now: now, context: context, sensorStateKnown: state.sensorStateKnown), now: now,
                         pairSensor: actions.pairSensor, pairAgain: actions.pairAgain, calibrate: actions.openCalibration)
             stateLine(display)
+            if let end = GraceCountdown.end(sensorState: state.sensorState, now: now) {
+                GraceCountdownView(end: end, now: now, liveClock: liveClock, context: context)
+            }
             chartSection
             TodaySoFarView(today: state.today)
                 .accessibilityIdentifier("now.today")

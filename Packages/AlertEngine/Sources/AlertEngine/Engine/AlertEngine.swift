@@ -5,7 +5,8 @@
 // Split across files by concern:
 //   AlertEngine.swift                  inputs, the per-alert state machine, glucose alerts
 //   AlertEngine+MissedReadings.swift   the pre-scheduled missed-readings alert (S5)
-//   AlertEngine+Sensor.swift           sensor state, sensor announcements
+//   AlertEngine+Sensor.swift           sensor state, the warm-up announcement
+//   AlertEngine+ExpiryReminders.swift  the pre-scheduled sensor expiry reminders (D43)
 //   AlertEngine+User.swift             acknowledge / snooze / settings changes / launch
 //   AlertEngine+Clock.swift            repair after the phone clock moves backwards
 //   AlertEngine+Series.swift           pending repeats: a due or ringing one is never disturbed
@@ -40,6 +41,10 @@ public struct AlertEngine: Sendable {
         var s = stored
         s.episodes = s.episodes.filter { AlertKind(rawValue: $0.key) != nil }
         s.announcedSessionDates = s.announcedSessionDates.filter { AlertKind(rawValue: $0.key)?.isEventAlert == true }
+        if var plan = s.expiryPlan {
+            plan.reminders = plan.reminders.filter { AlertKind(rawValue: $0.key).map(AlertKind.sensorExpiryReminders.contains) == true }
+            s.expiryPlan = plan
+        }
         if s.missedReadingsReference == AlertEngineSnapshot.missingReference {
             s.missedReadingsReference = now
         }
@@ -90,6 +95,7 @@ public struct AlertEngine: Sendable {
                 return actions + [.readingRejected(readingID: reading.id, reason: rejection)]
             }
             accept(reading)
+            if let session { snapshot.knownSession = session }
         case .sensorState(let state):
             actions += receive(state, now: now)
         case .trioBridge(let status):
@@ -173,7 +179,7 @@ public struct AlertEngine: Sendable {
         actions += step(.trioBridge, StatusConditions.trioBridge(snapshot.bridgeStatus, now: now), now: now)
         actions += step(.storageFailing, StatusConditions.storageFailing(snapshot.storageHealth, now: now), now: now)
 
-        actions += announceExpiryAndGracePeriod(now: now)
+        actions += planExpiryReminders(now: now)
         return actions
     }
 
@@ -222,6 +228,7 @@ public struct AlertEngine: Sendable {
     }
 
     private mutating func fire(_ kind: AlertKind, now: Date) -> [AlertAction] {
+        if kind == .sensorExpired { return fireSensorExpired(now: now) }
         setEpisode(kind, .firing(AlertFiring(since: now, lastSoundedAt: now)))
         var actions: [AlertAction] = [.fire(makeNotice(kind, fireDate: nil, now: now))]
         if kind == .urgentLow {
@@ -309,7 +316,10 @@ public struct AlertEngine: Sendable {
             bridgeStatus: snapshot.bridgeStatus,
             storageHealth: snapshot.storageHealth,
             calendar: configuration.calendar,
-            locale: configuration.locale
+            locale: configuration.locale,
+            deliveredAt: deliveredAt,
+            sessionExpiresAt: snapshot.expiryPlan?.expiresAt,
+            graceEndsAt: snapshot.expiryPlan?.graceEndsAt
         )
         return AlertNotice(
             kind: kind,
@@ -320,7 +330,8 @@ public struct AlertEngine: Sendable {
             isSilenced: silenced,
             snoozeMinutes: settings.snoozeMinutes(kind),
             fireDate: fireDate,
-            slot: slot
+            slot: slot,
+            playsSound: kind == .urgentLow || settings.playsSound(kind)
         )
     }
 }

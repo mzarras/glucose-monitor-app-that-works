@@ -39,8 +39,13 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
     var bridgeStatus: TrioBridgeStatus = .off
     var storageHealth: StorageHealth = .ok
     /// One-off announcements already made: `AlertKind.rawValue` → the session date announced
-    /// (expiry, grace end or warm-up end). At most one entry per announcement kind.
+    /// (warm-up end; before D43 also expiry and grace end). At most one entry per announcement kind.
     var announcedSessionDates: [String: Date] = [:]
+    /// The session the latest accepted reading was authenticated to: the grace period's end, which
+    /// the active state does not carry (D43).
+    var knownSession: SensorSession?
+    /// The current session's expiry reminders (D43, AlertEngine+ExpiryReminders.swift).
+    var expiryPlan: ExpiryReminderPlan?
 
     init(start: Date) {
         missedReadingsReference = start
@@ -53,7 +58,7 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case episodes, latestLiveReading, lastValidReadingDate, missedReadingsReference
         case repeatSeries, latestNow, latestUptime, settledSensorState, lastReportedSensorState, bridgeStatus, storageHealth
-        case announcedSessionDates
+        case announcedSessionDates, knownSession, expiryPlan
     }
 
     private struct AnyKey: CodingKey {
@@ -85,6 +90,8 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
         bridgeStatus = (try? c.decodeIfPresent(TrioBridgeStatus.self, forKey: .bridgeStatus)) ?? .off
         storageHealth = (try? c.decodeIfPresent(StorageHealth.self, forKey: .storageHealth)) ?? .ok
         announcedSessionDates = (try? c.decodeIfPresent([String: Date].self, forKey: .announcedSessionDates)) ?? [:]
+        knownSession = (try? c.decodeIfPresent(SensorSession.self, forKey: .knownSession)) ?? nil
+        expiryPlan = (try? c.decodeIfPresent(ExpiryReminderPlan.self, forKey: .expiryPlan)) ?? nil
     }
 
     public func encoded() -> Data? {

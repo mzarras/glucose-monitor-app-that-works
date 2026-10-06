@@ -39,6 +39,7 @@ extension AlertKind {
         case .missedReadings: return "Missed readings"
         case .sensorWarmUpComplete: return "Warm-up complete"
         case .sensorExpiringIn24Hours: return "Sensor expires in 24 h"
+        case .sensorExpiringIn12Hours: return "Sensor expires in 12 h"
         case .sensorExpiringIn2Hours: return "Sensor expires in 2 h"
         case .sensorGracePeriod: return "Grace period started"
         case .sensorFailed: return "Sensor failed"
@@ -52,12 +53,13 @@ extension AlertKind {
     }
 
     var section: AlertSection {
+        if AlertKind.sensorExpiryReminders.contains(self) { return .expiryReminders }
         switch self {
         case .urgentLow, .urgentLowSoon, .low, .high, .fallingFast, .risingFast: return .glucose
         case .missedReadings, .bluetoothUnavailable, .trioBridge, .storageFailing: return .dataFlow
-        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod, .sensorFailed, .sensorError,
-             .calibrationNeeded, .sensorExpired:
-            return .sensor
+        case .sensorWarmUpComplete, .sensorFailed, .sensorError, .calibrationNeeded: return .sensor
+        case .sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod, .sensorExpired:
+            return .expiryReminders // listed in `sensorExpiryReminders`; kept for exhaustiveness
         }
     }
 }
@@ -66,6 +68,8 @@ enum AlertSection: String, CaseIterable, Sendable {
     case glucose = "GLUCOSE"
     case dataFlow = "READINGS & TRIO"
     case sensor = "SENSOR"
+    /// D43: 24 h, 12 h, 2 h, grace start, expired — in the order they come due.
+    case expiryReminders = "SENSOR EXPIRY REMINDERS"
 }
 
 /// A configurable threshold (HANDOFF §5 "Configurable" column). `allowed` is the `AlertLimits`
@@ -97,6 +101,9 @@ struct AlertRow: Equatable, Identifiable, Sendable {
     var delayMinutes: Int?
     /// Urgent low only: repeat an unacknowledged alert this often (HANDOFF §4.7).
     var repeatMinutes: Int?
+    /// D43: whether this one-off announcement plays its sound (off = a visible notification without
+    /// sound). Nil for alerts that always play theirs — urgent low among them (S7).
+    var playsSound: Bool? = nil
 
     var id: AlertKind { kind }
 
@@ -137,6 +144,14 @@ struct AlertsViewState: Equatable, Sendable {
     var quietHours: QuietHours
 
     func row(_ kind: AlertKind) -> AlertRow? { rows.first { $0.kind == kind } }
+
+    /// The rows of one section; the expiry reminders in the order they come due (D43).
+    func rows(in section: AlertSection) -> [AlertRow] {
+        let inSection = rows.filter { $0.kind.section == section }
+        guard section == .expiryReminders else { return inSection }
+        let order = AlertKind.sensorExpiryReminders
+        return inSection.sorted { (order.firstIndex(of: $0.kind) ?? .max) < (order.firstIndex(of: $1.kind) ?? .max) }
+    }
     func soundName(_ id: AlertSoundID) -> String {
         sounds.first { $0.id == id }?.name ?? AlertSoundCatalog.displayName(id)
     }
@@ -184,6 +199,12 @@ enum AlertsText {
     static func quietHoursSchedule(_ quietHours: QuietHours) -> String {
         "\(time(TimeOfDay(minuteOfDay: quietHours.startMinuteOfDay))) – \(time(TimeOfDay(minuteOfDay: quietHours.endMinuteOfDay)))"
     }
+
+    /// The expiry reminders' section note (D43).
+    static let expiryRemindersNote = "Reminders before the sensor's session ends, when the grace period starts, and when it has expired. They arrive even while the app is in the background."
+
+    /// "Sound" switch detail (D43).
+    static let playsSoundNote = "Off: the notification still appears, without a sound."
 
     /// "Sound on silent" row detail (D17).
     static let soundOnSilentNote = "Plays the alarm with the ringer switch off while the app is running. Otherwise the alert follows the ringer switch."

@@ -31,6 +31,20 @@ final class SilentAlertAudioTests: XCTestCase {
         XCTAssertEqual(player.outputVolume, 0.8, "the real media volume, so the volume warning still works")
     }
 
+    /// D43: an announcement whose sound is off is an `.active` notification without sound; the
+    /// silent adapter keeps the level.
+    func test_silentNotificationMapsTheActiveLevel() {
+        let notice = AlertNotice(
+            kind: .sensorExpiringIn24Hours, title: "Sensor expires in 24 h", body: "At 8:15 PM tomorrow", sound: .doorbell,
+            soundsOnSilent: false, isSilenced: false, snoozeMinutes: nil, fireDate: nil, playsSound: false
+        )
+        let decision = DeliveryPolicy.decide(for: notice, criticalAlertsEnabled: false, systemAlarmsAvailable: false, timing: .now)
+        XCTAssertEqual(decision.interruption, .active)
+        let content = SilentNotificationCenter.content(for: NotificationRequestBuilder.request(for: notice, decision: decision))
+        XCTAssertEqual(content.interruptionLevel, .active)
+        XCTAssertNil(content.sound)
+    }
+
     func test_silentNotificationKeepsEverythingButTheSound() {
         let notice = AlertNotice(
             kind: .urgentLow, title: "Urgent low", body: "49 mg/dL at 12:00", sound: .cascade, soundsOnSilent: true,
