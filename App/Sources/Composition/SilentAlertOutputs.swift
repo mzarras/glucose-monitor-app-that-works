@@ -71,6 +71,7 @@ final class SilentNotificationCenter: AlertNotificationCenter {
         content.userInfo = spec.userInfo
         switch spec.interruption {
         case .passive: content.interruptionLevel = .passive
+        case .active: content.interruptionLevel = .active // D43: an announcement whose sound is off
         case .timeSensitive: content.interruptionLevel = .timeSensitive
         case .critical: content.interruptionLevel = .critical
         }

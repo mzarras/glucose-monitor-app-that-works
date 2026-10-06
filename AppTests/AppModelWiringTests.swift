@@ -617,6 +617,26 @@ final class AppModelWiringTests: XCTestCase {
         XCTAssertEqual(OnboardingMapping.pairing(current: .inProgress, sensorState: .expired, sawConnectionStep: false), .inProgress)
     }
 
+    /// Review m3 hardening: a sensor that becomes stored while the pairing is on its way proves the
+    /// sensor answered, even with no connection step reported — the step can't stay "in progress".
+    func test_onboardingPairingCountsANewlyStoredSensorAsAConnection() async {
+        let services = PreviewAppServices(sensorState: .notPaired)
+        let model = launch(services, onboardingCompleted: false)
+        model.goToOnboardingStep(.pairing)
+        // The code is submitted; the source then reports a sensor state without a connection step
+        // (here before the facade's own pairing call has even run, so nothing reports `.searching`).
+        model.pairNewSensor(code: "1234")
+        services.sensorState = .warmingUp(endsAt: minutes(30))
+        model.apply(.sensor)
+        XCTAssertEqual(model.onboarding?.pairing, .inProgress, "no connection step and nothing stored yet")
+        services.hasStoredSensor = true
+        model.apply(.sensor)
+        XCTAssertEqual(model.onboarding?.pairing, .paired)
+        XCTAssertFalse(model.settings.sensor.pairingInProgress)
+        await model.settle()
+        XCTAssertEqual(model.onboarding?.pairing, .paired, "stays paired")
+    }
+
     // MARK: - Onboarding
 
     func test_onboardingShowsOnlyWithoutASensor() {

@@ -24,6 +24,8 @@ enum AlertEdit: Equatable, Sendable {
     case delay(AlertKind, Int)
     /// Urgent low: repeat interval, minutes.
     case repeatInterval(AlertKind, Int)
+    /// D43: a one-off announcement's sound on or off (the engine refuses it for every other alert).
+    case playsSound(AlertKind, Bool)
     case quietHours(QuietHours)
 }
 
@@ -46,7 +48,9 @@ enum AlertsMapping {
             soundOnSilent: settings.soundsOnSilent(kind),
             snoozeMinutes: settings.snoozeMinutes(kind),
             delayMinutes: nil,
-            repeatMinutes: nil
+            repeatMinutes: nil,
+            // Only the one-off announcements can be silent (`setPlaysSound` refuses the rest, S7).
+            playsSound: kind.isEventAlert ? settings.playsSound(kind) : nil
         )
         switch kind {
         case .urgentLow:
@@ -65,8 +69,8 @@ enum AlertsMapping {
             row.threshold = .rate(mgdlPerMinute: settings.risingFast.thresholdMgdlPerMinute, allowed: AlertLimits.rateThresholdMgdlPerMinute)
         case .missedReadings:
             row.threshold = .window(minutes: settings.missedReadings.windowMinutes, allowed: AlertLimits.missedReadingsWindowMinutes)
-        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod, .sensorFailed, .sensorError,
-             .calibrationNeeded, .sensorExpired, .bluetoothUnavailable, .trioBridge, .storageFailing:
+        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod,
+             .sensorFailed, .sensorError, .calibrationNeeded, .sensorExpired, .bluetoothUnavailable, .trioBridge, .storageFailing:
             break
         }
         return row
@@ -104,6 +108,8 @@ enum AlertsMapping {
             if kind == .high { s.high.delayMinutes = minutes }
         case .repeatInterval(let kind, let minutes):
             if kind == .urgentLow { s.urgentLow.repeatMinutes = minutes }
+        case .playsSound(let kind, let on):
+            s.setPlaysSound(on, for: kind) // refuses everything but the one-off announcements
         case .quietHours(let quietHours):
             s.quietHours = quietHours
         }
@@ -127,7 +133,7 @@ enum AlertsMapping {
         case .bluetoothUnavailable: s.bluetoothUnavailable.snoozeMinutes = minutes
         case .trioBridge: s.trioBridge.snoozeMinutes = minutes
         case .storageFailing: s.storageFailing.snoozeMinutes = minutes
-        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod:
+        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod:
             break
         }
     }

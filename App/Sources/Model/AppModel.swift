@@ -411,8 +411,12 @@ final class AppModel {
     private func refreshSensor(_ time: Date) {
         guard let services else { return }
         let state = services.sensorState
+        let wasStored = hasStoredSensor
         hasStoredSensor = services.hasStoredSensor
         if hasStoredSensor { sensorStateKnown = true }
+        // Review m3 hardening: a sensor that became stored while a pairing was on its way is proof
+        // the sensor answered this pairing, even if no connection step was reported.
+        if pairingInProgress, !wasStored, hasStoredSensor { pairingSawConnectionStep = true }
         now.sensorStateKnown = sensorStateKnown
         now.sensorState = state
         now.sensorSession = services.sensorSession
