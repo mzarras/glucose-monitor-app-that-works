@@ -210,10 +210,11 @@ final class LaunchReviewRegressionTests: XCTestCase {
 
     // MARK: - m5: a launch hold is bounded and visible
 
-    /// Held back at launch (not newer than the App Group's newest), a reading is written at the
-    /// latest after `TrioCoordinator.maximumHoldTime`, on the next publish or retry; while held it
-    /// is shown in the summary.
-    func test_S5_trioLaunchHoldIsReleasedAfterTwoMinutes() async {
+    /// Phase 3 carry-over (supersedes the 2-minute release): a reading held back at launch (not newer
+    /// than the App Group's newest) is never written on its own — not after 2 minutes, not on a retry,
+    /// not when the store fails to open — so Trio's newest never moves backwards. It goes out with
+    /// the next newer reading. While held it is shown in the summary.
+    func test_S5_trioHeldReadingsNeverMoveTrioBackwardsAndGoOutWithTheNextNewerReading() async {
         let store = RecordingTrioStore()
         let clock = PipelineTestClock(PipelineFixtures.start)
         let newestBefore = PipelineFixtures.reading(.mgdl(121), at: PipelineFixtures.start.addingTimeInterval(-300))
@@ -227,12 +228,18 @@ final class LaunchReviewRegressionTests: XCTestCase {
         await relaunched.publish([older], session: PipelineFixtures.session)
         XCTAssertEqual(relaunched.summary.heldBackReadings, 1)
         XCTAssertEqual(relaunched.summary.heldBackSince, PipelineFixtures.start)
-        await relaunched.retry(session: PipelineFixtures.session)
-        XCTAssertEqual(store.payload.compactMap { $0["Value"] as? Int }, [121], "still held within the first 2 minutes")
 
-        clock.advance(by: TrioCoordinator.maximumHoldTime)
+        clock.advance(by: 10 * 60)
         await relaunched.retry(session: PipelineFixtures.session)
-        XCTAssertTrue(store.payload.compactMap { $0["Value"] as? Int }.contains(118), "released after 2 minutes")
+        let anotherOlder = PipelineFixtures.reading(.mgdl(119), at: PipelineFixtures.start.addingTimeInterval(-600), backfill: true)
+        await relaunched.publish([anotherOlder], session: PipelineFixtures.session)
+        XCTAssertEqual(store.payload.compactMap { $0["Value"] as? Int }, [121], "held readings are never written on their own")
+        XCTAssertEqual(relaunched.summary.heldBackReadings, 2)
+
+        let newer = PipelineFixtures.reading(.mgdl(123), at: PipelineFixtures.start.addingTimeInterval(10 * 60))
+        clock.set(newer.date.addingTimeInterval(5))
+        await relaunched.publish([newer], session: PipelineFixtures.session)
+        XCTAssertEqual(store.payload.compactMap { $0["Value"] as? Int }, [123, 119, 118], "they go out with the next newer reading")
         XCTAssertEqual(relaunched.summary.heldBackReadings, 0)
         XCTAssertNil(relaunched.summary.heldBackSince)
     }

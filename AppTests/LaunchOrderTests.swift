@@ -134,6 +134,33 @@ final class LaunchOrderTests: XCTestCase {
 
     // MARK: - A failed open is surfaced
 
+    /// A wake after a failed open retries it. While the retry runs the failure stays visible
+    /// ("opening" has no banner, S5); it clears when the retry succeeds.
+    func test_S5_aRetriedOpenKeepsTheFailureVisibleUntilItSucceeds() async throws {
+        let now = Date()
+        let attempts = CallCounter()
+        let gate = OpenGate()
+        let launch = try await makeLaunch(now: now) { url, diagnostics in
+            if attempts.next() == 1 { throw FlakyRepository.DiskFull() }
+            await gate.wait()
+            return try await GlucoseStore.production(at: url, diagnostics: diagnostics)
+        }
+        let services = launch.services
+        await services.bootstrap()
+        guard case .failed = services.storage.availability else {
+            return XCTFail("the failed open must be surfaced: \(services.storage.availability)")
+        }
+
+        launch.sensor.deliver(state: .active(sessionStart: launch.session.start, expiresAt: launch.session.expiresAt))
+        await waitUntil("the wake retries the open") { attempts.value >= 2 }
+        guard case .failed = services.storage.availability else {
+            return XCTFail("the failure stays visible while the retry runs: \(services.storage.availability)")
+        }
+        await gate.open()
+        await waitUntil("open") { services.productionStore != nil }
+        XCTAssertEqual(services.storage.availability, .open)
+    }
+
     func test_S5_failedStoreOpenRaisesTheStorageAlertAndKeepsThePersistedLatch() async throws {
         let now = Date()
         let latched = now.addingTimeInterval(-600)
@@ -292,6 +319,16 @@ private extension Date {
 }
 
 /// Holds the production database's opening until the test opens the gate.
+/// Counts calls from any thread.
+final class CallCounter: @unchecked Sendable {
+    // @unchecked Sendable: `count` is only read and written while holding `lock`.
+    private let lock = NSLock()
+    private var count = 0
+    /// Counts this call and returns its number (1 for the first).
+    func next() -> Int { lock.withLock { count += 1; return count } }
+    var value: Int { lock.withLock { count } }
+}
+
 actor OpenGate {
     private var isOpen = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -343,14 +380,69 @@ final class ScriptedSensorDevice: SensorDevice, @unchecked Sendable {
         get async { lock.withLock { session } }
     }
 
-    func start(pairingCode: String?) async throws {}
+    private var starts = 0
+    private var failsToStart = false
+    /// How many times `start(pairingCode:)` was called (a relaunch, the first unlock).
+    var startCount: Int { lock.withLock { starts } }
+    /// True: `start` fails as G7Kit's does before the first unlock (pairing record unreadable).
+    var startFails: Bool {
+        get { lock.withLock { failsToStart } }
+        set { lock.withLock { failsToStart = newValue } }
+    }
+
+    func start(pairingCode: String?) async throws {
+        let fails = lock.withLock { () -> Bool in
+            starts += 1
+            return failsToStart
+        }
+        if fails { throw G7StartError.credentialStoreFailed("Keychain unavailable before the first unlock") }
+    }
     func stop() async {}
-    func pair(code: String) async throws {}
-    func pairAgain(code: String) async throws {}
+    func pair(code: String) async throws {
+        if lock.withLock({ currentMode == .listen }) { throw G7StartError.notAvailableInListenMode }
+    }
+    func pairAgain(code: String) async throws {
+        if lock.withLock({ currentMode == .listen }) { throw G7StartError.notAvailableInListenMode }
+    }
     func forgetSensor() async {}
     var heartbeatTarget: G7HeartbeatTarget? { get async { nil } }
     var hasStoredSensor: Bool { get async { true } }
     var storedSensorSerial: String? { get async { PipelineFixtures.serial } }
+
+    // D45 / D47 / audit m1, recorded.
+    private var currentMode: G7ConnectionMode = .primary(slot: .recommendedDefault)
+    private var modeChanges: [G7ConnectionMode] = []
+    private var failsToSetMode = false
+    private var recording: [Bool] = []
+    private var floors: [(reading: GlucoseReading?, serial: String)] = []
+
+    /// Starts in `mode` (what `G7Configuration.mode` would say).
+    func configure(mode: G7ConnectionMode) { lock.withLock { currentMode = mode } }
+    var mode: G7ConnectionMode { get async { lock.withLock { currentMode } } }
+    /// Every successful `setMode`, in order.
+    var modeHistory: [G7ConnectionMode] { lock.withLock { modeChanges } }
+    /// True: `setMode` fails as G7Kit's does when the stored pairing cannot be deleted.
+    var setModeFails: Bool {
+        get { lock.withLock { failsToSetMode } }
+        set { lock.withLock { failsToSetMode = newValue } }
+    }
+    func setMode(_ mode: G7ConnectionMode) async throws {
+        let fails = lock.withLock { failsToSetMode }
+        if fails { throw G7StartError.credentialStoreFailed("Keychain unavailable") }
+        lock.withLock {
+            currentMode = mode
+            modeChanges.append(mode)
+        }
+        deliver(state: mode == .listen ? .searching : .notPaired)
+    }
+    var supportsCalibration: Bool { get async { lock.withLock { currentMode != .listen } } }
+    var recordingChanges: [Bool] { lock.withLock { recording } }
+    func setRecordsRawGlucosePackets(_ enabled: Bool) async { lock.withLock { recording.append(enabled) } }
+    /// Every `setLatestStoredReading` call, in order.
+    var latestStoredReadingCalls: [(reading: GlucoseReading?, serial: String)] { lock.withLock { floors } }
+    func setLatestStoredReading(_ reading: GlucoseReading?, forSerial serial: String) async {
+        lock.withLock { floors.append((reading, serial)) }
+    }
     var acceptedCalibrationRange: ClosedRange<Int> { 40...400 }
     func submitCalibration(_ request: CalibrationRequest) async throws(CalibrationRefusal) {}
 

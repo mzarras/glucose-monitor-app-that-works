@@ -24,7 +24,7 @@ Exactly one of each, for the whole process:
 | Object | Built with | Notes |
 |---|---|---|
 | `RingBufferDiagnosticLog` | 5 000 events, saved to `Application Support/Diagnostics/diagnostics.json` | every module logs here; "Export diagnostics" writes it as text |
-| `G7CGMSource` | restore id `com.mzarras.sensor.g7kit.central`, `G7KeychainCredentialStore` | created first, during `willFinishLaunching` (CoreBluetooth state restoration) |
+| `G7CGMSource` | restore id `com.mzarras.sensor.g7kit.central`, `G7KeychainCredentialStore`, the saved mode and raw-packet recording from `Application Support/SensorConnection.json` (D45, D47) | created first, during `willFinishLaunching` (CoreBluetooth state restoration) |
 | `GlucoseStore` (production) | `Application Support/GlucoseStore/readings.sqlite` (D25) | opened at bootstrap, after protected data is available |
 | `AlertService` | `UserNotificationCenterAdapter`, `PlaybackAlertAudioPlayer`, `SystemAlarmAdapter(makeStopIntent: StopUrgentLowAlarmIntent)`, persisted `AlertSettings` + `AlertEngineSnapshot` | one at a time: the production one, or a DEBUG replay one |
 | `TrioBridge` (in `TrioCoordinator`) | `AppGroupUserDefaultsStore(Info.plist TrioAppGroupID)`, `OutOfRangePolicy(low: .writeSentinel, high: .writeSentinel)` (D21) | nil when the build has no `TrioAppGroupID` |
@@ -32,6 +32,14 @@ Exactly one of each, for the whole process:
 | `WidgetSnapshotPublisher` (in `LiveWidgetPublisher`) | App Group `group.com.mzarras.sensor` | nil when the App Group is unavailable (logged) |
 | History importers | on demand, `UserDefaultsNightscoutImportCheckpointStore` | write to the production store only (S6) |
 | `LiveAppServices` | all of the above | the `AppServices` the UI gets |
+
+**Upload queues live in Application Support, not in an App Group (D48).** Each destination's queue is
+one file in the app's own container, `Application Support/Uploads/` (`AppEnvironment.makeUploads`). Only
+the app process uploads, so nothing else needs the queues: the widget reads only its snapshot from
+`group.com.mzarras.sensor`, and Trio's App Group carries only `latestReadings` and the heartbeat keys,
+both written by this app for Trio. Keeping the queues out of a shared container keeps queued health
+data away from other processes and means `QueueFileInUse` (one uploader per file, same process) is the
+only coordination they need. The Phase 2 must-do that named an App Group for them is superseded.
 
 A unit-test host (DEBUG, `XCTestConfigurationFilePath` set) gets an inert `PreviewAppServices`:
 tests build their own pipelines. `-replayScenario <name>` starts a DEBUG replay run at launch.
@@ -129,9 +137,9 @@ checked, Trio is re-seeded with the last 5 h of stored sensor readings, retentio
 backfill the App Group already holds. So until the re-seed, readings not newer than the newest reading
 the App Group held when this process started are kept back (`TrioCoordinator`), and written with the
 first newer reading or by the re-seed — the first write never moves Trio's newest reading backwards.
-Nothing is written that did not pass the gate in this process. The hold is bounded (review m5): an App
-Group newest dated in the future is ignored; held readings go out when the store open fails, and at
-the latest after 2 minutes (`TrioCoordinator.maximumHoldTime`, on the next publish or retry); while
+Nothing is written that did not pass the gate in this process, and held readings are never written on
+their own (Phase 3 carry-over: an earlier 2-minute release could move Trio's newest backwards in a slow
+or failed open). An App Group newest dated in the future is ignored (review m5); while readings are
 held they are shown in the summary (`heldBackReadings`) and, held for 15 minutes, count as starving
 Trio (the Trio bridge alert).
 
@@ -164,6 +172,31 @@ checked once the store's open has succeeded or failed (not while it is opening),
 reading leaves it (and the last clock record) untouched — nil means "not known yet", not "no reading"
 (review B1) — and only a newer reading clears it (review m4).
 
+## Sensor connection mode (D45 listen mode, D47 raw packet recording)
+
+`connectionMode` is `.pair` (primary: this app pairs with the code and owns the connection) or
+`.listen` (it observes the Dexcom app's authenticated connection on the same phone: no pairing, no
+writes to the sensor, no calibration, no backfill). The mode and the D47 recording switch are saved in
+`Application Support/SensorConnection.json` (`SensorConnectionSettingsStore`), **not** in
+UserDefaults: CoreBluetooth often relaunches the app before the first unlock after a reboot, when the
+preferences read as their defaults, and G7Kit deletes a stored pairing that belongs to the other mode.
+The file has no file protection (`.noFileProtection`; it holds a mode and a flag), so the G7 source
+is always created in the mode it was left in.
+
+`setConnectionMode(_:)` saves the new mode first, then calls `G7CGMSource.setMode` (stop, drop the old
+mode's pairing and session, report `.notPaired`/`.searching`); if G7Kit refuses, the saved mode is put
+back and nothing changed. Listen mode is then started with `start(pairingCode: nil)`; pairing mode
+waits for `pair(code:)`. In listen mode `pair`/`pairAgain` throw `.notAvailableInListenMode`.
+
+**While listening, the Trio handoff and both uploaders are off in the services**, whatever their
+switches say: `TrioCoordinator.activeBridge` is nil, so nothing is written to Trio's App Group (no
+readings, no heartbeat keys, no removals — also not when the switch is turned off), and
+`UploadCoordinator` creates no uploader, so nothing is queued. The summaries carry
+`offWhileListening` (the facade also has `sharingOffWhileListening`); no Trio alert, no upload failure.
+Trio and the Dexcom app keep their own paths, so nothing is duplicated. Readings are still gated,
+stored, shown and alerted on. Proven by `ListenModeServicesTests` (`test_S6_listenModeWritesNothingToTriosAppGroup`,
+`test_S6_listenModeQueuesNothingForUpload`, the switching and relaunch tests).
+
 ## DEBUG replay (D11, D19, D20)
 
 `startReplay` (or `-replayScenario <name>` [`-replaySpeed <x>`] [`-replayStartMinute <m>`]) builds a
@@ -187,9 +220,16 @@ exists in Release.
 | S3 dedupe / timestamps | Only readings `insert` returns go further, so a re-delivery or backfill copy is published once; backfill keeps its flag and date | `test_S3_redeliveredReadingIsPublishedOnce`, `ReplayScenarioTests.test_signalGapWithBackfill_…` |
 | S4 LOW/HIGH | Flags pass through untouched; Trio gets 39/401 only through the D21 policy line in `TrioCoordinator` | `ReplayScenarioTests` (LOW/HIGH scenarios), TrioBridge's own `test_S4_*` |
 | S5 fail loud | Held readings and store failures in `storage.availability`; a failing store keeps alerts and Trio fed and raises the storage-failure alert (D42); every drain attempt ticks the alert engine; Trio failures/starvation, or the bridge on in a build without a Trio App Group → Trio bridge alert; uploader `QueueFileInUse` → setup error, retried, and the pipeline follows the replacement; force-quit gap; missed readings in replay | `test_S5_failingStoreStillAlarmsUrgentLowAndFeedsTrio`, `test_S5_storeClosedStillTicksAlerts`, `test_S5_storeClosedBeforeFirstUnlockSurfacesAndRecovers`, `test_S5_pipelineUploadsThroughAReplacedUploader`, `test_S5_trioBridgeOnWithoutAnAppGroupIsFailing`, `test_S5_forceQuitGapIsReportedOnlyForASilenceWithAnActiveSensor`, `ReplayScenarioTests` |
-| S6 live data only | Importers write to the store only; the pipeline gate refuses non-sensor readings (replay only in a DEBUG replay run, for alerts); Trio/uploads off in DEBUG without the developer switch, and refusing replay with it | `test_S6_importedReadingsNeverReachConsumers`, `test_S6_replayNeverReachesTrioOrUploads`, `test_S6_trioBridgeIsNotAttachedWithoutLiveOutputsAllowed`, `test_S6_uploadersAreNotCreatedWithoutLiveOutputsAllowed` |
+| S6 live data only | Importers write to the store only; the pipeline gate refuses non-sensor readings (replay only in a DEBUG replay run, for alerts); Trio/uploads off in DEBUG without the developer switch, and refusing replay with it; Trio/uploads off while listening (D45) | `test_S6_listenModeWritesNothingToTriosAppGroup`, `test_S6_listenModeQueuesNothingForUpload`, `test_S6_importedReadingsNeverReachConsumers`, `test_S6_replayNeverReachesTrioOrUploads`, `test_S6_trioBridgeIsNotAttachedWithoutLiveOutputsAllowed`, `test_S6_uploadersAreNotCreatedWithoutLiveOutputsAllowed` |
 | S7 urgent low | Settings go through `AlertSettings` (no off switch, snooze ≤ 30); the AlarmKit Stop intent acknowledges through the engine (`AlarmIntentRouting`) | `AlarmStopIntentTests.test_S7_alarmStopIntentAcknowledgesUrgentLowForAtMost30Minutes`, `ReplayScenarioTests.test_slowFallToUrgentLow_…` (repeats until acknowledged, silent only for its snooze), AlertEngine's `test_S7_*` |
 | S8 auditable | Small files per concern; the order of every step written in the file headers | — |
+
+## Failure modes
+
+Each failure mode (system kill and Bluetooth relaunch, Bluetooth off or unauthorized, permissions
+denied or revoked, reboot before the first unlock, disk full, clock changes, time zones and DST,
+force-quit) — what the person sees, what alerts, what Trio and uploads get, and the test that proves
+it — is in `docs/failure-modes.md`.
 
 ## Known limits (for the on-device checks, HANDOFF §11)
 
@@ -199,9 +239,15 @@ exists in Release.
   no alert service. Notifications scheduled before the reboot (urgent-low repeats, missed readings)
   are still delivered by iOS. Unlocking once restores everything (bootstrap, store, G7 restart).
 - **Readings waiting for a failing store live in memory only (D42).** If iOS terminates the app before
-  the store recovers, they are lost from history (alerts and Trio already had them). G7Kit decides
-  what the sensor backfills from its own persisted newest-published mark; it exposes no hook to base
-  backfill on the latest *stored* reading (Phase 2 must-do), so such readings are not re-requested.
+  the store recovers, they are lost from history (alerts and Trio already had them). Audit m1: the app
+  gives G7Kit a *publication floor*, the newest reading durably stored for its sensor
+  (`G7CGMSource.setLatestStoredReading(_:forSerial:)`; nil when none of that sensor's is stored) — when
+  the store opens at launch, after every successful store write of sensor readings, and when the
+  stored sensor changes (`LiveAppServices.updateG7StoredFloor`). Backfill records the sensor sends
+  above the floor are published again with the same id and date (`isBackfill`), and the store's dedupe
+  keeps one copy (`ListenModeServicesTests.test_S5_backfillFloorIsTheLatestStoredReadingAfterHeldReadingsWereLost`).
+  The G7 has no backfill request: it decides which records it sends, so only readings it backfills
+  again are recovered (docs/g7-protocol.md §5.6); listen mode has no backfill at all.
   Up to 10 000 distinct readings wait (a re-delivered reading is held once); beyond that the oldest
   are dropped, loudly.
 - The simulator Keychain needs a signed host: `scripts/check.sh` signs simulator test runs ad hoc

@@ -2,6 +2,11 @@
 //
 // Migrations are append-only: never edit or reorder a migration once it has shipped, because a
 // device that already ran it will not run it again. Add a new `registerMigration` call instead.
+//
+// Never VACUUM without reconsidering: equal-date ordering depends on rowid. `reading` is a rowid
+// table and every equal-date query orders by `date, rowid` (insertion order). VACUUM may renumber
+// the rowids of a table without an INTEGER PRIMARY KEY, which would silently reorder readings
+// that share a date. The same applies to any rebuild that copies rows without `ORDER BY rowid`.
 
 import GRDB
 

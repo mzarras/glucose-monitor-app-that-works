@@ -28,6 +28,9 @@ final class UploadCoordinator {
         var shareHasCredentials: Bool
         /// D20: false in a DEBUG build unless the developer switch is on.
         var liveOutputsAllowed: Bool
+        /// D45: the sensor is in listen mode. No uploader exists then (nothing is queued; the Dexcom
+        /// app keeps its own uploads), whatever the switches say.
+        var listening = false
     }
 
     private(set) var nightscoutSummary = UploaderSummary.off
@@ -93,12 +96,14 @@ final class UploadCoordinator {
         nightscoutSummary.isEnabled = configuration.nightscoutEnabled
         nightscoutSummary.isConfigured = configuration.nightscoutSite != nil && configuration.nightscoutHasToken
         nightscoutSummary.liveOutputsAllowed = configuration.liveOutputsAllowed
+        nightscoutSummary.offWhileListening = configuration.listening
         shareSummary.isEnabled = configuration.shareEnabled
         shareSummary.isConfigured = configuration.shareReceiverSerial != nil && configuration.shareHasCredentials
         shareSummary.liveOutputsAllowed = configuration.liveOutputsAllowed
+        shareSummary.offWhileListening = configuration.listening
 
         // Nightscout: needs a site; a missing token fails loudly at upload time (S5).
-        let nightscoutIdentity = configuration.nightscoutEnabled && configuration.liveOutputsAllowed
+        let nightscoutIdentity = configuration.nightscoutEnabled && configuration.liveOutputsAllowed && !configuration.listening
             ? configuration.nightscoutSite.map { "nightscout|\($0.baseURL.absoluteString)" } : nil
         if nightscoutIdentity != nightscout?.identity {
             await release(.nightscout)
@@ -123,7 +128,7 @@ final class UploadCoordinator {
         }
 
         // Dexcom Share: needs the receiver serial number; missing credentials fail loudly (S5).
-        let shareIdentity = configuration.shareEnabled && configuration.liveOutputsAllowed
+        let shareIdentity = configuration.shareEnabled && configuration.liveOutputsAllowed && !configuration.listening
             ? configuration.shareReceiverSerial.map { "share|\(configuration.shareRegion.rawValue)|\($0)" } : nil
         if shareIdentity != share?.identity {
             await release(.share)

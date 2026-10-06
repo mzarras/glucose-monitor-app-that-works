@@ -17,11 +17,12 @@ import XCTest
 final class ReplayLaunchUITests: XCTestCase {
     private let timeout: TimeInterval = 30
 
-    /// Launches the app with `arguments` and, always, `-silenceAlertAudio`.
+    /// Launches the app with `arguments` and, always, `-silenceAlertAudio`; on the Now tab unless
+    /// `arguments` pick one (the app restores the last tab across launches).
     private func launchApp(_ arguments: [String]) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["-silenceAlertAudio"] + arguments
+        app.launchArguments = ["-silenceAlertAudio"] + (arguments.contains("-tab") ? [] : ["-tab", "now"]) + arguments
         app.launch()
         return app
     }

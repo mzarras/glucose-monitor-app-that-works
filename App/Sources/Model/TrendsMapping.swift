@@ -128,7 +128,7 @@ enum TrendsMapping {
             let points = sorted
                 .filter { $0.date >= start && $0.date < end && seen.insert($0.id).inserted }
                 .map(ChartPoint.init)
-            return DayTrace(dayStart: start, isToday: offset == 0, points: points)
+            return DayTrace(dayStart: start, isToday: offset == 0, points: points, timeZone: calendar.timeZone)
         }
     }
 

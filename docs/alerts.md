@@ -701,11 +701,12 @@ The host tests prove the decisions; these need the phone:
    change the time by hand **during an urgent-low snooze** (e.g. back 24 minutes, 25 minutes in): urgent
    low must sound again within 30 real minutes. Also confirm `CLOCK_MONOTONIC_RAW` keeps counting
    through a locked, sleeping phone, and that `kern.bootsessionuuid` is readable by the app on the
-   phone (the app logs `SystemAlertClock().uptime?.boot` at launch): if it is not, the
-   partial-rollback check without an intervening input is inactive and only the latest-wall-clock
-   fallback applies. The clock change during a snooze cannot be staged with a replay run (the replay
-   service has no monotonic clock): it needs a real urgent low, or is not stageable. With D44,
-   urgent low also re-alarms at once when the rollback is detected.
+   phone: in Settings tap Export diagnostics and look for the line `[alert] monotonic clock: … boot session …`
+   that every launch logs (`LiveAppServices.logMonotonicClock`, `SystemAlertClock().uptime`). If it says
+   "boot session unreadable", the partial-rollback check without an intervening input is inactive and only
+   the latest-wall-clock fallback applies. The clock change during a snooze cannot be staged with a replay
+   run (the replay service has no monotonic clock): it needs a real urgent low, or is not stageable. With
+   D44, urgent low also re-alarms at once when the rollback is detected.
 6. Media volume at zero: Settings shows the warning; the notification sound still plays with the ringer on.
 7. Expiry reminders (D43), e.g. with a sensor near its end or a replay session: each arrives on time
    with the app suspended and after a force-quit; the 24-hour one appears on the lock screen with no

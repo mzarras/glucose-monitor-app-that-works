@@ -51,10 +51,22 @@ final class LiveAppServices: AppServices {
         var clock: @Sendable () -> Date = { Date() }
         /// The monotonic clock with its boot (clock-fault detection); nil where it does not apply.
         var uptime: @MainActor () -> Uptime? = { SystemAlertClock().uptime }
+        /// Whether protected data (Keychain `AfterFirstUnlock`, files `completeUntilFirstUserAuthentication`)
+        /// is readable — false before the first unlock after a reboot; tests simulate that.
+        var isProtectedDataAvailable: @MainActor () -> Bool = { UIApplication.shared.isProtectedDataAvailable }
         /// Opens the production database; tests delay it or make it fail.
         var openStore: @Sendable (URL, any DiagnosticLog) async throws -> GlucoseStore = { url, diagnostics in
             try await GlucoseStore.production(at: url, diagnostics: diagnostics)
         }
+        /// The foreground ticker's period (drain attempt, Trio retry, heartbeat, clock check); tests
+        /// shorten it.
+        var foregroundTickInterval: Duration = .seconds(60)
+        /// D45/D47: the sensor connection settings file the G7 source was created with
+        /// (`SensorConnectionSettings`; production: Application Support/SensorConnection.json).
+        /// The default, a file in a fresh temporary directory, is for tests.
+        var connectionSettings = SensorConnectionSettingsStore(
+            fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("SensorConnection-\(UUID().uuidString).json")
+        )
     }
 
     struct LaunchReplay: Equatable {
@@ -80,6 +92,9 @@ final class LiveAppServices: AppServices {
     let now: @Sendable () -> Date
     let uptime: @MainActor () -> Uptime?
     private let openStore: @Sendable (URL, any DiagnosticLog) async throws -> GlucoseStore
+    private let protectedDataAvailable: @MainActor () -> Bool
+    private let foregroundTickInterval: Duration
+    let connectionSettingsStore: SensorConnectionSettingsStore
     let historyImports: HistoryImportCoordinator
 
     /// The G7 pipeline, for the whole process.
@@ -121,7 +136,14 @@ final class LiveAppServices: AppServices {
     var storage = StorageStatus(availability: .opening, summary: nil, retention: .default, lastPurgeAt: nil, lastPurgeRemoved: 0)
     private(set) var accent = AccentChoice.default
     private(set) var hasStoredSensor = false
+    /// False until the first `refreshStoredSensor` after bootstrap has read the source (B's onboarding
+    /// baseline for "a sensor is stored now that was not before").
+    private(set) var storedSensorKnown = false
     private(set) var storedSensorSerial: String?
+    /// D45/D47, as saved (and as the G7 source was created with at launch).
+    var connectionSettings = SensorConnectionSettings.defaults
+    /// False in listen mode (calibrate in the Dexcom app); read from the source.
+    var supportsCalibration = true
     var nightscoutHasToken = false
     var shareAccountName: String?
     var shareHasPassword = false
@@ -141,6 +163,12 @@ final class LiveAppServices: AppServices {
         now = dependencies.clock
         uptime = dependencies.uptime
         openStore = dependencies.openStore
+        protectedDataAvailable = dependencies.isProtectedDataAvailable
+        foregroundTickInterval = dependencies.foregroundTickInterval
+        connectionSettingsStore = dependencies.connectionSettings
+        let loaded = dependencies.connectionSettings.load()
+        connectionSettings = loaded.settings
+        supportsCalibration = loaded.settings.mode != .listen
         historyImports = HistoryImportCoordinator(diagnostics: dependencies.diagnostics)
         sensorPipeline = ReadingPipeline(name: "sensor", source: dependencies.g7, diagnostics: dependencies.diagnostics, now: dependencies.clock)
         // B1: no widget snapshot until the store is open — before that the latest reading is
@@ -155,6 +183,10 @@ final class LiveAppServices: AppServices {
             }
         }
         sensorPipeline.onBatchProcessed = { [weak self] in self?.sensorBatchProcessed() }
+        // Audit m1: G7Kit's publication floor follows every successful store write.
+        sensorPipeline.outputs.readingsStored = { [weak self] _ in
+            Task { await self?.updateG7StoredFloor() }
+        }
         sensorPipeline.outputs.sensorStateProcessed = { [weak self] _ in
             Task {
                 await self?.refreshStoredSensor()
@@ -174,11 +206,19 @@ final class LiveAppServices: AppServices {
         protectedDataObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
         ) { [weak self] _ in
+            // assumeIsolated is sound here: `queue: .main` makes NotificationCenter run this block
+            // on OperationQueue.main, i.e. the main thread, whoever posts the notification (UIKit
+            // posts it on the main thread anyway). The block's type is not @MainActor, so the
+            // compiler cannot see that; assumeIsolated states it and traps if it is ever wrong
+            // (e.g. someone changes `queue:` to nil), rather than racing silently.
             MainActor.assumeIsolated {
                 self?.protectedDataDidBecomeAvailable()
             }
         }
-        log(.app, "launch: G7 source created (restore id \(G7Configuration.defaultRestoreIdentifier))")
+        log(.app, "launch: G7 source created (restore id \(G7Configuration.defaultRestoreIdentifier)), \(connectionSettings.g7Mode.summary)"
+            + (connectionSettings.recordsRawGlucosePackets ? ", raw glucose packet recording on (D47)" : ""))
+        if let problem = loaded.problem { log(.sensor, problem) }
+        logMonotonicClock()
         Task { await self.startG7() }
     }
 
@@ -249,9 +289,9 @@ final class LiveAppServices: AppServices {
 
     var clockMismatchLatchedFor: Date? {
         #if DEBUG
-        if isReplaying { return replayClockMismatch.latchedFor }
+        if isReplaying { return replayClockMismatch.latch(for: latestLiveReading) }
         #endif
-        return clockMismatch.latchedFor
+        return clockMismatch.latch(for: latestLiveReading)
     }
 
     func updateClockMismatchLatch(now: Date) {
@@ -259,7 +299,7 @@ final class LiveAppServices: AppServices {
         if let replayRun {
             // Replay time does not follow the phone's clocks: latch rule only, on replay time.
             let next = ClockMismatchMonitor.check(replayClockMismatch, latest: latestLiveReading, previous: previousLiveReading, now: replayRun.now(), uptime: nil)
-            if next.latchedFor != replayClockMismatch.latchedFor { send(.health) }
+            if next.latch(for: latestLiveReading) != replayClockMismatch.latch(for: latestLiveReading) { send(.health) }
             replayClockMismatch = next
             return
         }
@@ -272,8 +312,8 @@ final class LiveAppServices: AppServices {
         // older reading never clears a latch held for a newer one (`ClockMismatchMonitor`).
         guard productionStore != nil || storeOpenError != nil else { return }
         let next = ClockMismatchMonitor.check(clockMismatch, latest: latestLiveReading, previous: previousLiveReading, now: now, uptime: uptime())
-        if next.latchedFor != clockMismatch.latchedFor {
-            log(.app, next.latchedFor.map { "clock mismatch latched for the reading at \($0.ISO8601Format())" } ?? "clock mismatch cleared")
+        if next.latchedFor != clockMismatch.latchedFor || next.olderLatched != clockMismatch.olderLatched {
+            log(.app, next.latchedFor.map { "clock mismatch latched for the reading at \($0.ISO8601Format())" + (next.olderLatched.map { " and \($0.count) older" } ?? "") } ?? "clock mismatch cleared")
             send(.health)
         }
         clockMismatch = next
@@ -323,6 +363,7 @@ final class LiveAppServices: AppServices {
         case .invalidPairingCode: return .invalidCode
         case .credentialStoreFailed(let message): return .credentialStoreFailed(message)
         case .noSensorToPairAgain: return .noSensorToPairAgain
+        case .notAvailableInListenMode: return .notAvailableInListenMode
         }
     }
 
@@ -338,10 +379,15 @@ final class LiveAppServices: AppServices {
     func refreshStoredSensor() async {
         let has = await g7.hasStoredSensor
         let serial = await g7.storedSensorSerial
-        guard has != hasStoredSensor || serial != storedSensorSerial else { return }
+        // Before bootstrap the pairing record may be unreadable (first unlock): not yet known.
+        let known = storedSensorKnown || isBootstrapped
+        guard has != hasStoredSensor || serial != storedSensorSerial || known != storedSensorKnown else { return }
+        let serialChanged = serial != storedSensorSerial
         hasStoredSensor = has
         storedSensorSerial = serial
+        storedSensorKnown = known
         send(.sensor)
+        if serialChanged { await updateG7StoredFloor() }
     }
 
     func startG7() async {
@@ -434,7 +480,8 @@ final class LiveAppServices: AppServices {
 
     // MARK: - Bootstrap (protected data available)
 
-    private func protectedDataDidBecomeAvailable() {
+    /// `UIApplication.protectedDataDidBecomeAvailableNotification` (the first unlock after a reboot).
+    func protectedDataDidBecomeAvailable() {
         log(.app, "protected data became available")
         Task {
             await bootstrap()
@@ -451,7 +498,7 @@ final class LiveAppServices: AppServices {
             await bootstrapTask.value
             return
         }
-        guard UIApplication.shared.isProtectedDataAvailable else {
+        guard protectedDataAvailable() else {
             updateStorageAvailability()
             log(.app, "waiting for the first unlock: preferences, Keychain and database are unreadable until then")
             return
@@ -486,7 +533,7 @@ final class LiveAppServices: AppServices {
         alertDelivery = AlertDeliveryReport(of: alerts)
         send(.alertDelivery)
 
-        trioCoordinator.configure(enabled: preferences.trioBridgeEnabled, liveOutputsAllowed: liveOutputsAllowed)
+        configureTrio()
         trioCoordinator.start()
         await applyUploadConfiguration()
         sensorPipeline.outputs.widget = widget
@@ -501,6 +548,7 @@ final class LiveAppServices: AppServices {
         sensorPipeline.activate()
         let storeOpening = Task { await self.openStoreIfNeeded() }
         await startG7()
+        await refreshConnectionFromSource()
         await refreshStoredSensor()
         await updateTrioHeartbeat()
         updateClockMismatchLatch(now: now())
@@ -552,8 +600,13 @@ final class LiveAppServices: AppServices {
         guard isBootstrapped, productionStore == nil, !isOpeningStore else { return }
         isOpeningStore = true
         defer { isOpeningStore = false }
-        storage.availability = .opening
-        send(.storage)
+        // The first attempt shows "opening". A retry after a failed open (every wake retries) keeps
+        // the failure showing until it succeeds: "opening" has no banner, so a slow retry must not
+        // hide the storage problem (S5), nor make the banner flicker on every wake.
+        if storeOpenError == nil {
+            storage.availability = .opening
+            send(.storage)
+        }
         do {
             let store = try await openStore(databaseURL, diagnostics)
             productionStore = store
@@ -569,18 +622,19 @@ final class LiveAppServices: AppServices {
             await sensorPipeline.publishWidget()
             updateClockMismatchLatch(now: now())
             await reseedTrio()
+            await updateG7StoredFloor()
             await purgeIfDue()
             await refreshStorageSummary()
         } catch {
             storeOpenError = String(describing: error)
-            if UIApplication.shared.isProtectedDataAvailable {
+            if protectedDataAvailable() {
                 // D42: the storage-failure alert input, from the first failed open of this run.
                 sensorPipeline.storeOpenFailingSince = sensorPipeline.storeOpenFailingSince ?? now()
             }
             log(.store, "database could not be opened: \(error)")
             updateStorageAvailability()
-            // No re-seed is coming: readings held back from Trio at launch go out now (review m5).
-            await trioCoordinator.releaseHeldReadings(session: await g7.currentSession)
+            // Readings held back from Trio at launch stay held: they go out with the next newer
+            // reading (Phase 3 carry-over: never written alone, so Trio's newest never moves back).
         }
     }
 
@@ -596,7 +650,7 @@ final class LiveAppServices: AppServices {
 
     func updateStorageAvailability() {
         let next = StoreAvailability.derive(
-            storeOpen: productionStore != nil, protectedDataAvailable: UIApplication.shared.isProtectedDataAvailable,
+            storeOpen: productionStore != nil, protectedDataAvailable: protectedDataAvailable(),
             openError: storeOpenError, insertProblem: sensorPipeline.storeProblem, heldReadings: sensorPipeline.heldReadingCount
         )
         guard next != storage.availability else { return }
@@ -611,7 +665,7 @@ final class LiveAppServices: AppServices {
         updateClockMismatchLatch(now: now())
         writePipelineHeartbeat()
         updateStorageAvailability()
-        if isBootstrapped, productionStore == nil, storeOpenError != nil, UIApplication.shared.isProtectedDataAvailable {
+        if isBootstrapped, productionStore == nil, storeOpenError != nil, protectedDataAvailable() {
             Task { await openStoreIfNeeded() }
         }
     }
@@ -674,9 +728,10 @@ final class LiveAppServices: AppServices {
     /// retry a failed write without waiting for a reading) and heartbeat-key check, clock check.
     private func startForegroundTicker() {
         guard foregroundTicker == nil else { return }
+        let interval = foregroundTickInterval
         foregroundTicker = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
+                try? await Task.sleep(for: interval)
                 guard let self, !Task.isCancelled else { return }
                 // A drain attempt: waiting readings, storage health, tick (D42).
                 self.activePipeline.retryHeldEvents()
@@ -691,6 +746,23 @@ final class LiveAppServices: AppServices {
     }
 
     // MARK: - Diagnostics
+
+    /// Once per launch: the monotonic clock and whether its boot session (`kern.bootsessionuuid`) is
+    /// readable on this phone. docs/alerts.md §10 step 5 asks for this line: without the boot
+    /// session, a wall-clock rollback with no input in between is not detected and only the
+    /// latest-wall-clock fallback applies.
+    private func logMonotonicClock() {
+        guard let uptime = uptime() else {
+            log(.alert, "monotonic clock: unavailable; clock-change detection uses the latest wall clock only")
+            return
+        }
+        let seconds = Int(uptime.seconds)
+        if let boot = uptime.boot {
+            log(.alert, "monotonic clock: \(seconds) s since boot, boot session \(boot) (kern.bootsessionuuid readable)")
+        } else {
+            log(.alert, "monotonic clock: \(seconds) s since boot, boot session unreadable (kern.bootsessionuuid): a clock rollback with no input in between is not detected; the latest-wall-clock fallback applies")
+        }
+    }
 
     func log(_ category: DiagnosticEvent.Category, _ message: String) {
         diagnostics.record(DiagnosticEvent(date: now(), category: category, message: message))
@@ -709,5 +781,14 @@ extension StoreAvailability {
             return .failed(message: "\(heldReadings) reading(s) are held in memory: \(insertProblem)")
         }
         return .open
+    }
+}
+
+extension LiveAppServices.Dependencies {
+    /// The same dependencies with the sensor connection settings file the G7 source was created with.
+    func with(connectionSettings: SensorConnectionSettingsStore) -> Self {
+        var copy = self
+        copy.connectionSettings = connectionSettings
+        return copy
     }
 }

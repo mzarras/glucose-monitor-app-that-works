@@ -161,6 +161,8 @@ struct DayTrace: Equatable, Identifiable, Sendable {
     var isToday: Bool
     /// Readings of that day, ascending (flags included; the chart shows them as markers).
     var points: [ChartPoint]
+    /// The zone `dayStart` is local midnight in: the overlay plots wall-clock hours (review m17).
+    var timeZone: TimeZone = .current
 
     var id: Date { dayStart }
 }

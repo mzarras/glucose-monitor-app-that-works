@@ -128,11 +128,16 @@ final class ServicesCoordinatorTests: XCTestCase {
     // MARK: - Trio bridge turned on in a build that cannot reach Trio (review minor 4)
 
     func test_S5_trioBridgeOnWithoutAnAppGroupIsFailing() {
-        let trio = TrioCoordinator(appGroupID: nil, store: nil, diagnostics: NullDiagnosticLog())
+        // Audit m14: the coordinator dates everything with the injected clock, not Date().
+        let injected = Date(timeIntervalSince1970: 1_900_000_000)
+        let diagnostics = RingBufferDiagnosticLog(fileURL: nil)
+        let trio = TrioCoordinator(appGroupID: nil, store: nil, diagnostics: diagnostics, clock: { injected })
         trio.configure(enabled: true, liveOutputsAllowed: true)
         XCTAssertNil(trio.activeBridge)
         XCTAssertNotNil(trio.summary.unavailableReason)
         XCTAssertTrue(trio.summary.isFailing)
+        XCTAssertEqual(trio.summary.problemSince, injected)
+        XCTAssertEqual(diagnostics.snapshot.last?.date, injected)
         guard case .writeFailing = trio.summary.alertInput else {
             return XCTFail("the Trio bridge alert must fire when the bridge is on but cannot run: \(trio.summary.alertInput)")
         }

@@ -41,6 +41,10 @@ struct NowViewState: Equatable, Sendable {
     /// Review M1: `sensorState` is the source's, not the facade's launch default. While false a
     /// `.notPaired` reads "Starting up" and nothing offers to pair.
     var sensorStateKnown: Bool = true
+    /// D45: nil until the facade offers listen mode. While listening the Now screen shows the calm
+    /// listening line, Trio reads "off while listening", and the hero offers no pairing or
+    /// calibration button (`ListenModeRules.hero`).
+    var connection: ConnectionModeState? = nil
 
     /// The DEBUG/REPLAY banner. Computed, not stored, so no code path can clear it in a DEBUG
     /// build; nil in Release.

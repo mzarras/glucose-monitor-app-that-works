@@ -20,19 +20,36 @@ import GlucoseCore
 import WidgetCore
 
 struct ClockMismatchState: Sendable, Equatable, Codable {
-    /// The latest reading's date while latched, nil otherwise.
+    /// The newest latched reading's date, nil when nothing is latched.
     var latchedFor: Date?
     /// Wall clock and monotonic clock at the last check.
     var lastCheckWallClock: Date?
     var lastCheckUptime: Uptime?
+    /// Older readings that are latched too (Phase 3 carry-over): a clock change while an older
+    /// reading was the latest (a failed open showing a re-delivered reading) latches that reading
+    /// without losing the latch of the newer one, which comes back as the latest once the store
+    /// opens. At most `ClockMismatchMonitor.maximumOlderLatches`; nil in states saved before it existed.
+    var olderLatched: [Date]?
 
     static let initial = ClockMismatchState(latchedFor: nil, lastCheckWallClock: nil, lastCheckUptime: nil)
+
+    func isLatched(_ date: Date) -> Bool {
+        date == latchedFor || (olderLatched ?? []).contains(date)
+    }
+
+    /// What the facade reports for `latest`: its date while it is latched, otherwise the newest latch.
+    func latch(for latest: GlucoseReading?) -> Date? {
+        if let latest, isLatched(latest.date) { return latest.date }
+        return latchedFor
+    }
 }
 
 enum ClockMismatchMonitor {
     /// A wall-clock change larger than this between two checks latches (the same tolerance as the
     /// gate's future tolerance: every staleness threshold in the app is ≥ 10 minutes).
     static let tolerance: TimeInterval = LiveReadingGate.futureTolerance
+    /// How many older latched readings are remembered (`ClockMismatchState.olderLatched`).
+    static let maximumOlderLatches = 8
 
     /// The state after a check at `now`.
     ///
@@ -52,20 +69,29 @@ enum ClockMismatchMonitor {
         // latch nor hide a clock change made while the latest reading was unknown (review B1).
         guard let latest else { return state }
         var next = state
-        let latestReading = LatestReading(reading: latest, previous: previous)
-        next.latchedFor = ClockMismatchLatch.update(latchedFor: state.latchedFor, latest: latestReading, now: now)
-        // Only a newer reading clears a latch (review m4). An older one can be the latest for a while
-        // — a re-delivered reading waiting for a store that cannot open — and the latched reading
-        // comes back as the latest once it opens; it must still be latched then. (The latch only
-        // affects the reading whose date it holds, so keeping it costs nothing meanwhile.)
-        if next.latchedFor == nil, let latched = state.latchedFor, latest.date < latched {
-            next.latchedFor = latched
+        if let newestLatched = state.latchedFor, latest.date < newestLatched {
+            // An older reading is the latest for a while — a re-delivered reading waiting for a
+            // store that cannot open. Only a newer reading clears a latch (review m4): every latch is
+            // kept, and the latched reading is still latched when it is the latest again.
+        } else {
+            let latestReading = LatestReading(reading: latest, previous: previous)
+            next.latchedFor = ClockMismatchLatch.update(latchedFor: state.latchedFor, latest: latestReading, now: now)
+            if let newestLatched = state.latchedFor, latest.date > newestLatched {
+                next.olderLatched = nil // a newer reading: the older latched ones are history
+            }
         }
         if let uptime, let lastUptime = state.lastCheckUptime, let lastWall = state.lastCheckWallClock,
            let realElapsed = uptime.seconds(since: lastUptime) {
             let wallElapsed = now.timeIntervalSince(lastWall)
             if abs(wallElapsed - realElapsed) > tolerance {
-                next.latchedFor = latest.date
+                if let newestLatched = next.latchedFor, latest.date < newestLatched {
+                    // Latch the reading shown now as well, keeping the newer reading's latch.
+                    var older = (next.olderLatched ?? []).filter { $0 != latest.date }
+                    older.append(latest.date)
+                    next.olderLatched = Array(older.suffix(maximumOlderLatches))
+                } else {
+                    next.latchedFor = latest.date
+                }
             }
         }
         if uptime != nil {

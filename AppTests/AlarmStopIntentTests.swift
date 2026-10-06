@@ -38,6 +38,9 @@ final class AlarmStopIntentTests: XCTestCase {
         let maximum = clock.now.addingTimeInterval(TimeInterval(AlertLimits.urgentLowMaximumSnoozeMinutes * 60))
         XCTAssertLessThanOrEqual(until, maximum, "S7: never more than 30 minutes")
         XCTAssertEqual(until, clock.now.addingTimeInterval(TimeInterval(service.settings.urgentLow.snoozeMinutes * 60)))
-        XCTAssertTrue(center.pending("urgentLow").isEmpty, "acknowledge removes the pending repeats")
+        // D44: acknowledge replaces the pending repeats with the snooze-end alarm and its grid.
+        let pending = center.pending("urgentLow").compactMap(\.fireDate)
+        XCTAssertTrue(pending.allSatisfy { $0 >= until }, "acknowledge removes the pending repeats before the snooze end: \(pending)")
+        XCTAssertEqual(pending.filter { $0 == until }.count, 1, "D44: exactly one urgent-low alarm at the snooze end")
     }
 }

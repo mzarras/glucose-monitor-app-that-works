@@ -25,6 +25,8 @@ final class PreviewAppServices: AppServices {
     var canStopSession = false
     var hasStoredSensor = false
     var storedSensorSerial: String?
+    /// `AppServices.storedSensorKnown`: true unless a test plays the launch before bootstrap.
+    var storedSensorKnown = true
     var acceptedCalibrationRange: ClosedRange<Int>? = 40...400
     var recentCalibrations: [CalibrationRecord] = []
     var trio: TrioBridgeSummary = .off
@@ -38,6 +40,8 @@ final class PreviewAppServices: AppServices {
     var accent = AccentChoice.default
     var forceQuitGap: ForceQuitGapReport?
     var replay = ReplayStatus.none
+    /// The replay clock to report (`AppServices.replayClockNow`); nil = no replay running.
+    var replayClockNow: Date?
     /// Set to make `pair(code:)` / `submitCalibration(_:)` fail.
     var pairingError: PairingError?
     var calibrationRefusal: CalibrationRefusal?

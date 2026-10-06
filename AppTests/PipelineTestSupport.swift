@@ -134,6 +134,7 @@ final class RecordingTrioStore: TrioSharedStore, @unchecked Sendable {
     private var data: [String: Data] = [:]
     private var strings: [String: String] = [:]
     private var readingWrites = 0
+    private var anyWrites = 0
 
     func checkAccess() throws(TrioBridgeError) {}
 
@@ -142,19 +143,29 @@ final class RecordingTrioStore: TrioSharedStore, @unchecked Sendable {
     func setData(_ value: Data, forKey key: String) {
         lock.withLock {
             data[key] = value
+            anyWrites += 1
             if key == TrioAppGroupContract.readingsKey { readingWrites += 1 }
         }
     }
 
     func string(forKey key: String) -> String? { lock.withLock { strings[key] } }
-    func setString(_ value: String, forKey key: String) { lock.withLock { strings[key] = value } }
+    func setString(_ value: String, forKey key: String) {
+        lock.withLock {
+            strings[key] = value
+            anyWrites += 1
+        }
+    }
 
     func removeValue(forKey key: String) {
         lock.withLock {
             data[key] = nil
             strings[key] = nil
+            anyWrites += 1
         }
     }
+
+    /// Every write and removal, of any key (readings, heartbeat keys).
+    var writesOfAnyKey: Int { lock.withLock { anyWrites } }
 
     var writesOfReadings: Int { lock.withLock { readingWrites } }
 

@@ -15,6 +15,18 @@ protocol SensorDevice: CalibratingCGMSource {
     var heartbeatTarget: G7HeartbeatTarget? { get async }
     var hasStoredSensor: Bool { get async }
     var storedSensorSerial: String? { get async }
+    /// D45: primary (this app pairs) or listen (the Dexcom app owns the connection).
+    var mode: G7ConnectionMode { get async }
+    /// D45: stops, drops the other mode's stored pairing and session, reports `.notPaired` (primary)
+    /// or `.searching` (listen). Throws `G7StartError.credentialStoreFailed` (nothing switched).
+    func setMode(_ mode: G7ConnectionMode) async throws
+    /// False in listen mode.
+    var supportsCalibration: Bool { get async }
+    /// D47: log the hex of every received glucose packet.
+    func setRecordsRawGlucosePackets(_ enabled: Bool) async
+    /// Audit m1: the newest reading durably stored for `serial` (nil: none) — the floor above which
+    /// backfill the sensor sends again is published again.
+    func setLatestStoredReading(_ reading: GlucoseReading?, forSerial serial: String) async
 }
 
 extension G7CGMSource: SensorDevice {}

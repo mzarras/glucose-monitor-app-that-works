@@ -1,7 +1,8 @@
 // UI-only preferences the app keeps itself (everything else is owned by `AppServices`): whether
-// onboarding was completed, light/dark appearance, and whether the sensor is still waiting for a
-// calibration (review minor 4, kept across relaunches with the Now state). UserDefaults of the
-// app's own container; injectable for tests.
+// onboarding was completed, light/dark appearance, whether the sensor is still waiting for a
+// calibration (review minor 4, kept across relaunches with the Now state), and the selected tab
+// and Trends period (restored after the app is killed and relaunched). UserDefaults of the app's
+// own container; injectable for tests.
 
 import Foundation
 
@@ -13,6 +14,8 @@ final class AppUIPreferences {
         static let onboardingCompleted = "ui.onboardingCompleted"
         static let appearance = "ui.appearance"
         static let sensorNeedsCalibration = "ui.sensorNeedsCalibration"
+        static let selectedTab = "ui.selectedTab"
+        static let trendsPeriodDays = "ui.trendsPeriodDays"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -32,5 +35,17 @@ final class AppUIPreferences {
     var sensorNeedsCalibration: Bool {
         get { defaults.bool(forKey: Key.sensorNeedsCalibration) }
         set { defaults.set(newValue, forKey: Key.sensorNeedsCalibration) }
+    }
+
+    /// The tab last selected; nil if never stored (launch on Now).
+    var selectedTab: AppTab? {
+        get { defaults.string(forKey: Key.selectedTab).flatMap(AppTab.init(rawValue:)) }
+        set { defaults.set(newValue?.rawValue, forKey: Key.selectedTab) }
+    }
+
+    /// The Trends period last selected; nil if never stored (14 D).
+    var trendsPeriod: TrendsPeriod? {
+        get { defaults.object(forKey: Key.trendsPeriodDays).flatMap { ($0 as? Int).flatMap(TrendsPeriod.init(rawValue:)) } }
+        set { defaults.set(newValue?.rawValue, forKey: Key.trendsPeriodDays) }
     }
 }

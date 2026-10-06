@@ -69,6 +69,7 @@ minutes earlier):
 | `sensorState` | `SensorState` at write time (drives warm-up / expired / error / not-paired messages). |
 | `recent` | Readings in the 3 h before `writtenAt`, ascending; may include imported history (charts only). |
 | `accent` | `forest` / `rust` / `navy` / `ink`. |
+| `isReplay` | DEBUG only (audit m9): `latest` came from a replay or mock source, and the widget shows "REPLAY" beside it. Always `false` in Release; absent in older snapshots (read as `false`). |
 
 A missing, unreadable or wrong-version file, or a missing App Group, all read as "no snapshot" and
 render *No data* — never a number.

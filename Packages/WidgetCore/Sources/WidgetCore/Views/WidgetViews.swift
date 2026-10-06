@@ -76,12 +76,15 @@ public struct RectangularAccessoryView: View {
                     .foregroundStyle(WidgetStyle.isStale(content.display) ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(Text(WidgetStyle.spokenValue(reading, stale: WidgetStyle.isStale(content.display))))
-                    if case .stale = content.display {
-                        Text("STALE · \(LiveAge.text(since: reading.date, style: .short))")
-                            .font(Typography.fixedLabel(size: 10, medium: true))
-                    } else {
-                        RelativeAgeText(since: reading.date)
-                            .font(Typography.fixedLabel(size: 10))
+                    HStack(spacing: 4) {
+                        ReplayMarker(content: content, fontSize: 10)
+                        if case .stale = content.display {
+                            Text("STALE · \(LiveAge.text(since: reading.date, style: .short))")
+                                .font(Typography.fixedLabel(size: 10, medium: true))
+                        } else {
+                            RelativeAgeText(since: reading.date)
+                                .font(Typography.fixedLabel(size: 10))
+                        }
                     }
                 default:
                     Text(verbatim: WidgetStyle.title(content.display))
@@ -112,6 +115,13 @@ public struct RectangularAccessoryView: View {
 public enum InlineAccessoryText {
     /// "105 → · 3m" and short messages. Inline widgets show a single line of text only.
     public static func text(_ content: WidgetEntryContent) -> Text {
+        if content.showsReplayMarker {
+            return Text(verbatim: "\(WidgetStyle.replayLabel) ") + valueText(content)
+        }
+        return valueText(content)
+    }
+
+    private static func valueText(_ content: WidgetEntryContent) -> Text {
         switch content.display {
         case .current(let reading):
             let value = inlineValue(reading)
@@ -178,6 +188,8 @@ struct WidgetReadingColumn: View {
                         .foregroundStyle(Theme.muted)
                         .accessibilityLabel(Text(DeltaText.spoken(delta)))
                 }
+                ReplayMarker(content: content, fontSize: 10)
+                    .foregroundStyle(Theme.alert)
                 if case .stale = content.display {
                     Text("STALE · \(LiveAge.text(since: reading.date)) ago")
                         .font(Typography.fixedLabel(size: 10, medium: true))
@@ -198,6 +210,23 @@ struct WidgetReadingColumn: View {
                     .lineLimit(3)
             }
         }
+    }
+}
+
+/// DEBUG (audit m9): "REPLAY" beside a replayed reading (`WidgetEntryContent.showsReplayMarker`).
+/// Draws nothing in Release.
+struct ReplayMarker: View {
+    let content: WidgetEntryContent
+    let fontSize: CGFloat
+
+    var body: some View {
+        #if DEBUG
+        if content.showsReplayMarker {
+            Text(verbatim: WidgetStyle.replayLabel)
+                .font(Typography.fixedLabel(size: fontSize, medium: true))
+                .accessibilityLabel(Text(verbatim: "Replay, not the sensor"))
+        }
+        #endif
     }
 }
 
@@ -241,6 +270,9 @@ struct WidgetDetailText: View {
 
 /// Small shared rules for the widget layouts. Pure; unit-tested.
 public enum WidgetStyle {
+    /// DEBUG (audit m9): the label on a replayed reading.
+    public static let replayLabel = "REPLAY"
+
     /// A stale number is drawn in the muted colour (not faded by opacity, which would drop it
     /// below 3:1), next to a "STALE · 12 min ago" label, so an old number never looks current.
     public static func isStale(_ display: GlucoseDisplayState) -> Bool {
