@@ -9,21 +9,34 @@ import WidgetCore
 enum TimeOfDayAxis {
     static let hourMarks = [0, 6, 12, 18, 24]
 
-    /// The wall-clock hour of `date` on the day that starts at `dayStart` (local midnight in
-    /// `timeZone`), e.g. 13.5 for 1:30 PM. Review m17: a DST day is 23 or 25 hours long, so elapsed
-    /// time since midnight would put every reading after the change an hour off its axis label and
-    /// off the other days of the 3 D overlay. Elapsed time plus the UTC offset change since midnight
-    /// is the clock time: the skipped hour has no readings, and the repeated hour's two passes share
-    /// x (drawn as separate lines, `splitAtClockChanges`). Display only; reading dates are untouched.
+    /// The wall-clock hour of `date` on the day that starts at `dayStart` (the day's first instant in
+    /// `timeZone`, `Calendar.startOfDay`), e.g. 13.5 for 1:30 PM. Review m17: a DST day is 23 or 25
+    /// hours long, so elapsed time since the day's start would put every reading after the change an
+    /// hour off its axis label and off the other days of the 3 D overlay. The day start's own clock
+    /// time, plus elapsed time, plus the UTC offset change since the start is the clock time: the
+    /// skipped hour has no readings, and the repeated hour's two passes share x (drawn as separate
+    /// lines, `splitAtClockChanges`). The start's clock time is 0 except in zones that change the
+    /// clock at midnight (e.g. America/Santiago, America/Havana, Asia/Beirut), where a spring-forward
+    /// day starts at 01:00 (P3 review n1). Display only; reading dates are untouched.
     static func hourOfDay(_ date: Date, dayStart: Date, timeZone: TimeZone) -> Double {
         let offsetChange = timeZone.secondsFromGMT(for: date) - timeZone.secondsFromGMT(for: dayStart)
-        return (date.timeIntervalSince(dayStart) + Double(offsetChange)) / 3_600
+        return clockHours(of: dayStart, timeZone: timeZone) + (date.timeIntervalSince(dayStart) + Double(offsetChange)) / 3_600
+    }
+
+    /// The clock time of `date` in `timeZone`, in hours since 00:00 (0 for an ordinary day start).
+    static func clockHours(of date: Date, timeZone: TimeZone) -> Double {
+        let local = date.timeIntervalSince1970 + Double(timeZone.secondsFromGMT(for: date))
+        let seconds = local.truncatingRemainder(dividingBy: 86_400)
+        return (seconds < 0 ? seconds + 86_400 : seconds) / 3_600
     }
 
     /// The instant at wall-clock `hour` on that day (the scrub's inverse of `hourOfDay`). In a
     /// repeated hour, its first pass; in a skipped hour, the moment the clock jumped.
     static func date(atHour hour: Double, dayStart: Date, timeZone: TimeZone) -> Date {
-        let naive = dayStart.addingTimeInterval(hour * 3_600)
+        let startClock = clockHours(of: dayStart, timeZone: timeZone)
+        // Before the day's first instant (00:00–01:00 on a midnight spring-forward day): its start.
+        guard hour > startClock else { return dayStart }
+        let naive = dayStart.addingTimeInterval((hour - startClock) * 3_600)
         let offsetChange = timeZone.secondsFromGMT(for: naive) - timeZone.secondsFromGMT(for: dayStart)
         let candidate = naive.addingTimeInterval(-Double(offsetChange))
         if abs(hourOfDay(candidate, dayStart: dayStart, timeZone: timeZone) - hour) < 1.0 / 3_600 { return candidate }
