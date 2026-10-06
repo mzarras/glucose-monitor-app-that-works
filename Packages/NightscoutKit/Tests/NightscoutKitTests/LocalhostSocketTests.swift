@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 import XCTest
 import GlucoseCore
 @testable import NightscoutKit

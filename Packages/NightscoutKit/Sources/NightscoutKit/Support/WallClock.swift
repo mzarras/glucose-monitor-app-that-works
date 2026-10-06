@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // The phone's clock, injectable so tests never sleep and never depend on the real date.
 
 import Foundation

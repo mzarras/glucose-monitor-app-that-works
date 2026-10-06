@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Stores a parsed Clarity export (HANDOFF §4.5 steps 2–4). Imported readings feed charts and stats
 // only (S6). Idempotent: readings are keyed by `importedID(origin: .clarityCSV, …)` and the
 // repository inserts-or-ignores, so importing the same (or an overlapping) file again stores

@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 import XCTest
 import GlucoseCore
 @testable import NightscoutKit
@@ -172,6 +173,102 @@ final class UploadSafetyTests: XCTestCase {
         ]
         for session in malformed {
             try await assertBothRefuse(fixture.reading(at: 3_600), session: session, clock: clock, expected: .malformedSession)
+        }
+    }
+
+    /// Both uploaders, each reading its queue from a file written here.
+    private func uploaders(queueFile contents: Data?, clock: TestClock) throws -> [(ReadingUploader, @Sendable () async -> Int)] {
+        let nightscoutDirectory = directory.appendingPathComponent(UUID().uuidString)
+        let shareDirectory = directory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: nightscoutDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: shareDirectory, withIntermediateDirectories: true)
+        if let contents {
+            try contents.write(to: nightscoutDirectory.appendingPathComponent("nightscout-upload-queue.json"))
+            try contents.write(to: shareDirectory.appendingPathComponent("dexcom-share-upload-queue.json"))
+        }
+        let nightscout = MockNightscoutServer(token: "synthetic-token-1234")
+        let share = MockShareServer()
+        return [
+            (try ReadingUploader.nightscout(
+                site: try NightscoutSite("https://nightscout.invalid"),
+                credentials: InMemoryCredentialStore([.nightscoutToken: "synthetic-token-1234"]),
+                deviceName: "Sensor", queueDirectory: nightscoutDirectory,
+                transport: InProcessTransport(backend: nightscout), clock: clock
+            ), { await nightscout.entries.count }),
+            (try ReadingUploader.dexcomShare(
+                server: DexcomShareServer(baseURL: URL(string: "https://share.invalid/ShareWebServices/Services")!),
+                receiverSerialNumber: "SM12345678",
+                credentials: InMemoryCredentialStore([.dexcomShareAccountName: MockShareServer.accountName, .dexcomSharePassword: MockShareServer.password]),
+                queueDirectory: shareDirectory, transport: InProcessTransport(backend: share), clock: clock
+            ), { await share.stored.count }),
+        ]
+    }
+
+    func test_S2_queuedReadingWithImplausibleDateIsDiscardedNotCrashing() async throws {
+        // Audit m6 + review m3: absurd dates (before 1970, more than a day ahead) are discarded
+        // and counted — they must not trap in either payload encoder's epoch-ms conversion. A date
+        // just ahead of the clock is held, not discarded, and sent once the clock passes it.
+        let clock = TestClock(fixture.start.addingTimeInterval(3_600))
+        func reading(id: String, date: Date) -> GlucoseReading {
+            GlucoseReading(id: id, date: date, value: .mgdl(120), trendRate: 0, isBackfill: false, source: .sensor, sensorSerial: SessionFixture.serial)
+        }
+        let queued = [
+            reading(id: "absurd-future", date: Date(timeIntervalSince1970: 1e17)),
+            reading(id: "absurd-past", date: Date(timeIntervalSince1970: -1e17)),
+            reading(id: "two-days-ahead", date: clock.now().addingTimeInterval(2 * 86_400)),
+            reading(id: "61-s-ahead", date: clock.now().addingTimeInterval(LiveReadingGate.futureTolerance + 1)),
+            fixture.reading(at: 3_600),
+        ]
+        let items = try queued.map { "{\"reading\":\(String(decoding: try JSONEncoder().encode($0), as: UTF8.self)),\"enqueuedAt\":0}" }
+        let file = Data("{\"version\":1,\"items\":[\(items.joined(separator: ","))]}".utf8)
+        let pairs = try uploaders(queueFile: file, clock: clock)
+        for (uploader, sentCount) in pairs {
+            await XCTAssertEqualAsync(await uploader.status.queueDepth, 5)
+            await XCTAssertEqualAsync(await uploader.flush(), .uploaded(count: 1), uploader.destinationName)
+            let status = await uploader.status
+            XCTAssertEqual(status.discarded, 3, uploader.destinationName)
+            XCTAssertEqual(status.heldInFuture, 1, uploader.destinationName)
+            XCTAssertEqual(status.queueDepth, 1, uploader.destinationName)
+            XCTAssertTrue(status.isFailing, "held readings are not reaching followers (S5)")
+            XCTAssertNotNil(status.lastDiscardReason)
+            await XCTAssertEqualAsync(await sentCount(), 1, uploader.destinationName)
+        }
+        clock.advance(by: 2)
+        for (uploader, sentCount) in pairs {
+            await XCTAssertEqualAsync(await uploader.flush(), .uploaded(count: 1), uploader.destinationName)
+            await XCTAssertEqualAsync(await sentCount(), 2, uploader.destinationName)
+            await XCTAssertEqualAsync(await uploader.status.heldInFuture, 0, uploader.destinationName)
+            await XCTAssertFalseAsync(await uploader.status.isFailing, uploader.destinationName)
+        }
+    }
+
+    func test_S2_readingDatedInFutureAfterClockCorrectionIsHeldThenSent() async throws {
+        // Review m3, probe P9: a valid reading is queued, then the phone's clock is set back two
+        // minutes before the flush. It must be held (never sent from "the future", never dropped)
+        // and sent once the clock passes its date, with the hold visible in the status meanwhile.
+        let clock = TestClock(fixture.start.addingTimeInterval(3_600))
+        let pairs = try uploaders(queueFile: nil, clock: clock)
+        for (uploader, _) in pairs {
+            try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
+        }
+        clock.advance(by: -120)
+        for (uploader, sentCount) in pairs {
+            await XCTAssertEqualAsync(await uploader.flush(), .heldDatedInFuture(count: 1), uploader.destinationName)
+            let status = await uploader.status
+            XCTAssertEqual(status.heldInFuture, 1)
+            XCTAssertEqual(status.discarded, 0, "not dropped")
+            XCTAssertEqual(status.queueDepth, 1)
+            XCTAssertTrue(status.isFailing, "followers are not getting it yet (S5)")
+            await XCTAssertEqualAsync(await sentCount(), 0, uploader.destinationName)
+        }
+        clock.advance(by: 120 - LiveReadingGate.futureTolerance)
+        for (uploader, sentCount) in pairs {
+            await XCTAssertEqualAsync(await uploader.flushIfDue(), .uploaded(count: 1), uploader.destinationName)
+            await XCTAssertEqualAsync(await sentCount(), 1, uploader.destinationName)
+            let status = await uploader.status
+            XCTAssertEqual(status.heldInFuture, 0)
+            XCTAssertEqual(status.discarded, 0)
+            XCTAssertFalse(status.isFailing)
         }
     }
 }

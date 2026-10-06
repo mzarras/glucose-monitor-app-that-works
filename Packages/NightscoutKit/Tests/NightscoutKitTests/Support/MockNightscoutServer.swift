@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // A mock of the parts of Nightscout (cgm-remote-monitor 15.0.8) this package uses, faithful where
 // it matters for the tests:
 //   - auth: the `api-secret` header must carry the token (lib/authorization/index.js:76-96,

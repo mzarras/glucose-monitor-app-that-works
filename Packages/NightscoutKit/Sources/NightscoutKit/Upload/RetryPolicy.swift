@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Backoff between failed upload attempts.
 
 import Foundation

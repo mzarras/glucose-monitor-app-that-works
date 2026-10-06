@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Resume state for the Nightscout history import (HANDOFF §4.5 step 3: resumable and idempotent).
 
 import Foundation
