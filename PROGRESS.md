@@ -9,8 +9,8 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | 0 — Bootstrap | done (2026-09-23) |
 | 1 — Parallel build | done (2026-09-23): all 7 workstreams merged into `integration`; gates 1–3 PASS |
 | 2 — Integration | **done (2026-10-06)**: Phase 2 + follow-ups (D43) merged into `integration`; all reviews PASS; all six §10 gates pass; **`main` = 4cce67f** (first merge since bootstrap) |
-| 3 — Hardening | in progress (2026-10-06): full safety audit (`p3-audit`), failure-mode pass split across services (`p3-services`), screens (`p3-app`) and AlertEngine (`p3-alerts`), setup guide + README (`p3-docs`) |
-| 4 — Device build | not started |
+| 3 — Hardening | **done (2026-10-06)**: audit + failure-mode pass + listen mode (D45–D51) merged (b38429b); all reviews PASS; gates 1–4 PASS on 3e11c21 (docs-only after) |
+| 4 — Device build | in progress: signed Release build for Michael's iPhone succeeds (team 375U565T3N, both App Groups); installing |
 
 ### Workstreams (Phase 1)
 
@@ -155,6 +155,12 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Nightscout token (read + write), when ready — enter it in the app, not in chat or files.
 
 ## Phase log
+
+### 2026-10-06 — Phase 3 merged
+- Full audit (docs/safety-review.md) PASS with 18 minors, all resolved (§8 of that doc). Failure-mode pass across services, screens and AlertEngine (docs/failure-modes.md).
+- Michael's decisions: D44 (urgent low re-alarms at snooze end), D45/D46 (listen mode alongside the Dexcom app on the current sensor; primary on the next), D47 (raw packet recording). Orchestrator: D48–D51 (D50 after the G7Kit review blocker B1).
+- G7Kit listen-mode review: FAIL (B1) → D50 → re-reviews PASS (N1, N1b, P15 fixed). Final services and screens reviews at 3e11c21 PASS.
+- Follow-ups open (minors): screens m1–m6 (onboarding switch away from listen unconfirmed; "sends nothing" copy vs one 52 query; listen-mode `credentialsUnavailable` text; primary wording in some banners; stale app-wiring line; cold launch opens last tab); services m1–m5 (pair→listen leaves Trio payload; corrupt mode file → silent `.notPaired`; failed rollback; failure-modes rows for listen mode; mode file read twice); G7Kit midnight-DST nit; AlertText expired body says "paired".
 
 ### 2026-10-06 — Phase 2 reviewed, merged into integration
 - Re-reviews at p2-stage ff11362: reviewer 1 (pipeline, services, D41/D42) **PASS**; reviewer 2 (app model, screens) **PASS**. Merged as integration 3517554.
