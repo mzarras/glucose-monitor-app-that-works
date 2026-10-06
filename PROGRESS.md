@@ -8,7 +8,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 |---|---|
 | 0 — Bootstrap | done (2026-09-23) |
 | 1 — Parallel build | done (2026-09-23): all 7 workstreams merged into `integration`; gates 1–3 PASS |
-| 2 — Integration | done (2026-10-06): Phase 2 + follow-ups (D43 expiry reminders, launch order) merged into `integration` (0a24794); all reviews PASS; gates 1–4 PASS on the identical tree; merge to `main` pending gate-6 self-test |
+| 2 — Integration | **done (2026-10-06)**: Phase 2 + follow-ups (D43) merged into `integration`; all reviews PASS; all six §10 gates pass; **`main` = 4cce67f** (first merge since bootstrap) |
 | 3 — Hardening | not started |
 | 4 — Device build | not started |
 
