@@ -97,7 +97,8 @@ final class AlertServiceTests: XCTestCase {
         let userInfo = h.center.posted.last?.userInfo ?? [:]
         await h.service.handleNotificationResponse(.opened, userInfo: userInfo)
         XCTAssertNil(h.center.delivered["sensor.alert.urgentLow"])
-        XCTAssertTrue(h.center.pending(for: .urgentLow).isEmpty)
+        XCTAssertEqual(h.center.pending(for: .urgentLow).compactMap(\.fireDate).min(), Fixtures.t0.addingTimeInterval(minutes(30)),
+                       "the repeats are gone; only the snooze-end alarm and its grid are pending (D44)")
         XCTAssertEqual(h.audio.stops, 1)
         XCTAssertNil(h.service.executor.soundOwner)
         XCTAssertEqual(h.service.phase(of: .urgentLow), .snoozed(until: Fixtures.t0.addingTimeInterval(minutes(30))))

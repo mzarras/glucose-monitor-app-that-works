@@ -28,6 +28,10 @@ struct OnboardingActions {
     var cancelImport: @MainActor () -> Void = {}
     /// "Set up later": leaves onboarding without completing it (review M1).
     var dismiss: @MainActor () -> Void = {}
+    /// D45: listen alongside the Dexcom app or pair this app (remembered on the step).
+    var chooseConnection: @MainActor (SensorConnectionMode) -> Void = { _ in }
+    /// D45: Continue on the connection step: switches the facade to the choice, then moves on.
+    var continueConnection: @MainActor () -> Void = {}
 
     static var noop: OnboardingActions {
         OnboardingActions(goTo: { _ in }, startNightscoutImport: { _, _, _ in }, startClarityImport: { _, _ in }, requestBluetooth: {},
@@ -76,7 +80,7 @@ struct OnboardingContent: View {
                     .foregroundStyle(Theme.muted)
                     .accessibilityIdentifier("onboarding.step")
                 Spacer()
-                if let previous = state.step.previous(alarmsAvailable: state.alarmsAvailable), state.step != .warmUp {
+                if let previous = state.step(before: state.step), state.step != .warmUp {
                     Button("Back") { actions.goTo(previous) }
                         .buttonStyle(LinkButtonStyle())
                 }
@@ -91,12 +95,14 @@ struct OnboardingContent: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     switch state.step {
-                    case .welcome: WelcomeStep(next: { actions.goTo(.importHistory) })
-                    case .importHistory: ImportStep(state: state, actions: actions, next: { actions.goTo(.removeDexcomApp) })
+                    case .welcome: WelcomeStep(next: { actions.goTo(state.step(after: .welcome) ?? .importHistory) })
+                    case .connection: ConnectionStep(state: state, actions: actions)
+                    case .importHistory: ImportStep(state: state, actions: actions, next: { actions.goTo(state.step(after: .importHistory) ?? .removeDexcomApp) })
                     case .removeDexcomApp: RemoveDexcomAppStep(state: state, actions: actions)
                     case .permissions: PermissionsStep(state: state, actions: actions)
                     case .alarms: AlarmsStep(state: state, actions: actions)
                     case .pairing: PairingStep(state: state, actions: actions, context: pairingContext)
+                    case .listen: ListenStep(state: state, actions: actions)
                     case .warmUp: WarmUpStep(state: state, now: now, finish: actions.finish)
                     }
                 }
@@ -253,12 +259,12 @@ struct ImportProgressView: View {
             if let note = progress.skippedNote {
                 Text(verbatim: note).font(Typography.label(size: 11)).foregroundStyle(Theme.muted)
             }
-            if progress.rejectedFutureDated > 0 {
+            if let note = OnboardingText.futureDatedNote(progress.rejectedFutureDated) {
                 // A wrong time zone or a clock fault: never stored as readings (PROGRESS D33).
-                FieldMessage(text: "\(progress.rejectedFutureDated) \(progress.rejectedFutureDated == 1 ? "reading was" : "readings were") dated in the future and left out. Check the time zone chosen for the import.")
+                FieldMessage(text: note)
             }
             if let error = progress.errorMessage {
-                FieldMessage(text: "\(error) Already-imported readings are kept; running the import again continues where it stopped.")
+                FieldMessage(text: OnboardingText.importFailure(error))
             }
         }
         .padding(12)
@@ -364,7 +370,7 @@ struct PermissionsStep: View {
             }
             Text(verbatim: critical.note).font(Typography.body(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
         }
-        Button("Continue") { actions.goTo(state.step.next(alarmsAvailable: state.alarmsAvailable) ?? .pairing) }
+        Button("Continue") { actions.goTo(state.step(after: .permissions) ?? .pairing) }
             .buttonStyle(PrimaryButtonStyle())
             .disabled(state.bluetooth == .denied)
             .accessibilityIdentifier("onboarding.permissions.continue")
@@ -424,8 +430,113 @@ struct AlarmsStep: View {
         if state.urgentLowAlarm == .denied {
             FieldMessage(text: text.note)
         }
-        Button("Continue") { actions.goTo(.pairing) }
+        Button("Continue") { actions.goTo(state.step(after: .alarms) ?? .pairing) }
             .buttonStyle(PrimaryButtonStyle())
+            .accessibilityIdentifier("onboarding.alarms.continue")
+    }
+}
+
+/// D45: how this app reaches the sensor. Listening keeps the Dexcom app (no removal step, no
+/// pairing); pairing is the original flow.
+struct ConnectionStep: View {
+    let state: OnboardingState
+    let actions: OnboardingActions
+    @State private var confirming = false
+
+    var body: some View {
+        StepTitle(title: "How to connect", lead: "Choose how this app reaches your sensor. You can change it later in Settings › Sensor.")
+        ConnectionModeChoices(selected: state.connection?.mode, select: actions.chooseConnection)
+            .disabled(state.connectionSwitching)
+        if let message = state.connectionMessage {
+            FieldMessage(text: message)
+                .accessibilityIdentifier("onboarding.connection.message")
+        }
+        if state.connectionSwitching {
+            HStack(spacing: 10) {
+                ProgressView().accessibilityHidden(true)
+                Text(verbatim: ConnectionModeText.switching).font(Typography.body(size: 14))
+            }
+            .accessibilityElement(children: .combine)
+        } else if let mode = state.connection?.mode {
+            Button("Continue") {
+                // Switching replaces a stored sensor's pairing: ask first (as in Settings › Sensor).
+                if mode != state.currentConnectionMode, state.connectionSwitchNeedsConfirmation {
+                    confirming = true
+                } else {
+                    actions.continueConnection()
+                }
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .accessibilityIdentifier("onboarding.connection.continue")
+            .accessibilityHint(Text(verbatim: ConnectionModeText.title(mode)))
+            .confirmationDialog(ConnectionModeText.switchTitle(to: mode), isPresented: $confirming, titleVisibility: .visible) {
+                Button(ConnectionModeText.switchButton(to: mode), action: actions.continueConnection)
+            } message: {
+                Text(verbatim: ConnectionModeText.switchMessage(to: mode))
+            }
+        }
+    }
+}
+
+/// D45: listening alongside the Dexcom app. Nothing to pair: wait until the Dexcom app's connection
+/// brings a sensor state, then continue.
+struct ListenStep: View {
+    let state: OnboardingState
+    let actions: OnboardingActions
+
+    /// The sensor reported a session state through the Dexcom app's connection.
+    private var isListening: Bool {
+        switch state.sensorState {
+        case .active, .warmingUp, .gracePeriod, .calibrationNeeded, .calibrationError, .expired: return true
+        case .notPaired, .searching, .connecting, .authenticating, .bluetoothUnavailable, .error, .failed: return false
+        }
+    }
+
+    /// What stops readings right now, in words for listening (S5).
+    private var problem: String? {
+        switch state.sensorState {
+        case .failed(let failure): return ListenModeRules.failure(failure, listening: true)?.detail ?? failure.message
+        case .error(_, let description): return description
+        case .bluetoothUnavailable(.poweredOff): return "Bluetooth is off, so this app can't hear the sensor. Turn it on in Control Center or Settings."
+        case .bluetoothUnavailable(.unauthorized): return "Bluetooth isn't allowed for this app, so it can't hear the sensor. Allow it in iOS Settings."
+        case .bluetoothUnavailable(.unsupported): return "This device doesn't support Bluetooth Low Energy, so it can't hear the sensor."
+        case .bluetoothUnavailable(.resetting): return "Bluetooth is restarting; listening resumes when it's back."
+        default: return nil
+        }
+    }
+
+    var body: some View {
+        StepTitle(title: "Listening", lead: "Keep the Dexcom app installed: it stays the sensor's connection, and this app reads along.")
+        ListeningStatusLine()
+        if isListening {
+            Text(verbatim: ConnectionModeText.onboardingListening).font(Typography.body(size: 14)).fixedSize(horizontal: false, vertical: true)
+        } else {
+            if let problem {
+                FieldMessage(text: problem)
+                    .accessibilityIdentifier("onboarding.listen.problem")
+            }
+            HStack(spacing: 10) {
+                ProgressView().accessibilityHidden(true)
+                Text(verbatim: ConnectionModeText.onboardingWaiting)
+                    .font(Typography.body(size: 14))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+        }
+        ExplanationNote(text: ConnectionModeText.outputsOffWhileListening + ": Trio handoff, Nightscout and Dexcom Share upload. The Dexcom app keeps its own sharing.")
+        // Nothing to do here but wait, and the app keeps listening in the background: Continue is
+        // always offered (the primary action once the sensor is heard).
+        if isListening {
+            Button("Continue", action: next).buttonStyle(PrimaryButtonStyle())
+                .accessibilityIdentifier("onboarding.listen.continue")
+        } else {
+            Button("Continue", action: next).buttonStyle(SecondaryButtonStyle())
+                .accessibilityIdentifier("onboarding.listen.continue")
+        }
+    }
+
+    private func next() {
+        actions.goTo(state.step(after: .listen) ?? .warmUp)
     }
 }
 
@@ -436,6 +547,11 @@ struct PairingStep: View {
 
     var body: some View {
         StepTitle(title: "Pair your sensor", lead: "Apply the sensor first. iOS will ask to pair with it; tap Pair.")
+        if state.connection != nil {
+            // D45: said plainly before the code field.
+            WarningNote(text: ConnectionModeText.pairingTakeoverWarning)
+                .accessibilityIdentifier("onboarding.pairing.takeoverWarning")
+        }
         Text(verbatim: OnboardingState.otherG7AppsWarning)
             .font(Typography.body(size: 12))
             .foregroundStyle(Theme.muted)
@@ -498,5 +614,6 @@ struct WarmUpStep: View {
             .foregroundStyle(Theme.muted)
             .fixedSize(horizontal: false, vertical: true)
         Button("Done", action: finish).buttonStyle(PrimaryButtonStyle())
+            .accessibilityIdentifier("onboarding.done")
     }
 }

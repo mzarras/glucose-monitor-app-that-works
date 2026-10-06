@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Places Clarity EGV rows whose local time falls in the repeated hour of a DST fall-back (the
 // wall-clock time happened twice: earlier instant E, later instant L). S3: the instant is derived
 // from evidence in the file, never assumed; when the evidence does not decide, the row is rejected.

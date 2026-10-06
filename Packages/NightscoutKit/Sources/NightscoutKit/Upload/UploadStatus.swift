@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Upload health for Settings and the S5 banner (HANDOFF §8A step 1: "Settings shows last upload
 // and failure count; failures raise the S5 banner").
 
@@ -34,9 +35,19 @@ public struct UploadStatus: Sendable, Equatable {
     /// Refusals since the last successful upload. Non-zero means readings are being refused and
     /// nothing has gone through since (S5 banner); the next upload success clears it.
     public var refusalsSinceLastSuccess = 0
-    /// Queued readings dropped without upload: older than the destination accepts, over capacity,
-    /// or not `.sensor` (a corrupted queue). Each drop is logged to diagnostics.
+    /// Queued readings dropped without upload since launch: older than the destination accepts,
+    /// over capacity, not `.sensor`, or dated before 1970 / more than a day ahead (a corrupted
+    /// queue). Each drop is logged to diagnostics.
     public var discarded = 0
+    /// Readings dropped since the last successful upload. Non-zero is an S5 condition: those
+    /// readings will never reach followers. `lastDiscardReason` says why.
+    public var discardedSinceLastSuccess = 0
+    public var lastDiscardReason: String?
+    public var lastDiscardedAt: Date?
+    /// Queued readings held because they are dated more than `LiveReadingGate.futureTolerance`
+    /// ahead of the phone's clock (the clock was set back after they were queued). They are sent
+    /// once the clock passes their dates; until then followers do not see them (S5).
+    public var heldInFuture = 0
     /// The queue file was unreadable at launch and was moved aside; readings in it were not sent.
     /// Stays set until relaunch.
     public var queueLoadProblem: String?
@@ -48,8 +59,10 @@ public struct UploadStatus: Sendable, Equatable {
     }
 
     /// True when uploads are not getting through (S5: surface in the UI): the last attempt failed,
-    /// readings were refused with no success since, or the queue file has a problem.
+    /// readings were refused or discarded with no success since, readings are held because they
+    /// are dated in the future, or the queue file has a problem.
     public var isFailing: Bool {
-        consecutiveFailures > 0 || refusalsSinceLastSuccess > 0 || queueLoadProblem != nil || queueSaveProblem != nil
+        consecutiveFailures > 0 || refusalsSinceLastSuccess > 0 || discardedSinceLastSuccess > 0 || heldInFuture > 0
+            || queueLoadProblem != nil || queueSaveProblem != nil
     }
 }

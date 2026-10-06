@@ -5,7 +5,9 @@
 //
 // Launch hook (AppEnvironment, DEBUG): `-replayScenario <name> -replaySpeed <x> -replayStartMinute <m>`.
 // Every launch also passes DEBUG `-silenceAlertAudio` (a silent alert player, notifications without
-// sound), so replayed urgent lows don't ring on the machine running the tests.
+// sound), so replayed urgent lows don't ring on the machine running the tests, and DEBUG
+// `-resetConnectionMode` (pairing mode, recording off), so a D45 mode switch never carries into the
+// next test.
 // Speed 1 keeps the replay clock equal to the phone clock (the UI classifies staleness against the
 // phone clock); `-replayStartMinute m` delivers everything up to scenario minute m at once, dated in
 // the past, so each test lands on the moment it checks without waiting. Offsets and values are the
@@ -17,11 +19,12 @@ import XCTest
 final class ReplayLaunchUITests: XCTestCase {
     private let timeout: TimeInterval = 30
 
-    /// Launches the app with `arguments` and, always, `-silenceAlertAudio`.
+    /// Launches the app with `arguments` and, always, `-silenceAlertAudio` and `-resetConnectionMode`;
+    /// on the Now tab unless `arguments` pick one (the app restores the last tab across launches).
     private func launchApp(_ arguments: [String]) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["-silenceAlertAudio"] + arguments
+        app.launchArguments = ["-silenceAlertAudio", "-resetConnectionMode"] + (arguments.contains("-tab") ? [] : ["-tab", "now"]) + arguments
         app.launch()
         return app
     }
@@ -208,12 +211,210 @@ final class ReplayLaunchUITests: XCTestCase {
         let setUpLater = element(app, "onboarding.dismiss")
         XCTAssertTrue(setUpLater.waitForExistence(timeout: timeout), "every onboarding step offers Set up later")
         setUpLater.tap()
-        waitForLabel(element(app, "now.hero.message"), "Now: no sensor paired") { $0.contains("No sensor paired") }
+        waitForLabel(element(app, "now.hero.message"), "Now: no sensor set up (D45: the choice first)") { $0.contains("No sensor set up") }
         let pair = element(app, "now.hero.action")
         XCTAssertTrue(pair.waitForExistence(timeout: timeout))
         pair.tap()
         XCTAssertTrue(element(app, "settings.sensor.page").waitForExistence(timeout: timeout), "Settings › Sensor")
         XCTAssertFalse(element(app, "onboarding.step").exists, "not the full-screen onboarding")
         XCTAssertTrue(app.buttons["Trends"].exists && app.buttons["Settings"].exists, "the tab bar is there")
+    }
+
+    // MARK: - D45 listen mode (no real G7 here: the live source in the simulator, or a replay)
+
+    /// Taps a confirmation dialog's button (an action sheet or a popover, depending on the OS).
+    private func confirm(_ app: XCUIApplication, _ title: String) {
+        let button = app.buttons.matching(NSPredicate(format: "label == %@", title)).firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: timeout), "confirmation \"\(title)\"")
+        button.tap()
+    }
+
+    /// Scrolls until the element is on screen.
+    private func reveal(_ app: XCUIApplication, _ element: XCUIElement) {
+        XCTAssertTrue(element.waitForExistence(timeout: timeout), element.debugDescription)
+        for _ in 0..<8 where !element.isHittable { app.swipeUp(velocity: .slow) }
+    }
+
+    private func assertSharingSwitches(_ app: XCUIApplication, enabled: Bool) {
+        for id in ["settings.nightscout.toggle", "settings.share.toggle"] {
+            let toggle = app.switches[id].firstMatch
+            reveal(app, toggle)
+            XCTAssertEqual(toggle.isEnabled, enabled, "\(id) enabled: \(enabled)")
+            if !enabled { XCTAssertEqual(toggle.value as? String, "0", "\(id) shows off while listening") }
+        }
+    }
+
+    /// Onboarding: choose listening; the flow skips removing the Dexcom app and pairing, ends on the
+    /// Listening step; afterwards Settings shows the mode and the sharing switches are off and disabled.
+    func test_listenModeInOnboarding() throws {
+        let app = launchApp(["-resetOnboardingFlag", "-onboarding"])
+        element(app, "onboarding.welcome.start").tap()
+        XCTAssertTrue(element(app, "connection.listen").waitForExistence(timeout: timeout), "the connection step")
+        try saveScreenshot("listen-onboarding-connection")
+        element(app, "connection.listen").tap()
+        element(app, "onboarding.connection.continue").tap()
+        XCTAssertTrue(element(app, "onboarding.import.skip").waitForExistence(timeout: timeout), "on to the import step")
+        element(app, "onboarding.import.skip").tap()
+        let permissions = element(app, "onboarding.permissions.continue")
+        XCTAssertTrue(permissions.waitForExistence(timeout: timeout))
+        XCTAssertFalse(element(app, "onboarding.removeDexcom.continue").exists, "listening keeps the Dexcom app")
+        permissions.tap()
+        let alarms = element(app, "onboarding.alarms.continue")
+        if alarms.waitForExistence(timeout: 3) { alarms.tap() }
+        XCTAssertTrue(element(app, "connection.listeningStatus").waitForExistence(timeout: timeout), "the Listening step")
+        XCTAssertTrue(element(app, "onboarding.listen.continue").exists)
+        try saveScreenshot("listen-onboarding-listening")
+        element(app, "onboarding.listen.continue").tap()
+        let done = element(app, "onboarding.done")
+        XCTAssertTrue(done.waitForExistence(timeout: timeout))
+        done.tap()
+
+        waitForLabel(element(app, "now.trioRow"), "Now: Trio off while listening") { $0.contains("off while listening") }
+        let nowLine = element(app, "connection.listeningStatus")
+        reveal(app, nowLine)
+        XCTAssertTrue(nowLine.isHittable, "Now: the listening line")
+        try saveScreenshot("listen-now")
+        app.buttons["Settings"].tap()
+        waitForLabel(element(app, "settings.connection"), "Settings: listening") { $0.contains("listening alongside Dexcom") }
+        waitForLabel(element(app, "settings.trio"), "Settings: Trio off while listening") { $0.contains("off while listening") }
+        try saveScreenshot("listen-settings")
+        element(app, "settings.nightscout").tap()
+        assertSharingSwitches(app, enabled: false)
+        try saveScreenshot("listen-sharing")
+    }
+
+    /// Settings › Sensor: switch to listening and back (each confirmed); the page, the sharing
+    /// switches and Now follow each switch.
+    func test_listenModeInSettingsAndBack() throws {
+        let app = launchApp(["-tab", "settings"])
+        // A fresh simulator offers onboarding first (no sensor): leave it.
+        let setUpLater = element(app, "onboarding.dismiss")
+        if setUpLater.waitForExistence(timeout: 5) { setUpLater.tap() }
+        let sensorRow = element(app, "settings.sensor")
+        XCTAssertTrue(sensorRow.waitForExistence(timeout: timeout))
+        sensorRow.tap()
+        let listen = element(app, "connection.listen")
+        reveal(app, listen)
+        listen.tap()
+        confirm(app, "Listen alongside the Dexcom app")
+        XCTAssertTrue(element(app, "connection.listeningStatus").waitForExistence(timeout: timeout), "the listening line")
+        XCTAssertTrue(element(app, "settings.sensor.listeningNotes").exists, "calibrate and pair explained, not offered")
+        XCTAssertFalse(app.buttons["Calibrate with a fingerstick…"].exists)
+        XCTAssertFalse(element(app, "settings.sensor.forget").exists, "no Forget while listening…")
+        // …and Stop following this sensor (G7Kit §14) only while a sensor is followed, which never
+        // happens on a simulator (ListenModeRules.offersStopFollowing; that the services then look for
+        // the next sensor at once is ListenModeServicesTests.test_stopFollowingInListenModeFollowsTheNextSensor).
+        XCTAssertFalse(element(app, "settings.sensor.stopFollowing").exists, "nothing is followed: nothing to stop following")
+        try saveScreenshot("listen-sensor-page")
+        let gone = NSPredicate(format: "exists == false")
+        XCTAssertTrue(element(app, "connection.listeningStatus").exists, "still listening")
+        app.navigationBars.buttons.firstMatch.tap()
+        element(app, "settings.nightscout").tap()
+        assertSharingSwitches(app, enabled: false)
+        app.navigationBars.buttons.firstMatch.tap()
+
+        // Back to pairing.
+        sensorRow.tap()
+        let pair = element(app, "connection.pair")
+        reveal(app, pair)
+        pair.tap()
+        confirm(app, "Pair this app")
+        expectation(for: gone, evaluatedWith: element(app, "connection.listeningStatus"))
+        waitForExpectations(timeout: timeout)
+        XCTAssertFalse(element(app, "settings.sensor.listeningNotes").exists)
+        app.navigationBars.buttons.firstMatch.tap()
+        element(app, "settings.nightscout").tap()
+        assertSharingSwitches(app, enabled: true)
+        app.navigationBars.buttons.firstMatch.tap()
+        // "Now" or "Now, needs attention" (no sensor here).
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Now'")).firstMatch.tap()
+        waitForLabel(element(app, "now.trioRow"), "Now: Trio row back to its usual words") { !$0.contains("listening") }
+    }
+
+    /// A replay run refuses a mode switch (`.replayActive`): the page says why; nothing changed.
+    func test_replayRefusesAConnectionSwitch() throws {
+        let app = launch(scenario: "steady", minute: 60, extra: ["-tab", "settings"])
+        let sensorRow = element(app, "settings.sensor")
+        XCTAssertTrue(sensorRow.waitForExistence(timeout: timeout))
+        sensorRow.tap()
+        let listen = element(app, "connection.listen")
+        reveal(app, listen)
+        listen.tap()
+        confirm(app, "Listen alongside the Dexcom app")
+        let message = element(app, "settings.connection.message")
+        waitForLabel(message, "the refusal is shown") { $0.contains("replay is running") && $0.contains("Nothing changed") }
+        XCTAssertFalse(element(app, "connection.listeningStatus").exists, "still pairing mode")
+        reveal(app, message)
+        try saveScreenshot("listen-replay-refused")
+    }
+
+    /// D45, no accidental eviction: a first run makes the person choose listen or pair, nothing
+    /// preselected and no code field until "Pair" is chosen; the pairing step says, before the code
+    /// field, that pairing takes over the Dexcom app's connection. Settings › Sensor is the same:
+    /// no code field until "Pair this app" is chosen and confirmed.
+    func test_firstRunMakesThePersonChooseBeforeAnyCodeField() throws {
+        let app = launchApp(["-resetOnboardingFlag", "-onboarding"])
+        element(app, "onboarding.welcome.start").tap()
+        let listen = element(app, "connection.listen")
+        let pair = element(app, "connection.pair")
+        XCTAssertTrue(listen.waitForExistence(timeout: timeout), "the connection step comes first")
+        XCTAssertFalse(listen.isSelected || pair.isSelected, "nothing preselected")
+        XCTAssertFalse(element(app, "onboarding.connection.continue").exists, "no way on without a choice")
+        XCTAssertFalse(element(app, "pairing.code").exists, "no code field")
+        pair.tap()
+        XCTAssertTrue(pair.isSelected)
+        element(app, "onboarding.connection.continue").tap()
+        let skip = element(app, "onboarding.import.skip")
+        XCTAssertTrue(skip.waitForExistence(timeout: timeout))
+        skip.tap()
+        let removed = element(app, "onboarding.removeDexcom.continue")
+        XCTAssertTrue(removed.waitForExistence(timeout: timeout), "pairing keeps the Remove the Dexcom app step")
+        let share = app.switches.firstMatch
+        if share.exists, share.value as? String == "1" { share.tap() } // no Share account here
+        removed.tap()
+        let permissions = element(app, "onboarding.permissions.continue")
+        XCTAssertTrue(permissions.waitForExistence(timeout: timeout))
+        permissions.tap()
+        let alarms = element(app, "onboarding.alarms.continue")
+        if alarms.waitForExistence(timeout: 3) { alarms.tap() }
+        let warning = element(app, "onboarding.pairing.takeoverWarning")
+        let code = element(app, "pairing.code")
+        XCTAssertTrue(warning.waitForExistence(timeout: timeout), "the takeover warning on the pairing step")
+        XCTAssertTrue(warning.label.contains("Pairing takes over the sensor's connection: the Dexcom app on this phone will stop receiving readings. Delete the Dexcom app first."))
+        XCTAssertTrue(code.exists)
+        XCTAssertLessThan(warning.frame.minY, code.frame.minY, "said before the code field")
+        try saveScreenshot("first-run-pairing-warning")
+
+        // Choosing Pair (above) was recorded: the hero now offers pairing.
+        element(app, "onboarding.dismiss").tap()
+        waitForLabel(element(app, "now.hero.message"), "Now after choosing Pair") { $0.contains("No sensor paired") }
+        app.terminate()
+
+        // A fresh install that leaves onboarding without choosing: Now offers the choice, and
+        // Settings › Sensor shows it first, with no code field.
+        let fresh = launchApp(["-resetOnboardingFlag"])
+        let setUpLater = element(fresh, "onboarding.dismiss")
+        XCTAssertTrue(setUpLater.waitForExistence(timeout: timeout))
+        setUpLater.tap()
+        try checkSettingsChoiceOnAFreshInstall(fresh)
+    }
+
+    private func checkSettingsChoiceOnAFreshInstall(_ app: XCUIApplication) throws {
+        waitForLabel(element(app, "now.hero.message"), "Now: no sensor set up") { $0.contains("No sensor set up") }
+        element(app, "now.hero.action").tap()
+        XCTAssertTrue(element(app, "settings.sensor.page").waitForExistence(timeout: timeout))
+        let settingsPair = element(app, "connection.pair")
+        XCTAssertTrue(settingsPair.waitForExistence(timeout: timeout))
+        XCTAssertFalse(settingsPair.isSelected || element(app, "connection.listen").isSelected, "nothing preselected in Settings either")
+        XCTAssertFalse(element(app, "pairing.code").exists, "no code field before the choice")
+        try saveScreenshot("first-run-settings-choice")
+        settingsPair.tap()
+        let message = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Pairing takes over the sensor's connection")).firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: timeout), "the confirmation says it plainly")
+        confirm(app, "Pair this app")
+        let settingsWarning = element(app, "settings.sensor.takeoverWarning")
+        XCTAssertTrue(settingsWarning.waitForExistence(timeout: timeout))
+        XCTAssertTrue(element(app, "pairing.code").exists, "the code field once Pair is chosen")
+        XCTAssertLessThan(settingsWarning.frame.minY, element(app, "pairing.code").frame.minY, "said before the code field")
     }
 }

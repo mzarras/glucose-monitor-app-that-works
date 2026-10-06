@@ -128,7 +128,9 @@ struct RootView: View {
             exportDiagnostics: { model.exportDiagnostics() },
             setAccent: { model.setAccent($0) },
             setAppearance: { model.setAppearance($0) },
-            setRetention: { model.setRetention($0) }
+            setRetention: { model.setRetention($0) },
+            setConnectionMode: { model.setConnectionMode($0) },
+            setPacketRecording: { model.setPacketRecording($0) }
         ))
     }
 
@@ -158,7 +160,9 @@ struct RootView: View {
             pairAgain: { model.pairSensorAgain(code: $0) },
             finish: { model.finishOnboarding() },
             cancelImport: { model.cancelImport() },
-            dismiss: { model.dismissOnboarding() }
+            dismiss: { model.dismissOnboarding() },
+            chooseConnection: { model.chooseOnboardingConnection($0) },
+            continueConnection: { model.continueFromConnectionStep() }
         )
     }
 }

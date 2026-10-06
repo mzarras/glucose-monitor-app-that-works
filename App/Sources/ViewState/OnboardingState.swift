@@ -6,27 +6,42 @@ import GlucoseCore
 
 enum OnboardingStep: Int, CaseIterable, Sendable {
     case welcome
+    /// D45: listen alongside the Dexcom app, or pair this app. Only once the facade offers listen
+    /// mode (`OnboardingState.connection` non-nil).
+    case connection
     case importHistory
     case removeDexcomApp
     case permissions
     /// D26: allow AlarmKit alarms for urgent low. Only where AlarmKit exists (iOS 26+).
     case alarms
     case pairing
+    /// D45: waiting for the Dexcom app's connection, instead of removing it and pairing.
+    case listen
     case warmUp
 
-    /// The steps shown, in order: `.alarms` only when AlarmKit is available.
-    static func visibleSteps(alarmsAvailable: Bool) -> [OnboardingStep] {
-        allCases.filter { $0 != .alarms || alarmsAvailable }
+    /// The steps shown, in order: `.alarms` only when AlarmKit is available; `.connection` only
+    /// when listen mode is offered (`connection` non-nil); listening skips removing the Dexcom app
+    /// and pairing (`.listen` instead), anything else (pairing, or not chosen yet) keeps them.
+    static func visibleSteps(alarmsAvailable: Bool, connection: ConnectionModeState? = nil) -> [OnboardingStep] {
+        allCases.filter { step in
+            switch step {
+            case .alarms: return alarmsAvailable
+            case .connection: return connection != nil
+            case .removeDexcomApp, .pairing: return connection?.isListening != true
+            case .listen: return connection?.isListening == true
+            case .welcome, .importHistory, .permissions, .warmUp: return true
+            }
+        }
     }
 
-    func next(alarmsAvailable: Bool) -> OnboardingStep? {
-        let steps = Self.visibleSteps(alarmsAvailable: alarmsAvailable)
+    func next(alarmsAvailable: Bool, connection: ConnectionModeState? = nil) -> OnboardingStep? {
+        let steps = Self.visibleSteps(alarmsAvailable: alarmsAvailable, connection: connection)
         guard let index = steps.firstIndex(of: self), index + 1 < steps.count else { return nil }
         return steps[index + 1]
     }
 
-    func previous(alarmsAvailable: Bool) -> OnboardingStep? {
-        let steps = Self.visibleSteps(alarmsAvailable: alarmsAvailable)
+    func previous(alarmsAvailable: Bool, connection: ConnectionModeState? = nil) -> OnboardingStep? {
+        let steps = Self.visibleSteps(alarmsAvailable: alarmsAvailable, connection: connection)
         guard let index = steps.firstIndex(of: self), index > 0 else { return nil }
         return steps[index - 1]
     }
@@ -101,9 +116,22 @@ struct OnboardingState: Equatable, Sendable {
     /// Review M1: every step offers "Set up later", so onboarding is never a trap (without a new
     /// sensor, the pairing step has no other way out).
     var isDismissible: Bool = true
+    /// D45: the connection step's choice (nil mode until chosen). Nil for a fixture without it.
+    var connection: ConnectionModeState? = nil
+    /// D45: the mode the facade is in now; Continue on the connection step switches to the choice
+    /// when they differ.
+    var currentConnectionMode: SensorConnectionMode = .pair
+    /// D45: switching would replace a stored sensor's pairing, so Continue asks first.
+    var connectionSwitchNeedsConfirmation: Bool = false
+    /// D45: a switch is on its way, or why it didn't happen (nothing changed).
+    var connectionSwitching: Bool = false
+    var connectionMessage: String? = nil
 
     var alarmsAvailable: Bool { urgentLowAlarm.isAvailable }
-    var visibleSteps: [OnboardingStep] { OnboardingStep.visibleSteps(alarmsAvailable: alarmsAvailable) }
+    var visibleSteps: [OnboardingStep] { OnboardingStep.visibleSteps(alarmsAvailable: alarmsAvailable, connection: connection) }
+    /// The step after (before) `step` in this flow.
+    func step(after step: OnboardingStep) -> OnboardingStep? { step.next(alarmsAvailable: alarmsAvailable, connection: connection) }
+    func step(before step: OnboardingStep) -> OnboardingStep? { step.previous(alarmsAvailable: alarmsAvailable, connection: connection) }
 
     static let initial = OnboardingState(
         step: .welcome,
@@ -124,6 +152,22 @@ struct OnboardingState: Equatable, Sendable {
 }
 
 enum OnboardingText {
+    /// A stopped import's message in full (NightscoutKit's `unusableHistory` names the date range
+    /// and what to do), followed by what happens to the imported readings unless it says so itself.
+    static func importFailure(_ message: String) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sentence = trimmed.hasSuffix(".") ? trimmed : trimmed + "."
+        if trimmed.localizedCaseInsensitiveContains("imported so far are kept") { return sentence }
+        return "\(sentence) Already-imported readings are kept; running the import again continues where it stopped."
+    }
+
+    /// Import readings dated in the future and left out (PROGRESS D33: a wrong time zone or a clock
+    /// fault; never stored as readings), nil when there were none.
+    static func futureDatedNote(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return "\(count.formatted()) \(count == 1 ? "reading was" : "readings were") dated in the future and left out. Check the time zone chosen for the import."
+    }
+
     /// "12,408 readings imported · Jun 25 – Sep 23"
     static func importProgress(_ progress: ImportProgress, context: DisplayContext = .current) -> String {
         let count = progress.readingsImported.formatted(.number.locale(context.locale))

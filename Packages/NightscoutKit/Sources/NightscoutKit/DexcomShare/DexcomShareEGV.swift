@@ -1,4 +1,4 @@
-// Ported from xDrip4iOS (https://github.com/JohanDegraeve/xdripswift), GPL-3.0, like this project.
+// Originally part of xDrip4iOS (https://github.com/JohanDegraeve/xdripswift), GPL-3.0, like this project.
 // The original files have no copyright header.
 // Ported from xDrip4iOS xDrip/Managers/DexcomShare/BgReading+DexcomShare.swift @ 7.1.0 (0370937)
 // Ported from xDrip4iOS xDrip/Core Data/classes/BgReading+CoreDataClass.swift @ 7.1.0 (0370937)

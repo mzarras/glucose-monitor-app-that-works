@@ -40,7 +40,7 @@ enum G7ECC {
         0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45, 0xd8, 0x98, 0xc2, 0x96,
         0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e, 0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16,
         0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
-    ])!
+    ])! // Safe: a literal of exactly 64 bytes; `G7Point.init?` checks only the length.
 
     static func generateKeyPair() -> (privateKey: G7Scalar, publicKey: G7Point)? {
         var publicKey = [UInt8](repeating: 0, count: G7Point.byteCount)
@@ -86,13 +86,16 @@ enum G7ECC {
 
     static func multiplyModN(_ left: G7Scalar, _ right: G7Scalar) -> G7Scalar {
         var result = [UInt8](repeating: 0, count: G7Scalar.byteCount)
-        _ = DexcomG7ECCScalarMultiplyModN(left.bytes, right.bytes, &result)
+        _ = DexcomG7ECCScalarMultiplyModN(left.bytes, right.bytes, &result) // always true (DexcomG7ECC.c:307-320)
+        // Safe: `result` was created above with exactly `G7Scalar.byteCount` bytes and the C function
+        // writes into that fixed buffer only; `G7Scalar.init?` checks nothing but the length.
         return G7Scalar(result)!
     }
 
     static func subtractModN(_ left: G7Scalar, _ right: G7Scalar) -> G7Scalar {
         var result = [UInt8](repeating: 0, count: G7Scalar.byteCount)
-        _ = DexcomG7ECCScalarSubtractModN(left.bytes, right.bytes, &result)
+        _ = DexcomG7ECCScalarSubtractModN(left.bytes, right.bytes, &result) // always true (DexcomG7ECC.c:322-335)
+        // Safe: fixed 32-byte buffer created above; `G7Scalar.init?` checks only the length.
         return G7Scalar(result)!
     }
 
@@ -101,6 +104,7 @@ enum G7ECC {
         precondition(bytes.count == G7Scalar.byteCount)
         var result = [UInt8](repeating: 0, count: G7Scalar.byteCount)
         DexcomG7ECCScalarReduceModN(bytes, &result)
+        // Safe: fixed 32-byte buffer created above; `G7Scalar.init?` checks only the length.
         return G7Scalar(result)!
     }
 
@@ -108,6 +112,8 @@ enum G7ECC {
     static func scalar(fromBytes bytes: [UInt8]) -> G7Scalar {
         var result = [UInt8](repeating: 0, count: G7Scalar.byteCount)
         DexcomG7ECCScalarFromBytes(bytes, bytes.count, &result)
+        // Safe: fixed 32-byte buffer created above (the C function left-pads or truncates into it);
+        // `G7Scalar.init?` checks only the length.
         return G7Scalar(result)!
     }
 }

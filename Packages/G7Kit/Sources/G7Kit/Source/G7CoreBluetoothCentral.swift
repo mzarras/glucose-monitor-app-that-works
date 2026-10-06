@@ -1,10 +1,11 @@
 // Originally part of xDrip4iOS (https://github.com/JohanDegraeve/xdripswift), GPL-3.0.
 // BluetoothTransmitter.swift carries no copyright header of its own.
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/Generic/BluetoothTransmitter.swift @ 7.1.0 (0370937)
-// Changes: only what G7 primary mode uses — CBCentralManager with a FIXED restore identifier
+// Changes: only what G7 primary and listen mode use — CBCentralManager with a FIXED restore identifier
 // (xDrip4iOS derived one from the device address or a random string, :1062-1098), scan for FEBC,
-// pending connects, restoration (:1003-1040), service/characteristic discovery (:918-963), and
-// forwarding every callback to G7Controller. No signal-strength, timers or UserDefaults.
+// pending connects, restoration (:1003-1040), service/characteristic discovery (:918-963), the
+// system-connected lookup of retrieveConnectedPeripheral (:561-586, listen mode), and forwarding
+// every callback to G7Controller. No signal-strength, timers or UserDefaults.
 
 import CoreBluetooth
 import Foundation
@@ -50,6 +51,14 @@ final class G7CoreBluetoothCentral: NSObject, G7CentralDriving, CBCentralManager
         manager.stopScan()
     }
 
+    /// No `isScanning` guard: it need not turn false synchronously after `stopScan()`, which would
+    /// make a stop-then-scan pair skip the new scan (review of c9bf0a9).
+    func restartScan() {
+        guard let manager, manager.state == .poweredOn else { return }
+        manager.stopScan()
+        manager.scanForPeripherals(withServices: [CBUUID(string: G7GATT.advertisementServiceUUID)], options: nil)
+    }
+
     func connect(peripheralIdentifier: UUID) -> Bool {
         guard let manager, manager.state == .poweredOn else { return false }
         let peripheral = peripherals[peripheralIdentifier]
@@ -80,6 +89,16 @@ final class G7CoreBluetoothCentral: NSObject, G7CentralDriving, CBCentralManager
     func schedule(after delay: TimeInterval, _ action: @escaping () -> Void) {
         let job = QueueBoundAction(run: action)
         queue.asyncAfter(deadline: .now() + delay) { job.run() }
+    }
+
+    func connectedSensors() -> [G7ConnectedSensor] {
+        guard let manager, manager.state == .poweredOn else { return [] }
+        let connected = manager.retrieveConnectedPeripherals(withServices: [CBUUID(string: G7GATT.serviceUUID)])
+        for peripheral in connected {
+            peripherals[peripheral.identifier] = peripheral
+            peripheral.delegate = self
+        }
+        return connected.map { G7ConnectedSensor(name: $0.name, identifier: $0.identifier) }
     }
 
     // MARK: - CBCentralManagerDelegate
@@ -152,7 +171,8 @@ final class G7CoreBluetoothCentral: NSObject, G7CentralDriving, CBCentralManager
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         guard let g7 = G7Characteristic(rawValue: characteristic.uuid.uuidString) else { return }
-        controller.notificationStateChanged(for: g7, isNotifying: characteristic.isNotifying, error: error.map(Self.linkError))
+        controller.notificationStateChanged(for: g7, isNotifying: characteristic.isNotifying, error: error.map(Self.linkError),
+                                            from: peripheral.identifier)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -162,12 +182,12 @@ final class G7CoreBluetoothCentral: NSObject, G7CentralDriving, CBCentralManager
             return
         }
         guard let value = characteristic.value else { return }
-        controller.valueUpdated(for: g7, value: value)
+        controller.valueUpdated(for: g7, value: value, from: peripheral.identifier)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let error, let g7 = G7Characteristic(rawValue: characteristic.uuid.uuidString) else { return }
-        controller.writeFailed(for: g7, error: Self.linkError(error))
+        controller.writeFailed(for: g7, error: Self.linkError(error), from: peripheral.identifier)
     }
 
     // MARK: - Mapping

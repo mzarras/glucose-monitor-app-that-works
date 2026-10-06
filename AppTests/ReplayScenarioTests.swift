@@ -175,13 +175,19 @@ final class ReplayScenarioTests: XCTestCase {
         let firstUrgent = run.milestone(.firstAtOrBelow55)
         let firstLowFlag = run.milestone(.firstLowFlag)
         let lastReading = run.milestone(.lastReading)
+        let backAbove55 = run.milestone(.backAbove55)
         let acknowledgedAt = firstUrgent + 16 * 60
+        let snoozeEnd = acknowledgedAt + 30 * 60
         var pendingUrgentLowAfterAcknowledge: [NotificationRequestSpec] = []
+        var pendingUrgentLowAfterRecovery: [NotificationRequestSpec]?
 
         await play(run, through: lastReading + 20 * 60) { offset in
             if offset == acknowledgedAt {
                 await AlertPhaseRecorder.acknowledgeUrgentLow(run.replay.alerts)
                 pendingUrgentLowAfterAcknowledge = run.center.pending("urgentLow")
+            }
+            if offset == backAbove55 {
+                pendingUrgentLowAfterRecovery = run.center.pending("urgentLow")
             }
         }
 
@@ -205,17 +211,74 @@ final class ReplayScenarioTests: XCTestCase {
         for slot in stride(from: firstUrgent, to: acknowledgedAt, by: 5 * 60) {
             XCTAssertTrue(cascade.contains { abs($0 - slot) <= 60 }, "urgent low did not repeat at +\(Int(slot / 60)) min")
         }
-        // Acknowledged: the pending repeats are gone and it stays silent for the snooze (≤ 30 min,
-        // S7), also through the LOW flags.
-        XCTAssertTrue(pendingUrgentLowAfterAcknowledge.isEmpty, "acknowledge must remove the pending urgent-low repeats")
+        // Acknowledged: the pending repeats are replaced by the snooze-end series (D44) — nothing
+        // pending before the snooze end, exactly one urgent-low alarm at it — and it stays silent for
+        // the snooze (≤ 30 min, S7), also through the LOW flags.
+        let pendingDates = pendingUrgentLowAfterAcknowledge.compactMap(\.fireDate)
+        XCTAssertEqual(pendingDates.count, pendingUrgentLowAfterAcknowledge.count, "every pending urgent-low notification is scheduled")
+        XCTAssertFalse(pendingDates.isEmpty)
+        XCTAssertTrue(pendingDates.allSatisfy { $0 >= run.date(snoozeEnd) }, "acknowledge must remove the pending repeats before the snooze end: \(pendingDates)")
+        XCTAssertEqual(pendingDates.filter { $0 == run.date(snoozeEnd) }.count, 1, "D44: exactly one urgent-low alarm at the snooze end")
         XCTAssertGreaterThan(firstLowFlag, acknowledgedAt)
-        XCTAssertFalse(cascade.contains { $0 > acknowledgedAt && $0 < acknowledgedAt + 30 * 60 }, "urgent low sounded during its snooze")
+        XCTAssertFalse(cascade.contains { $0 > acknowledgedAt && $0 < snoozeEnd }, "urgent low sounded during its snooze")
         XCTAssertTrue(run.recorder.snoozedOffsets["urgentLow"]?.contains(firstLowFlag) ?? false)
+
+        // The run passes the snooze end, but glucose is back above 55 one minute before it (60 at
+        // +130, snooze end +131). That reading removes the grid after the snooze end (D44); the
+        // snooze-end alarm itself is due within AlertLimits.protectedLeadTime (60 s), and an alarm
+        // that may be about to ring is never cancelled (WS4 B2), so it stays pending and iOS posts it
+        // at +131. In the app nothing sounds after the acknowledge and the single episode is not
+        // restarted. The case where the snooze ends while still low is
+        // test_slowFallToUrgentLow_snoozeEndingWhileStillLowSoundsAgain.
+        XCTAssertGreaterThan(lastReading + 20 * 60, snoozeEnd, "the run reaches the snooze end")
+        XCTAssertEqual(snoozeEnd - backAbove55, 60)
+        XCTAssertEqual(pendingUrgentLowAfterRecovery?.compactMap(\.fireDate), [run.date(snoozeEnd)],
+                       "a reading above the threshold removes the grid; only the protected snooze-end alarm is left (D44)")
+        XCTAssertFalse(cascade.contains { $0 > acknowledgedAt }, "urgent low sounded in the app after the acknowledge although glucose recovered before the snooze end")
 
         // Nothing else: no rate alert (|rate| < 3), no high, no urgent-low-soon (off), no sensor alert.
         XCTAssertEqual(run.recorder.kindsThatFired, ["low", "urgentLow", "missedReadings"])
         XCTAssertEqual(Set(run.center.posted.map(\.kind)), ["low", "urgentLow"])
         XCTAssertEqual(run.recorder.firingOffsets["missedReadings"]?.min(), lastReading + 15 * 60)
+        await assertNothingReachedTrioOrUploads(run)
+    }
+
+    /// D44: acknowledged early, the snooze ends while the sensor still reads LOW. The snooze-end alarm
+    /// was pending since the acknowledge, so it is the sounding at the snooze end (no new post), the
+    /// episode resumes from the snooze end and repeats until glucose is back above 55.
+    func test_slowFallToUrgentLow_snoozeEndingWhileStillLowSoundsAgain() async throws {
+        let run = try await start(.slowFallToUrgentLow)
+        let firstUrgent = run.milestone(.firstAtOrBelow55)
+        let firstLowFlag = run.milestone(.firstLowFlag)
+        let backAbove55 = run.milestone(.backAbove55)
+        let lastReading = run.milestone(.lastReading)
+        let acknowledgedAt = firstUrgent + 60
+        let snoozeEnd = acknowledgedAt + 30 * 60
+        // The premise: the latest reading at the snooze end is still urgent low (a LOW flag at +115).
+        XCTAssertGreaterThan(snoozeEnd, firstLowFlag)
+        XCTAssertLessThan(snoozeEnd, backAbove55)
+        var pendingAtSnoozeEnd = 0
+
+        await play(run, through: lastReading + 20 * 60) { offset in
+            if offset == acknowledgedAt {
+                await AlertPhaseRecorder.acknowledgeUrgentLow(run.replay.alerts)
+            }
+            if offset == snoozeEnd - 60 {
+                pendingAtSnoozeEnd = run.center.pending("urgentLow").filter { $0.fireDate == run.date(snoozeEnd) }.count
+            }
+        }
+
+        let cascade = run.soundOffsets(AlertSoundCatalog.fileName(.cascade))
+        XCTAssertEqual(pendingAtSnoozeEnd, 1, "the snooze-end alarm stays pending through the low readings (D44)")
+        XCTAssertFalse(cascade.contains { $0 > acknowledgedAt && $0 < snoozeEnd }, "silent during the snooze (S7 ≤ 30 min)")
+        XCTAssertTrue(cascade.contains { abs($0 - snoozeEnd) <= 60 }, "D44: urgent low sounds again at the snooze end")
+        for slot in stride(from: snoozeEnd + 5 * 60, to: backAbove55, by: 5 * 60) {
+            XCTAssertTrue(cascade.contains { abs($0 - slot) <= 60 }, "urgent low did not repeat at +\(Int(slot / 60)) min after the snooze end")
+        }
+        XCTAssertFalse(cascade.contains { $0 > backAbove55 }, "nothing after glucose is back above 55")
+        XCTAssertEqual(run.recorder.episodeStarts["urgentLow"], [run.date(firstUrgent), run.date(snoozeEnd)],
+                       "the episode resumes from the snooze end")
+        XCTAssertEqual(run.postedOffsets("urgentLow"), [firstUrgent], "the snooze-end sounding is the pending alarm, not a second post")
         await assertNothingReachedTrioOrUploads(run)
     }
 

@@ -354,6 +354,14 @@ enum Fixtures {
         )
     }
 
+    /// D45/D47 design (not wired yet): listening alongside the Dexcom app, packet recording on.
+    static func settingsListening(at now: Date = referenceNow) -> SettingsViewState {
+        var state = settings(at: now)
+        state.connection = ConnectionModeState(mode: .listen)
+        state.packetRecording = PacketRecordingState(isOn: true)
+        return state
+    }
+
     static func settingsWithProblems(at now: Date = referenceNow) -> SettingsViewState {
         var state = settings(at: now)
         state.trio.status = .failing(since: now.addingTimeInterval(-18 * 60), message: "App Group write failed")
@@ -383,6 +391,13 @@ enum Fixtures {
         case .warmUp:
             state.pairing = .paired
             state.sensorState = .warmingUp(endsAt: now.addingTimeInterval(27 * 60))
+        case .connection:
+            state.connection = ConnectionModeState(mode: nil) // the person always chooses (D45)
+        case .listen:
+            state.connection = ConnectionModeState(mode: .listen)
+            state.bluetooth = .granted
+            state.notifications = .authorized
+            state.sensorState = .active(sessionStart: now.addingTimeInterval(-3 * 86_400), expiresAt: now.addingTimeInterval(7 * 86_400))
         case .welcome, .removeDexcomApp:
             break
         }

@@ -27,7 +27,7 @@ enum ServiceHealthMapping {
             forceQuitGap: forceQuitGap.map { ForceQuitGap(from: $0.from, to: $0.to) }
         )
         health.deliveryIssues = deliveryIssues(delivery.problems)
-        health.trioHeartbeatError = trio.isEnabled && trio.liveOutputsAllowed ? trio.heartbeatError : nil
+        health.trioHeartbeatError = trio.isEnabled && trio.liveOutputsAllowed && !trio.offWhileListening ? trio.heartbeatError : nil
         health.storage = storage.availability
         health.bluetoothAuthorization = bluetooth
         return health
@@ -39,6 +39,8 @@ enum ServiceHealthMapping {
         // DEBUG builds keep the bridge off unless the developer switch is on (D20): it writes nothing,
         // so it reads as off here and Settings says why.
         guard trio.isEnabled, trio.liveOutputsAllowed else { return .off }
+        // D45: off in the services while listening (Integrator A; B shows "off while listening").
+        guard !trio.offWhileListening else { return .off }
         // Review m4: switched on, but the bridge can't run in this build (no Trio App Group): the
         // facade says why (`unavailableReason`). The App Group check is defence in depth.
         if let reason = trio.unavailableReason {
@@ -73,6 +75,8 @@ enum ServiceHealthMapping {
 
     static func uploadStatus(_ upload: UploaderSummary, notSetUp: String, now: Date) -> UploadStatus {
         guard upload.isEnabled, upload.liveOutputsAllowed else { return .off }
+        // D45: off in the services while listening (Integrator A; B shows "off while listening").
+        guard !upload.offWhileListening else { return .off }
         if upload.isFailing {
             let status = upload.status
             let failures = max(status?.consecutiveFailures ?? 0, status?.refusalsSinceLastSuccess ?? 0, 1)
@@ -90,7 +94,26 @@ enum ServiceHealthMapping {
         if let problem = status.queueSaveProblem { return "The upload queue couldn't be saved: \(problem)" }
         if status.consecutiveFailures > 0, let error = status.lastError { return error.message }
         if status.refusalsSinceLastSuccess > 0, let refusal = status.lastRefusal { return refusalText(refusal) }
+        // NightscoutKit review m3: readings held or dropped for their dates (S5: each says which).
+        if status.heldInFuture > 0 { return heldInFutureText(status.heldInFuture) }
+        if status.discardedSinceLastSuccess > 0 { return discardedText(status.discardedSinceLastSuccess, lastReason: status.lastDiscardReason) }
         return status.lastError?.message ?? "Uploads are not getting through."
+    }
+
+    /// Readings waiting in the queue because they are dated ahead of the phone's clock (the clock
+    /// was set back after they were queued); they go out once the clock passes their dates.
+    static func heldInFutureText(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "reading is" : "readings are") waiting because \(count == 1 ? "it's" : "they're") dated ahead of the phone's clock; \(count == 1 ? "it" : "they")'ll upload when the clock catches up."
+    }
+
+    /// Readings dropped from the queue since the last successful upload; they will never reach
+    /// followers. `lastReason` is NightscoutKit's "N readings <why>" for the latest drop (its
+    /// safety-rule tags removed).
+    static func discardedText(_ count: Int, lastReason: String?) -> String {
+        let base = "\(count) \(count == 1 ? "reading wasn't" : "readings weren't") uploaded and won't be"
+        guard let reason = lastReason?.replacingOccurrences(of: #"\s*\(S\d\)"#, with: "", options: .regularExpression),
+              !reason.isEmpty else { return base + "." }
+        return "\(base) (latest: \(reason))."
     }
 
     static func refusalText(_ refusal: UploadRefusal) -> String {

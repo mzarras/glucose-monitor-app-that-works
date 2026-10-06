@@ -24,13 +24,27 @@ public struct WidgetEntryContent: Sendable, Equatable {
     public let accent: AccentChoice
     /// When the app last wrote the snapshot; `nil` if it never has.
     public let snapshotWrittenAt: Date?
+    /// The snapshot's `isReplay` (DEBUG, audit m9).
+    public let isReplay: Bool
 
-    public init(date: Date, display: GlucoseDisplayState, recent: [ChartPoint], accent: AccentChoice, snapshotWrittenAt: Date?) {
+    public init(date: Date, display: GlucoseDisplayState, recent: [ChartPoint], accent: AccentChoice, snapshotWrittenAt: Date?,
+                isReplay: Bool = false) {
         self.date = date
         self.display = display
         self.recent = recent
         self.accent = accent
         self.snapshotWrittenAt = snapshotWrittenAt
+        self.isReplay = isReplay
+    }
+
+    /// DEBUG (audit m9): a displayed reading from a replay run carries a "REPLAY" label, so the
+    /// widget can't pass a replayed value off as the sensor's. Always false in Release.
+    public var showsReplayMarker: Bool {
+        #if DEBUG
+        return isReplay && display.displayedReading != nil
+        #else
+        return false
+        #endif
     }
 }
 
@@ -70,7 +84,8 @@ public enum WidgetTimeline {
                 ),
                 recent: snapshot.recent,
                 accent: snapshot.accent,
-                snapshotWrittenAt: snapshot.writtenAt
+                snapshotWrittenAt: snapshot.writtenAt,
+                isReplay: snapshot.isReplay
             )
         }
     }

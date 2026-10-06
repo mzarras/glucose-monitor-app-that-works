@@ -21,12 +21,17 @@ final class G7AttributionTests: XCTestCase {
         "Sources/G7Kit/Calibration/G7CalibrationQueue.swift": ([xdrip + "G7/CGMG7Transmitter.swift"], nil),
         "Sources/G7Kit/Connection/G7Characteristic.swift": ([xdrip + "G7/CGMG7Transmitter.swift"], nil),
         "Sources/G7Kit/Connection/G7ConnectionCycle.swift": ([xdrip + "G7/CGMG7Transmitter.swift"], nil),
+        "Sources/G7Kit/Connection/G7ListenCycle.swift": ([xdrip + "G7/CGMG7Transmitter.swift"], nil),
         "Sources/G7Kit/Messages/G7AlgorithmState.swift": ([xdrip + "Generic/DexcomAlgorithmState.swift"], "Copyright © 2021 Johan Degraeve"),
         "Sources/G7Kit/Messages/G7AuthChallengeMessages.swift": ([xdrip + "Generic/AuthRequestRxMessage.swift", xdrip + "Generic/DexcomG7AuthBridge.m"], "Copyright © 2015 Nathan Racklyeft"),
         "Sources/G7Kit/Messages/G7AuthStatusMessage.swift": ([xdrip + "Generic/AuthChallengeRxMessage.swift"], "Copyright © 2015 Nathan Racklyeft"),
         "Sources/G7Kit/Messages/G7BackfillMessage.swift": ([xdrip + "Generic/DexcomG7BackfillMessage.swift"], nil),
         "Sources/G7Kit/Messages/G7CalibrationMessages.swift": ([xdrip + "Generic/DexcomG7CalibrationMessages.swift"], nil),
         "Sources/G7Kit/Messages/G7ControlRequests.swift": ([xdrip + "G7/CGMG7Transmitter.swift"], nil),
+        "Sources/G7Kit/Messages/G7CoexistenceMessages.swift": (
+            [xdrip + "Generic/DexcomG7GlucoseDataRxMessage.swift", xdrip + "Generic/DexcomTransmitterTimeRxMessage.swift"],
+            "Copyright © 2024 Johan Degraeve"
+        ),
         "Sources/G7Kit/Messages/G7CRC16.swift": ([xdrip + "Generic/NSData+CRC.swift"], "Copyright © 2016 Nathan Racklyeft"),
         "Sources/G7Kit/Messages/G7ExtendedVersionMessage.swift": ([xdrip + "Generic/DexcomG7ExtendedVersionMessage.swift"], nil),
         "Sources/G7Kit/Messages/G7GlucoseMessage.swift": ([xdrip + "Generic/DexcomG7GlucoseDataRxMessage.swift"], "Copyright © 2024 Johan Degraeve"),
@@ -92,6 +97,42 @@ final class G7AttributionTests: XCTestCase {
         }
         for file in Self.manifest.keys {
             XCTAssertTrue(files.contains(file), "manifest lists a missing file: \(file)")
+        }
+    }
+
+    /// Audit m7: code that reached xDrip4iOS from LoopKit CGMBLEKit (MIT) names its CGMBLEKit file in
+    /// a lineage line, and CGMBLEKit's MIT notice ships with the package. Any file with a Racklyeft /
+    /// LoopKit header must be in this list.
+    private static let cgmbleKitLineage: [String: [String]] = [
+        "Sources/G7Kit/Messages/G7Opcode.swift": ["CGMBLEKit/Opcode.swift"],
+        "Sources/G7Kit/Messages/G7AuthStatusMessage.swift": ["CGMBLEKit/Messages/AuthChallengeRxMessage.swift"],
+        "Sources/G7Kit/Messages/G7AuthChallengeMessages.swift": ["CGMBLEKit/Messages/AuthRequestRxMessage.swift"],
+        "Sources/G7Kit/Auth/G7ChallengeHash.swift": ["CGMBLEKit/AESCrypt.m"],
+        "Sources/G7Kit/Messages/G7CRC16.swift": ["CGMBLEKit/NSData+CRC.swift"],
+        "Sources/G7Kit/Messages/G7OwnershipMessages.swift": ["CGMBLEKit/Messages/KeepAliveTxMessage.swift", "CGMBLEKit/Messages/BondRequestTxMessage.swift"],
+        "Sources/G7Kit/Auth/G7AuthenticationSlot.swift": ["CGMBLEKit/Messages/AuthRequestTxMessage.swift"],
+        "Sources/G7Kit/Messages/G7CoexistenceMessages.swift": ["CGMBLEKit/Messages/GlucoseRxMessage.swift", "CGMBLEKit/Messages/TransmitterTimeRxMessage.swift"],
+    ]
+
+    func test_S8_cgmbleKitDerivedFilesShipItsLicense() throws {
+        let license = try String(contentsOf: packageRoot.appendingPathComponent("licenses/CGMBLEKit-LICENSE"), encoding: .utf8)
+        XCTAssertTrue(license.contains("The MIT License (MIT)"))
+        XCTAssertTrue(license.contains("Copyright (c) 2015 Nathan Racklyeft"))
+        XCTAssertTrue(license.contains("The above copyright notice and this permission notice shall be included"))
+        for file in try sourceFiles() where file.hasPrefix("Sources/") {
+            let text = try String(contentsOf: packageRoot.appendingPathComponent(file), encoding: .utf8)
+            let lineage = text.split(separator: "\n").filter { $0.hasPrefix("// CGMBLEKit lineage: ") }
+                .map { String($0.dropFirst("// CGMBLEKit lineage: ".count).prefix { $0 != " " }) }
+            if let expected = Self.cgmbleKitLineage[file] {
+                XCTAssertEqual(lineage, expected, "\(file): CGMBLEKit lineage lines")
+                XCTAssertTrue(text.contains("Packages/G7Kit/licenses/CGMBLEKit-LICENSE"), file)
+                XCTAssertTrue(text.contains("loopandlearn/CGMBLEKit @ 98fae79"), file)
+                XCTAssertNotNil(Self.manifest[file], "\(file) must also name its xDrip4iOS source")
+            } else {
+                XCTAssertTrue(lineage.isEmpty, "\(file) has a lineage line but is not listed")
+                XCTAssertFalse(text.contains("Racklyeft") || text.contains("LoopKit Authors"),
+                               "\(file) carries a CGMBLEKit-era header but no lineage line")
+            }
         }
     }
 

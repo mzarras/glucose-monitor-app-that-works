@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 import XCTest
 import GlucoseCore
 @testable import NightscoutKit
@@ -334,6 +335,28 @@ final class ClarityImportTests: XCTestCase {
         let stored = await repository.stored
         XCTAssertEqual(stored.map(\.value), [.mgdl(120), .mgdl(121), .mgdl(122)])
         XCTAssertTrue(stored.allSatisfy { $0.trendRate == nil })
+    }
+
+    func test_clarityMalformedNumbersDoNotTrap() throws {
+        // Audit m6: absurd numbers in the value, rate and transmitter-time columns fail closed.
+        let result = try ClarityExportParser.parse(export(rows: [
+            ("2025-11-02T00:55:00", "1e300", "1e300", "SYNTH1"),     // value rejected
+            ("2025-11-02T00:56:00", "120", "-1e300", "SYNTH1"),      // placed (outside the repeated hour)
+            ("2025-11-02T01:30:00", "121", "1e300", "SYNTH1"),       // clock gap of ~1e300 s: neither pass matches
+            ("2025-11-02T01:35:00", "122", "NaN", "SYNTH1"),         // no usable transmitter time
+            ("2025-11-02T01:40:00", "123", "-inf", "SYNTH1"),
+        ]), timeZone: Self.newYork, now: ClarityImportTests.now)
+        XCTAssertEqual(result.readings.map(\.value), [.mgdl(120)])
+        XCTAssertEqual(result.rejectedInvalidValue, 1)
+        XCTAssertEqual(result.rejectedAmbiguousLocalTime, 3)
+        let rate = try ClarityExportParser.parse(Data([
+            "Index,Timestamp (YYYY-MM-DDThh:mm:ss),Event Type,Glucose Value (mg/dL),Glucose Rate of Change (mg/dL/min)",
+            "1,2026-01-10T10:00:00,EGV,120,1e999",
+            "2,2026-01-10T10:05:00,EGV,121,-1e300",
+        ].joined(separator: "\n").utf8), timeZone: Self.newYork, now: ClarityImportTests.now)
+        XCTAssertEqual(rate.readings.count, 2)
+        XCTAssertNil(rate.readings.first?.trendRate, "1e999 overflows to +inf: not finite → nil")
+        XCTAssertTrue(rate.readings.allSatisfy { $0.trendRate.map(\.isFinite) ?? true })
     }
 
     func test_S3_clarityImportIsIdempotent() async throws {

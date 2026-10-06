@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Uploads live sensor readings to one destination (Nightscout or Dexcom Share) with a persistent
 // queue, retry with backoff, and a status for Settings and the S5 banner (HANDOFF §8A).
 //
@@ -61,12 +62,21 @@ public enum FlushOutcome: Sendable, Equatable {
     /// Backing off after a failure; `flushIfDue` does nothing until then.
     case deferred(until: Date)
     case uploaded(count: Int)
+    /// Nothing was sent: every queued reading is dated more than `LiveReadingGate.futureTolerance`
+    /// ahead of the phone's clock (the clock was set back after they were queued). They stay queued
+    /// and go out once the clock passes their dates; `UploadStatus.heldInFuture` shows them (S5).
+    case heldDatedInFuture(count: Int)
     /// The attempt failed; the readings stay queued. Earlier batches in the same flush may have
     /// succeeded (`uploadedBeforeFailure`).
     case failed(UploadError, uploadedBeforeFailure: Int)
 }
 
 public actor ReadingUploader {
+    /// Queued readings dated further ahead than this are discarded as absurd (a corrupted queue or a
+    /// wildly wrong clock); nearer future dates are held until the clock passes them. Also keeps
+    /// the payload encoders' epoch-millisecond conversion in range.
+    public static let maximumHeldFutureOffset: TimeInterval = 86_400
+
     public nonisolated let destinationName: String
     private let destination: any UploadDestination
     private let retryPolicy: RetryPolicy
@@ -154,7 +164,7 @@ public actor ReadingUploader {
         }
         let result = queue.append(reading, at: now)
         if !result.dropped.isEmpty {
-            currentStatus.discarded += result.dropped.count
+            noteDiscard(result.dropped.count, reason: "dropped because the queue was full", at: now)
             record("queue over capacity: dropped \(result.dropped.count) oldest readings")
         }
         if result.appended { persist() }
@@ -201,7 +211,12 @@ public actor ReadingUploader {
         discardUnsendable(now: startedAt)
         var uploaded = 0
         while true {
-            let batch = queue.items.prefix(max(1, destination.maxBatchSize)).map(\.reading)
+            // A reading dated after now + tolerance is held, not sent (S2: never publish a reading
+            // from the future) and not discarded: once the clock passes its date it goes out.
+            let sendableUpTo = clock.now().addingTimeInterval(LiveReadingGate.futureTolerance)
+            let batch: [GlucoseReading] = Array(
+                queue.items.map(\.reading).filter { $0.date <= sendableUpTo }.prefix(max(1, destination.maxBatchSize))
+            )
             guard !batch.isEmpty else { break }
             currentStatus.lastAttemptAt = clock.now()
             do {
@@ -231,29 +246,52 @@ public actor ReadingUploader {
             currentStatus.consecutiveFailures = 0
             currentStatus.nextAttemptAt = nil
             currentStatus.refusalsSinceLastSuccess = 0
+            currentStatus.discardedSinceLastSuccess = 0
             publish()
         }
-        return uploaded == 0 ? .nothingQueued : .uploaded(count: uploaded)
+        publish()
+        if uploaded > 0 { return .uploaded(count: uploaded) }
+        if currentStatus.heldInFuture > 0 { return .heldDatedInFuture(count: currentStatus.heldInFuture) }
+        return .nothingQueued
     }
 
     /// Drops queued readings that must not or cannot be sent, each counted and logged:
-    /// not `.sensor` (only possible if the queue file was altered; S6 defence in depth), not
-    /// representable by this destination (S4), or older than the destination accepts.
+    /// dated before 1970 or more than `maximumHeldFutureOffset` ahead (absurd: a corrupted queue or
+    /// a wildly wrong clock; this also keeps the payload encoders' epoch-ms conversion in range —
+    /// nearer future dates are held, not dropped), not `.sensor` (only possible if the queue file
+    /// was altered; S6 defence in depth), not representable by this destination (S4), or older than
+    /// the destination accepts.
     private func discardUnsendable(now: Date) {
+        let farFuture = now.addingTimeInterval(Self.maximumHeldFutureOffset)
+        let absurd = queue.removeAll { $0.reading.date < Date(timeIntervalSince1970: 0) || $0.reading.date > farFuture }
         let notLive = queue.removeAll { !$0.reading.source.isLiveSensor }
         let unrepresentable = queue.removeAll { !destination.canRepresent($0.reading.value) }
         var expired: [PersistentReadingQueue.Item] = []
         if let maxAge = destination.maxReadingAge {
             expired = queue.removeAll { now.timeIntervalSince($0.reading.date) > maxAge }
         }
-        if !notLive.isEmpty { record("discarded \(notLive.count) queued non-sensor readings (S6)") }
-        if !unrepresentable.isEmpty { record("discarded \(unrepresentable.count) queued readings with no faithful representation (S4)") }
-        if !expired.isEmpty { record("discarded \(expired.count) queued readings older than this destination accepts") }
-        let count = notLive.count + unrepresentable.count + expired.count
+        let reasons: [(Int, String)] = [
+            (absurd.count, "dated before 1970 or more than a day in the future (S2)"),
+            (notLive.count, "not from the live sensor (S6)"),
+            (unrepresentable.count, "with no faithful representation here (S4)"),
+            (expired.count, "older than this destination accepts"),
+        ]
+        var count = 0
+        for (dropped, reason) in reasons where dropped > 0 {
+            record("discarded \(dropped) queued readings \(reason)")
+            noteDiscard(dropped, reason: reason, at: now)
+            count += dropped
+        }
         guard count > 0 else { return }
-        currentStatus.discarded += count
         persist()
         publish()
+    }
+
+    private func noteDiscard(_ count: Int, reason: String, at date: Date) {
+        currentStatus.discarded += count
+        currentStatus.discardedSinceLastSuccess += count
+        currentStatus.lastDiscardReason = "\(count) reading\(count == 1 ? "" : "s") \(reason)"
+        currentStatus.lastDiscardedAt = date
     }
 
     // MARK: - Helpers
@@ -295,6 +333,12 @@ public actor ReadingUploader {
 
     private func publish() {
         currentStatus.queueDepth = queue.count
+        let sendableUpTo = clock.now().addingTimeInterval(LiveReadingGate.futureTolerance)
+        let held = queue.items.reduce(0) { $0 + ($1.reading.date > sendableUpTo ? 1 : 0) }
+        if held != currentStatus.heldInFuture, held > 0 {
+            record("holding \(held) queued readings dated in the future until the phone's clock passes them")
+        }
+        currentStatus.heldInFuture = held
         for continuation in observers.values { continuation.yield(currentStatus) }
     }
 

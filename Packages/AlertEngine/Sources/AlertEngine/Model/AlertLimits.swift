@@ -96,6 +96,11 @@ public enum AlertLimits {
     /// The most future pending entries any alert keeps: urgent low at the 2-minute floor over 60
     /// minutes.
     public static let maximumScheduledSlots = urgentLowPendingHorizonMinutes / urgentLowRepeatMinutes.lowerBound
+    /// The most pending notifications this package can hold at once (iOS keeps at most 64 per app):
+    /// urgent low at the 2-minute floor and missed readings, each with the planned entries beyond the
+    /// protected minute plus the one due within it (never touched), and the five sensor expiry
+    /// reminders (D43). Every other alert posts at once. 49; measured by FailureModeTests.
+    public static let worstCasePendingNotifications = (maximumScheduledSlots + 1) + (scheduledNotificationCount + 1) + AlertKind.sensorExpiryReminders.count
     /// Pending notifications and alarms are identified by their sequence number modulo this cycle
     /// (`ScheduledRepeat.slot`). The engine remembers entries for `seriesMemory` (at most 30 future
     /// + 30 past at the 2-minute floor), so an ID is reused only long after its entry is gone.

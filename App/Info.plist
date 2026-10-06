@@ -39,9 +39,9 @@
 	<true/>
 	<!-- D26: urgent low rings as a system alarm on iOS 26+ (AlarmKit), even when silenced. -->
 	<key>NSAlarmKitUsageDescription</key>
-	<string>Sensor uses alarms so an urgent low glucose alert rings even when your phone is on silent.</string>
+	<string>$(APP_DISPLAY_NAME) uses alarms so an urgent low glucose alert rings even when your phone is on silent.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Sensor connects to your G7 sensor over Bluetooth to receive glucose readings, including while the phone is locked.</string>
+	<string>$(APP_DISPLAY_NAME) connects to your G7 sensor over Bluetooth to receive glucose readings, including while the phone is locked.</string>
 	<key>TrioAppGroupID</key>
 	<string>$(TRIO_APP_GROUP_ID)</string>
 	<key>UIAppFonts</key>

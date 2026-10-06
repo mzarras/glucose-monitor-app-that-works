@@ -38,6 +38,11 @@ struct SettingsActions {
     var setAccent: @MainActor (AccentChoice) -> Void
     var setAppearance: @MainActor (AppearancePreference) -> Void
     var setRetention: @MainActor (DataRetention) -> Void
+    /// D45: switch between listening alongside the Dexcom app and pairing this app (after the
+    /// page's confirmation).
+    var setConnectionMode: @MainActor (SensorConnectionMode) -> Void = { _ in }
+    /// D47: record raw glucose packets in the diagnostic log.
+    var setPacketRecording: @MainActor (Bool) -> Void = { _ in }
     #if DEBUG
     /// DEBUG builds: replay controls (D11, D20). Not in Release (review m5).
     var startReplay: @MainActor (_ scenario: String, _ speed: Double) -> Void = { _, _ in }
@@ -72,9 +77,12 @@ struct SettingsScreen: View {
             .navigationDestination(for: SettingsRoute.self) { route in
                 Group {
                     switch route {
-                    case .sensor: SensorSettingsView(sensor: state.sensor, calibration: calibration, feedback: state.feedback.pairing, actions: actions, hasStoredSensor: hasStoredSensor)
-                    case .trio: TrioSettingsView(trio: state.trio, setEnabled: actions.setTrioEnabled)
-                    case .sharing: SharingSettingsView(nightscout: state.nightscout, share: state.dexcomShare, feedback: state.feedback, actions: actions)
+                    case .sensor: SensorSettingsView(sensor: state.sensor, calibration: calibration, feedback: state.feedback.pairing, actions: actions,
+                                                     hasStoredSensor: hasStoredSensor, connection: state.connection,
+                                                     connectionSwitchingTo: state.connectionSwitchingTo, connectionFeedback: state.feedback.connection)
+                    case .trio: TrioSettingsView(trio: state.trio, setEnabled: actions.setTrioEnabled, listening: state.isListening)
+                    case .sharing: SharingSettingsView(nightscout: state.nightscout, share: state.dexcomShare, feedback: state.feedback, actions: actions,
+                                                       listening: state.isListening)
                     case .alertDelivery: AlertDeliveryView(delivery: state.delivery, actions: actions)
                     case .about: AboutView(version: state.appVersion)
                     #if DEBUG
@@ -113,18 +121,32 @@ struct SettingsContent: View {
             }
             SettingsGroup("SENSOR") {
                 SettingsLinkRow(title: "G7 sensor", value: state.sensor.isWaitingForFirstState ? "checking…"
-                                    : SensorStatusText.row(state.sensor.state, session: state.sensor.session, now: now, context: context), route: .sensor)
+                                    : SensorStatusText.row(state.sensor.state, session: state.sensor.session, now: now, context: context,
+                                                         listening: state.isListening), route: .sensor)
                     .accessibilityIdentifier("settings.sensor")
+                if let connection = state.connection {
+                    SettingsLinkRow(title: "Connection", value: ConnectionModeText.row(connection.mode), route: .sensor)
+                        .accessibilityIdentifier("settings.connection")
+                }
             }
             SettingsGroup("TRIO") {
-                SettingsLinkRow(title: "Trio handoff", value: state.trio.isEnabled ? TrioStatusText.row(state.trio.status, context: context) : "off",
-                                route: .trio, valueIsAlert: isFailing(state.trio.status))
+                SettingsLinkRow(title: "Trio handoff",
+                                value: ListenModeRules.outputRow(state.trio.isEnabled ? TrioStatusText.row(state.trio.status, context: context) : "off",
+                                                                 listening: state.isListening),
+                                route: .trio, valueIsAlert: !state.isListening && isFailing(state.trio.status))
+                    .accessibilityIdentifier("settings.trio")
             }
             SettingsGroup("SHARING") {
-                SettingsLinkRow(title: "Nightscout", value: state.nightscout.uploadEnabled ? UploadStatusText.row(state.nightscout.status, context: context) : "off",
-                                route: .sharing, valueIsAlert: isFailing(state.nightscout.status))
-                SettingsLinkRow(title: "Dexcom Share", value: state.dexcomShare.isEnabled ? UploadStatusText.row(state.dexcomShare.status, context: context) : "off",
-                                route: .sharing, valueIsAlert: isFailing(state.dexcomShare.status))
+                SettingsLinkRow(title: "Nightscout",
+                                value: ListenModeRules.outputRow(state.nightscout.uploadEnabled ? UploadStatusText.row(state.nightscout.status, context: context) : "off",
+                                                                 listening: state.isListening),
+                                route: .sharing, valueIsAlert: !state.isListening && isFailing(state.nightscout.status))
+                    .accessibilityIdentifier("settings.nightscout")
+                SettingsLinkRow(title: "Dexcom Share",
+                                value: ListenModeRules.outputRow(state.dexcomShare.isEnabled ? UploadStatusText.row(state.dexcomShare.status, context: context) : "off",
+                                                                 listening: state.isListening),
+                                route: .sharing, valueIsAlert: !state.isListening && isFailing(state.dexcomShare.status))
+                    .accessibilityIdentifier("settings.share")
             }
             SettingsGroup("ALERT DELIVERY") {
                 SettingsLinkRow(title: "Notifications", value: SettingsText.notifications(state.delivery.notifications).status,
@@ -135,6 +157,7 @@ struct SettingsContent: View {
                 SettingsLinkRow(title: "Alarm volume", value: SettingsText.alarmVolume(state.delivery.alarmVolume), route: .alertDelivery, valueIsAlert: isTooLow(state.delivery.alarmVolume))
             }
             dataGroup
+            diagnosticsGroup
             appearanceGroup
             SettingsGroup("ABOUT") {
                 SettingsLinkRow(title: "About, licenses and credits", value: state.appVersion, route: .about)
@@ -155,7 +178,7 @@ struct SettingsContent: View {
         SettingsGroup("DATA") {
             SettingsButtonRow(title: "Import history", detail: importDetail, action: actions.startImport)
             SettingsButtonRow(title: "Export all data (CSV)", detail: nil, action: actions.exportCSV)
-            SettingsButtonRow(title: "Export diagnostics", detail: "BLE state changes, Trio and upload events, alert decisions; no personal data beyond readings. For bug reports.", action: actions.exportDiagnostics)
+            SettingsButtonRow(title: "Export diagnostics", detail: SettingsText.diagnosticsContents, action: actions.exportDiagnostics)
             if let message = state.feedback.export {
                 FieldMessage(text: message).padding(.vertical, 6)
             }
@@ -183,6 +206,28 @@ struct SettingsContent: View {
         guard let last = state.lastImport else { return "From Nightscout or a Clarity CSV export." }
         let source = last.origin == .nightscout ? "Nightscout" : "Clarity CSV"
         return "Last: \(last.readingsImported.formatted()) readings from \(source), \(TimeText.shortDay(last.finishedAt, context))."
+    }
+
+    /// D47's packet recording, once the facade offers it (Export diagnostics stays under DATA).
+    @ViewBuilder
+    private var diagnosticsGroup: some View {
+        if let recording = state.packetRecording {
+            SettingsGroup("DIAGNOSTICS") {
+                VStack(spacing: 0) {
+                    Toggle(isOn: Binding(get: { recording.isOn }, set: { actions.setPacketRecording($0) })) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: PacketRecordingText.title).font(Typography.body(size: 15))
+                            Text(verbatim: PacketRecordingText.explanation).font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(minHeight: Layout.minTarget)
+                    .padding(.vertical, 4)
+                    .accessibilityIdentifier("settings.packetRecording")
+                    Hairline()
+                }
+            }
+        }
     }
 
     private var appearanceGroup: some View {

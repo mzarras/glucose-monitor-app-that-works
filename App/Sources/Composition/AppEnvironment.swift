@@ -1,7 +1,8 @@
 // The composition root (HANDOFF §9.3 Phase 2; docs/architecture.md "Composition"). Builds exactly
 // one of each long-lived object for the process and hands the UI one `AppServices`:
 //
-//   G7CGMSource (restore id com.mzarras.sensor.g7kit.central, created during launch)
+//   G7CGMSource (restore id com.mzarras.sensor.g7kit.central, created during launch in the saved
+//                D45 mode from Application Support/SensorConnection.json)
 //   GlucoseStore  production, Application Support/GlucoseStore/readings.sqlite (D25) — opened at bootstrap
 //   AlertService  UNUserNotificationCenter adapter, audio player, AlarmKit adapter with the app's
 //                 StopUrgentLowAlarmIntent (D26); the intent bridge is connected at bootstrap
@@ -55,8 +56,18 @@ final class AppEnvironment {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let diagnostics = RingBufferDiagnosticLog(fileURL: support.appendingPathComponent("Diagnostics/diagnostics.json"))
 
-        // First, so CoreBluetooth can restore its central during this launch (HANDOFF §4.6).
-        let g7 = G7CGMSource(diagnostics: diagnostics)
+        // First, so CoreBluetooth can restore its central during this launch (HANDOFF §4.6), in the
+        // saved mode (D45; the settings file is readable before the first unlock, see
+        // SensorConnectionSettings.swift) with the saved raw-packet recording (D47).
+        let connectionSettings = makeConnectionSettingsStore(support: support)
+        #if DEBUG
+        // UI tests: `-resetConnectionMode` starts this launch from the defaults (pairing mode,
+        // recording off), so one test's mode switch never carries into the next launch.
+        if arguments.contains("-resetConnectionMode") {
+            try? FileManager.default.removeItem(at: connectionSettings.fileURL)
+        }
+        #endif
+        let g7 = G7CGMSource(configuration: connectionSettings.load().settings.g7Configuration, diagnostics: diagnostics)
 
         let credentials = KeychainCredentialStore()
         let trioGroupID = (Bundle.main.object(forInfoDictionaryKey: "TrioAppGroupID") as? String).flatMap { $0.isEmpty ? nil : $0 }
@@ -65,10 +76,7 @@ final class AppEnvironment {
             store: trioGroupID.map { AppGroupUserDefaultsStore(appGroupID: $0) },
             diagnostics: diagnostics
         )
-        let uploads = UploadCoordinator(
-            credentials: credentials, queueDirectory: support.appendingPathComponent("Uploads"),
-            deviceName: AppIdentity.displayName, diagnostics: diagnostics
-        )
+        let uploads = makeUploads(credentials: credentials, support: support, diagnostics: diagnostics)
         let ports = makeAlertPorts(arguments: arguments, diagnostics: diagnostics)
         let widget = WidgetSnapshotPublisher.appGroup().map { LiveWidgetPublisher(publisher: $0, accent: .default, diagnostics: diagnostics) }
         if widget == nil {
@@ -81,7 +89,24 @@ final class AppEnvironment {
             g7: g7, diagnostics: diagnostics, preferences: AppPreferences(), credentials: credentials, trio: trio, uploads: uploads,
             alertPorts: ports, widget: widget, databaseURL: support.appendingPathComponent("GlucoseStore/readings.sqlite"),
             httpTransport: URLSessionTransport(), launchReplay: launchReplay(arguments)
-        ))
+        ).with(connectionSettings: connectionSettings))
+    }
+
+    /// D45/D47: `Application Support/SensorConnection.json` (not UserDefaults; see the file comment of
+    /// SensorConnectionSettings.swift).
+    static func makeConnectionSettingsStore(support: URL) -> SensorConnectionSettingsStore {
+        SensorConnectionSettingsStore(fileURL: support.appendingPathComponent("SensorConnection.json"))
+    }
+
+    /// The Nightscout / Dexcom Share uploaders. Queues in the app's own container
+    /// (`Application Support/Uploads`, not an App Group: docs/architecture.md "Upload queues"); the
+    /// Nightscout `device` field is the app's name, `APP_DISPLAY_NAME` (via CFBundleDisplayName).
+    static func makeUploads(credentials: any CredentialStore, support: URL, diagnostics: any DiagnosticLog,
+                            transport: any HTTPTransport = URLSessionTransport()) -> UploadCoordinator {
+        UploadCoordinator(
+            credentials: credentials, queueDirectory: support.appendingPathComponent("Uploads"),
+            deviceName: AppIdentity.displayName, transport: transport, diagnostics: diagnostics
+        )
     }
 
     /// The alert service's delivery ports: UNUserNotificationCenter, the `.playback` audio player and

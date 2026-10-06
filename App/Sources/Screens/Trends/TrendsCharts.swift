@@ -9,11 +9,42 @@ import WidgetCore
 enum TimeOfDayAxis {
     static let hourMarks = [0, 6, 12, 18, 24]
 
-    /// Hours since local midnight of `dayStart`, e.g. 13.5 for 1:30 PM. A DST day is 23 or 25 hours
-    /// long; points keep their real offset from midnight, so the last hour may extend past 24 or
-    /// stop at 23 on those days.
-    static func hourOfDay(_ date: Date, dayStart: Date) -> Double {
-        date.timeIntervalSince(dayStart) / 3_600
+    /// The wall-clock hour of `date` on the day that starts at `dayStart` (local midnight in
+    /// `timeZone`), e.g. 13.5 for 1:30 PM. Review m17: a DST day is 23 or 25 hours long, so elapsed
+    /// time since midnight would put every reading after the change an hour off its axis label and
+    /// off the other days of the 3 D overlay. Elapsed time plus the UTC offset change since midnight
+    /// is the clock time: the skipped hour has no readings, and the repeated hour's two passes share
+    /// x (drawn as separate lines, `splitAtClockChanges`). Display only; reading dates are untouched.
+    static func hourOfDay(_ date: Date, dayStart: Date, timeZone: TimeZone) -> Double {
+        let offsetChange = timeZone.secondsFromGMT(for: date) - timeZone.secondsFromGMT(for: dayStart)
+        return (date.timeIntervalSince(dayStart) + Double(offsetChange)) / 3_600
+    }
+
+    /// The instant at wall-clock `hour` on that day (the scrub's inverse of `hourOfDay`). In a
+    /// repeated hour, its first pass; in a skipped hour, the moment the clock jumped.
+    static func date(atHour hour: Double, dayStart: Date, timeZone: TimeZone) -> Date {
+        let naive = dayStart.addingTimeInterval(hour * 3_600)
+        let offsetChange = timeZone.secondsFromGMT(for: naive) - timeZone.secondsFromGMT(for: dayStart)
+        let candidate = naive.addingTimeInterval(-Double(offsetChange))
+        if abs(hourOfDay(candidate, dayStart: dayStart, timeZone: timeZone) - hour) < 1.0 / 3_600 { return candidate }
+        return timeZone.nextDaylightSavingTimeTransition(after: candidate) ?? naive
+    }
+
+    /// Splits a line where the clock changed between two readings (DST): their x values are an hour
+    /// apart from their real spacing, so a joined line would cross the skipped hour or double back
+    /// over the repeated one (review m17).
+    static func splitAtClockChanges(_ segment: [PlottedPoint], timeZone: TimeZone) -> [[PlottedPoint]] {
+        var result: [[PlottedPoint]] = []
+        var current: [PlottedPoint] = []
+        for point in segment {
+            if let previous = current.last, timeZone.secondsFromGMT(for: previous.date) != timeZone.secondsFromGMT(for: point.date) {
+                result.append(current)
+                current = []
+            }
+            current.append(point)
+        }
+        if !current.isEmpty { result.append(current) }
+        return result
     }
 
     @AxisContentBuilder
@@ -92,8 +123,57 @@ struct AGPChart: View {
         .chartXAxis { TimeOfDayAxis.xAxis }
         .chartYAxis { TimeOfDayAxis.yAxis }
         .chartPlotStyle { $0.overlay(alignment: .bottom) { Rectangle().fill(Theme.ink).frame(height: 1) } }
+        .chartOverlay { proxy in
+            // A percentile that is the sensor's HIGH/LOW flag is drawn at the top/bottom edge; a
+            // "HIGH"/"LOW" label at the start of each run says so, so the edge never reads as a value
+            // (S4, Phase 2 review nit).
+            GeometryReader { geometry in
+                if let anchor = proxy.plotFrame {
+                    let plot = geometry[anchor]
+                    ForEach(AGPFlagMarkers.runs(buckets)) { marker in
+                        if let x = proxy.position(forX: Double(marker.minuteOfDay) / 60) {
+                            Text(verbatim: marker.isHigh ? "HIGH" : "LOW")
+                                .font(Typography.fixedLabel(size: 8, medium: true))
+                                .foregroundStyle(Theme.band(marker.isHigh ? .veryHigh : .veryLow))
+                                .fixedSize()
+                                .position(x: min(max(plot.minX + x, plot.minX + 14), plot.maxX - 14),
+                                          y: marker.isHigh ? plot.minY + 7 : plot.maxY - 8)
+                        }
+                    }
+                }
+            }
+            .accessibilityHidden(true)
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: TrendsText.agpSpeech(buckets)))
+    }
+}
+
+/// Where the AGP chart labels a flag (S4): the first bucket of each run of buckets whose 95th
+/// percentile is HIGH, or whose 5th is LOW. Runs break where buckets are more than an hour apart
+/// (the lines break there too, `AGPSegmentation`).
+enum AGPFlagMarkers {
+    struct Marker: Equatable, Identifiable, Sendable {
+        let minuteOfDay: Int
+        let isHigh: Bool
+        var id: String { "\(isHigh ? "H" : "L")\(minuteOfDay)" }
+    }
+
+    static func runs(_ buckets: [AGPBucket]) -> [Marker] {
+        var markers: [Marker] = []
+        for segment in AGPSegmentation.segments(buckets) {
+            var previousHigh = false
+            var previousLow = false
+            for bucket in segment {
+                let high = bucket.p95 == .aboveRange
+                let low = bucket.p5 == .belowRange
+                if high && !previousHigh { markers.append(Marker(minuteOfDay: bucket.minuteOfDay, isHigh: true)) }
+                if low && !previousLow { markers.append(Marker(minuteOfDay: bucket.minuteOfDay, isHigh: false)) }
+                previousHigh = high
+                previousLow = low
+            }
+        }
+        return markers
     }
 }
 
@@ -132,6 +212,9 @@ struct DayOverlayChart: View {
         let isToday: Bool
         let points: [PlottedPoint]
         let dayStart: Date
+        let timeZone: TimeZone
+
+        func hour(_ date: Date) -> Double { TimeOfDayAxis.hourOfDay(date, dayStart: dayStart, timeZone: timeZone) }
     }
 
     private struct Flag: Identifiable {
@@ -150,7 +233,7 @@ struct DayOverlayChart: View {
 
     private func selection(for day: DayTrace) -> ScrubSelection {
         guard let scrubHour else { return .none }
-        return ChartScrub.select(at: day.dayStart.addingTimeInterval(scrubHour * 3_600), in: day.points)
+        return ChartScrub.select(at: TimeOfDayAxis.date(atHour: scrubHour, dayStart: day.dayStart, timeZone: day.timeZone), in: day.points)
     }
 
     var body: some View {
@@ -159,17 +242,19 @@ struct DayOverlayChart: View {
         var flags: [Flag] = []
         for day in ordered {
             let series = ChartSeries(points: day.points)
-            for (index, segment) in series.segments.enumerated() {
-                lines.append(Line(id: "\(day.dayStart.timeIntervalSince1970)-\(index)", isToday: day.isToday, points: segment, dayStart: day.dayStart))
+            let segments = series.segments.flatMap { TimeOfDayAxis.splitAtClockChanges($0, timeZone: day.timeZone) }
+            for (index, segment) in segments.enumerated() {
+                lines.append(Line(id: "\(day.dayStart.timeIntervalSince1970)-\(index)", isToday: day.isToday, points: segment,
+                                  dayStart: day.dayStart, timeZone: day.timeZone))
             }
             for run in series.lowFlagRuns {
                 for (index, date) in run.enumerated() {
-                    flags.append(Flag(id: "L\(date.timeIntervalSince1970)", hour: TimeOfDayAxis.hourOfDay(date, dayStart: day.dayStart), isLow: true, isToday: day.isToday, isRunStart: index == 0))
+                    flags.append(Flag(id: "L\(date.timeIntervalSince1970)", hour: TimeOfDayAxis.hourOfDay(date, dayStart: day.dayStart, timeZone: day.timeZone), isLow: true, isToday: day.isToday, isRunStart: index == 0))
                 }
             }
             for run in series.highFlagRuns {
                 for (index, date) in run.enumerated() {
-                    flags.append(Flag(id: "H\(date.timeIntervalSince1970)", hour: TimeOfDayAxis.hourOfDay(date, dayStart: day.dayStart), isLow: false, isToday: day.isToday, isRunStart: index == 0))
+                    flags.append(Flag(id: "H\(date.timeIntervalSince1970)", hour: TimeOfDayAxis.hourOfDay(date, dayStart: day.dayStart, timeZone: day.timeZone), isLow: false, isToday: day.isToday, isRunStart: index == 0))
                 }
             }
         }
@@ -182,13 +267,13 @@ struct DayOverlayChart: View {
                 .foregroundStyle(Theme.rangeBand)
             ForEach(lines) { line in
                 if line.points.count == 1, let only = line.points.first {
-                    PointMark(x: .value("Hour", TimeOfDayAxis.hourOfDay(only.date, dayStart: line.dayStart)), y: .value("mg/dL", only.mgdl))
+                    PointMark(x: .value("Hour", line.hour(only.date)), y: .value("mg/dL", only.mgdl))
                         .symbolSize(20)
                         .foregroundStyle(line.isToday ? AnyShapeStyle(Theme.ink) : AnyShapeStyle(Theme.muted))
                 } else {
                     ForEach(line.points, id: \.date) { point in
                         LineMark(
-                            x: .value("Hour", TimeOfDayAxis.hourOfDay(point.date, dayStart: line.dayStart)),
+                            x: .value("Hour", line.hour(point.date)),
                             y: .value("mg/dL", point.mgdl),
                             series: .value("Segment", line.id)
                         )
@@ -262,7 +347,7 @@ struct DayOverlayChart: View {
     @ViewBuilder
     private func scrubMarks(proxy: ChartProxy, plot: CGRect, selection: ScrubSelection) -> some View {
         if let primary, let scrubHour, let callout = ChartScrub.callout(selection, time: { TimeText.time($0) }) {
-            let hour: Double = selection.reading.map { TimeOfDayAxis.hourOfDay($0.date, dayStart: primary.dayStart) } ?? scrubHour
+            let hour: Double = selection.reading.map { TimeOfDayAxis.hourOfDay($0.date, dayStart: primary.dayStart, timeZone: primary.timeZone) } ?? scrubHour
             if let x = proxy.position(forX: hour) {
                 Rectangle()
                     .fill(selection.reading == nil ? AnyShapeStyle(Theme.muted) : AnyShapeStyle(Theme.ink))

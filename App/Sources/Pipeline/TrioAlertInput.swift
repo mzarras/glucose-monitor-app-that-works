@@ -11,7 +11,7 @@ import Foundation
 
 extension TrioBridgeSummary {
     var alertInput: TrioBridgeStatus {
-        guard isEnabled, liveOutputsAllowed else { return .off }
+        guard isEnabled, liveOutputsAllowed, !offWhileListening else { return .off }
         let since = problemSince ?? lastErrorAt ?? newestReadingWrittenAt ?? .distantPast
         if let unavailableReason {
             return .writeFailing(since: since, reason: unavailableReason)

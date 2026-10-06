@@ -8,6 +8,12 @@
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/DexcomG7AuthBridge.m @ 7.1.0 (0370937)
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/KeepAliveTxMessage.swift @ 7.1.0 (0370937)
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/PairRequestTxMessage.swift @ 7.1.0 (0370937)
+// CGMBLEKit lineage: CGMBLEKit/Messages/KeepAliveTxMessage.swift (LoopKit CGMBLEKit, formerly xDripG5;
+//   MIT, Packages/G7Kit/licenses/CGMBLEKit-LICENSE), reached through xDrip4iOS;
+//   compared with loopandlearn/CGMBLEKit @ 98fae79 (Trio submodule).
+// CGMBLEKit lineage: CGMBLEKit/Messages/BondRequestTxMessage.swift (LoopKit CGMBLEKit, formerly xDripG5;
+//   MIT, Packages/G7Kit/licenses/CGMBLEKit-LICENSE), reached through xDrip4iOS;
+//   compared with loopandlearn/CGMBLEKit @ 98fae79 (Trio submodule).
 // Changes: the control packets that xDrip4iOS builds and checks inline are named types here.
 
 import Foundation

@@ -626,6 +626,69 @@ final class G7ControllerSafetyTests: XCTestCase {
         XCTAssertNoThrow(try harness.controller.submitCalibration(CalibrationRequest(mgdl: 120, takenAt: harness.clock.now)))
     }
 
+    // MARK: - Audit m1: backfill floor from the store
+
+    /// The app's store failed after r1; r2 and r3 were delivered (alerts, Trio) but never stored, and
+    /// iOS terminated the app. After the relaunch the app reports r1 as the newest stored reading; the
+    /// sensor's backfill then brings r2 and r3 back, byte-identical to the first delivery except
+    /// `isBackfill`. Without the floor the newest delivered reading (r3, G7Kit's persisted mark)
+    /// would not come back. (Records G7Kit does not know as published after a relaunch — r1, r2 —
+    /// are published as usual; a stored one, r1, dedupes by id in the store.)
+    func test_S3_crashWithUnstoredReadingsRepublishesFromTheStoredFloor() throws {
+        func run(reportFloor: Bool) throws -> (delivered: [GlucoseReading], afterRelaunch: [GlucoseReading], harness: ControllerHarness) {
+            let harness = ControllerHarness()
+            try harness.pair(glucose: harness.currentGlucose(120, trend: 0x10))
+            for value: UInt16 in [121, 122] {
+                harness.clock.advance(300)
+                harness.connection(glucose: harness.currentGlucose(value, trend: 0x10))
+            }
+            let delivered = harness.readings // r1 stored; r2, r3 only delivered
+            let relaunched = ControllerHarness(store: harness.store, relaunchOf: harness)
+            relaunched.controller.emitInitialState()
+            try relaunched.controller.start(pairingCode: nil)
+            let serial = try XCTUnwrap(relaunched.controller.storedSensorSerial)
+            if reportFloor { relaunched.controller.setLatestStoredReading(delivered[0], serial: serial) }
+            relaunched.clock.advance(300)
+            let backfill = delivered.map { reading in
+                Fixture.backfill(timestamp: UInt32(reading.id.split(separator: ":").last!)!, glucose: UInt16(reading.value.numericMgdl!), trend: 0x10)
+            }
+            relaunched.connection(glucose: relaunched.currentGlucose(123, trend: 0x10), backfill: backfill)
+            return (delivered, relaunched.readings, relaunched)
+        }
+
+        let (delivered, afterRelaunch, harness) = try run(reportFloor: true)
+        XCTAssertEqual(afterRelaunch.map(\.value), [.mgdl(123), .mgdl(120), .mgdl(121), .mgdl(122)], "live r4, then the backfill, ascending")
+        for (original, again) in zip(delivered, afterRelaunch.dropFirst()) {
+            XCTAssertEqual(again, GlucoseReading(id: original.id, date: original.date, value: original.value, trendRate: original.trendRate,
+                                                 isBackfill: true, source: original.source, sensorSerial: original.sensorSerial),
+                           "byte-identical to the first delivery except isBackfill")
+        }
+        XCTAssertTrue(harness.log.messages.contains { $0.contains("1 record(s) above the stored floor published again (m1)") }, "r3")
+        XCTAssertEqual(harness.record?.newestReading?.date, afterRelaunch[0].date, "the newest mark follows the live reading")
+
+        let (_, withoutFloor, _) = try run(reportFloor: false)
+        XCTAssertFalse(withoutFloor.contains { $0.id == delivered[2].id }, "without the floor the persisted newest mark blocks r3")
+        XCTAssertEqual(withoutFloor.count, 3)
+    }
+
+    /// Audit m1: the floor applies only to the sensor it names; a reading of another sensor (a
+    /// previous session) or a foreign id is ignored, so nothing from another session is re-published.
+    func test_S3_backfillFloorAppliesOnlyToItsOwnSensor() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        let serial = try XCTUnwrap(harness.controller.storedSensorSerial)
+        let r1 = try XCTUnwrap(harness.readings.first)
+        XCTAssertEqual(G7Controller.sensorTimestamp(of: r1, serial: serial), UInt32(r1.id.split(separator: ":").last!)!)
+        let foreign = GlucoseReading(id: "DXCM9Z-00000000:100", date: r1.date, value: .mgdl(99), trendRate: nil, isBackfill: false, source: .sensor, sensorSerial: "DXCM9Z-00000000")
+        harness.controller.setLatestStoredReading(foreign, serial: serial)
+        XCTAssertTrue(harness.log.messages.contains { $0.contains("is not a reading of \(serial); ignored") })
+        XCTAssertNil(G7Controller.sensorTimestamp(of: foreign, serial: serial))
+        harness.controller.setLatestStoredReading(nil, serial: "DXCM9Z-00000000") // another sensor's floor
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(121), backfill: [Fixture.backfill(timestamp: UInt32(r1.id.split(separator: ":").last!)!, glucose: 120)])
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(121)], "no floor for this sensor: r1 is not re-published")
+    }
+
     // MARK: - Save failures
 
     /// Follow-up 2: repeated failures to save the pairing record are surfaced (S5), not only logged;

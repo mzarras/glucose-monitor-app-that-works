@@ -16,15 +16,29 @@ struct SensorSettingsView: View {
     /// G7Kit `hasStoredSensor` (review N2). Chooses `pairAgain(code:)` vs `pair(code:)`; false
     /// (the safe fallback: `pair(code:)` always works) until Phase 2 passes the real value.
     var hasStoredSensor = false
+    /// D45: nil until the facade offers listen mode; then the CONNECTION choice is shown, and while
+    /// listening the pairing-only actions (calibrate, pair again, forget) are explained instead.
+    var connection: ConnectionModeState? = nil
+    /// D45: a switch on its way, and why the last one didn't happen.
+    var connectionSwitchingTo: SensorConnectionMode? = nil
+    var connectionFeedback: String? = nil
     @State private var confirmingStop = false
     @State private var confirmingForget = false
+    @State private var confirmingMode: SensorConnectionMode?
+    @State private var confirmingStopFollowing = false
+
+    private var listening: Bool { connection?.isListening == true }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Layout.sectionSpacing) {
                 PageTitle("G7 sensor")
                     .accessibilityIdentifier("settings.sensor.page")
-                SettingsValueRow(title: "Status", value: SensorStatusText.row(sensor.state, now: Date()))
+                if listening {
+                    ListeningStatusLine()
+                }
+                SettingsValueRow(title: "Status", value: SensorStatusText.row(sensor.state, now: Date(), listening: listening))
+                    .accessibilityIdentifier("settings.sensor.status")
                 if let serial = sensor.serial {
                     SettingsValueRow(title: "Serial", value: serial)
                 }
@@ -47,44 +61,125 @@ struct SensorSettingsView: View {
                 if let feedback {
                     FieldMessage(text: feedback)
                 }
-                calibrateRow
-                if sensor.isWaitingForFirstState {
-                    // Review M1: the facade's launch default is not "no sensor"; don't offer to pair yet.
-                    HStack(spacing: 10) {
-                        ProgressView().accessibilityHidden(true)
-                        Text(verbatim: "Checking for your sensor…").font(Typography.body(size: 13))
+                if let connection, connection.mode == nil {
+                    // Not chosen yet: the choice comes first, before anything about pairing.
+                    ExplanationNote(text: ConnectionModeText.chooseFirst)
+                    connectionSection(connection)
+                } else {
+                    if listening {
+                        listeningSection
+                    } else {
+                        pairedSection
                     }
-                    .accessibilityElement(children: .combine)
-                } else if let offer = PairingGuidance.settingsOffer(for: sensor.state, failureSince: sensor.failureSince,
-                                                                    hasStoredSensor: hasStoredSensor, now: Date()) {
-                    if case .failed(let failure) = sensor.state {
-                        FieldMessage(text: failure.message)
+                    if let connection {
+                        connectionSection(connection)
                     }
-                    PairingOfferView(offer: offer, pair: actions.pair, pairAgain: actions.pairAgain)
-                } else if sensor.canStopSession {
-                    // G7 sensors can't be stopped from the phone (`AppServices.canStopSession`).
-                    Button("Stop sensor session") { confirmingStop = true }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .confirmationDialog("Stop this sensor session?", isPresented: $confirmingStop, titleVisibility: .visible) {
-                            Button("Stop session", role: .destructive, action: actions.stopSession)
-                        } message: {
-                            Text("The sensor stops sending readings for good. Trio and followers get no new readings until a new sensor is paired.")
-                        }
-                }
-                if sensor.state != .notPaired {
-                    Hairline()
-                    Button("Forget this sensor") { confirmingForget = true }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .accessibilityIdentifier("settings.sensor.forget")
-                        .confirmationDialog("Forget this sensor?", isPresented: $confirmingForget, titleVisibility: .visible) {
-                            Button("Forget sensor", role: .destructive, action: actions.forgetSensor)
-                        } message: {
-                            Text("Deletes its pairing from this app. Readings stop until a sensor is paired again; Trio stops getting readings from this app.")
-                        }
                 }
             }
             .padding(.horizontal, Layout.sideMargin)
             .padding(.vertical, 12)
+        }
+    }
+
+    /// D45 while listening: the sensor's failure, if any, and where to act instead of each
+    /// pairing-only action (this app sends nothing to the sensor).
+    @ViewBuilder
+    private var listeningSection: some View {
+        if case .failed(let failure) = sensor.state {
+            // S5: the failure stays on the page, in words for listening where it is one of those.
+            FieldMessage(text: ListenModeRules.failure(failure, listening: true)?.detail ?? failure.message)
+        }
+        VStack(alignment: .leading, spacing: 6) {
+            ExplanationNote(text: ConnectionModeText.calibrationWhileListening)
+            ExplanationNote(text: ConnectionModeText.pairingWhileListening)
+        }
+        .accessibilityIdentifier("settings.sensor.listeningNotes")
+        if ListenModeRules.offersStopFollowing(sensor) {
+            // G7Kit §14: forgetting the followed sensor is how listen mode follows the next one.
+            VStack(alignment: .leading, spacing: 6) {
+                Button(ConnectionModeText.stopFollowingButton) { confirmingStopFollowing = true }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .accessibilityIdentifier("settings.sensor.stopFollowing")
+                    .confirmationDialog(ConnectionModeText.stopFollowingTitle, isPresented: $confirmingStopFollowing, titleVisibility: .visible) {
+                        Button(ConnectionModeText.stopFollowingButton, role: .destructive, action: actions.forgetSensor)
+                    } message: {
+                        Text(verbatim: ConnectionModeText.stopFollowingMessage)
+                    }
+                ExplanationNote(text: ConnectionModeText.stopFollowingNote)
+            }
+        }
+    }
+
+    private func connectionSection(_ connection: ConnectionModeState) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SectionLabel("CONNECTION")
+            ConnectionModeChoices(selected: connectionSwitchingTo ?? connection.mode) { mode in
+                if mode != connection.mode { confirmingMode = mode }
+            }
+            .disabled(connectionSwitchingTo != nil)
+            if connectionSwitchingTo != nil {
+                HStack(spacing: 10) {
+                    ProgressView().accessibilityHidden(true)
+                    Text(verbatim: ConnectionModeText.switching).font(Typography.body(size: 13))
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if let connectionFeedback {
+                FieldMessage(text: connectionFeedback)
+                    .accessibilityIdentifier("settings.connection.message")
+            }
+        }
+        .confirmationDialog(confirmingMode.map(ConnectionModeText.switchTitle(to:)) ?? "",
+                            isPresented: Binding(get: { confirmingMode != nil }, set: { if !$0 { confirmingMode = nil } }),
+                            titleVisibility: .visible, presenting: confirmingMode) { mode in
+            Button(ConnectionModeText.switchButton(to: mode)) { actions.setConnectionMode(mode) }
+        } message: { mode in
+            Text(verbatim: ConnectionModeText.switchMessage(to: mode))
+        }
+    }
+
+    /// Pairing this app: calibrate, pairing offers, stop session, forget.
+    @ViewBuilder
+    private var pairedSection: some View {
+        calibrateRow
+        if sensor.isWaitingForFirstState {
+            // Review M1: the facade's launch default is not "no sensor"; don't offer to pair yet.
+            HStack(spacing: 10) {
+                ProgressView().accessibilityHidden(true)
+                Text(verbatim: "Checking for your sensor…").font(Typography.body(size: 13))
+            }
+            .accessibilityElement(children: .combine)
+        } else if let offer = PairingGuidance.settingsOffer(for: sensor.state, failureSince: sensor.failureSince,
+                                                            hasStoredSensor: hasStoredSensor, now: Date()) {
+            if case .failed(let failure) = sensor.state {
+                FieldMessage(text: failure.message)
+            }
+            if connection != nil {
+                // D45: said plainly before the code field.
+                WarningNote(text: ConnectionModeText.pairingTakeoverWarning)
+                    .accessibilityIdentifier("settings.sensor.takeoverWarning")
+            }
+            PairingOfferView(offer: offer, pair: actions.pair, pairAgain: actions.pairAgain)
+        } else if sensor.canStopSession {
+            // G7 sensors can't be stopped from the phone (`AppServices.canStopSession`).
+            Button("Stop sensor session") { confirmingStop = true }
+                .buttonStyle(SecondaryButtonStyle())
+                .confirmationDialog("Stop this sensor session?", isPresented: $confirmingStop, titleVisibility: .visible) {
+                    Button("Stop session", role: .destructive, action: actions.stopSession)
+                } message: {
+                    Text("The sensor stops sending readings for good. Trio and followers get no new readings until a new sensor is paired.")
+                }
+        }
+        if sensor.state != .notPaired {
+            Hairline()
+            Button("Forget this sensor") { confirmingForget = true }
+                .buttonStyle(SecondaryButtonStyle())
+                .accessibilityIdentifier("settings.sensor.forget")
+                .confirmationDialog("Forget this sensor?", isPresented: $confirmingForget, titleVisibility: .visible) {
+                    Button("Forget sensor", role: .destructive, action: actions.forgetSensor)
+                } message: {
+                    Text("Deletes its pairing from this app. Readings stop until a sensor is paired again; Trio stops getting readings from this app.")
+                }
         }
     }
 
@@ -98,8 +193,7 @@ struct SensorSettingsView: View {
                 Text(verbatim: reason).font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
             }
             if let submission = calibration.lastSubmission {
-                let text = CalibrationRules.outcomeText(submission.outcome, state: calibration, now: Date())
-                Text(verbatim: "Last calibration \(submission.request.mgdl) mg/dL at \(TimeText.time(submission.request.takenAt)): \(text.title.lowercased()).")
+                Text(verbatim: CalibrationRules.lastCalibrationText(submission, state: calibration, now: Date()))
                     .font(Typography.body(size: 12))
                     .foregroundStyle(Theme.muted)
             }
@@ -163,6 +257,7 @@ struct PairingCodeEntry: View {
             .padding(.horizontal, 12)
             .overlay(Rectangle().stroke(Theme.ink, lineWidth: 1))
             .accessibilityLabel(Text("Pairing code, 4 digits"))
+            .accessibilityIdentifier("pairing.code")
             Button(buttonTitle) { pair(code) }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(!PairingCode.isComplete(code))
@@ -175,19 +270,24 @@ struct PairingCodeEntry: View {
 struct TrioSettingsView: View {
     let trio: TrioSettings
     let setEnabled: @MainActor (Bool) -> Void
+    /// D45: listening alongside the Dexcom app forces the handoff off (the switch shows off and is
+    /// disabled; Trio keeps its own path).
+    var listening = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Layout.sectionSpacing) {
                 PageTitle("Trio handoff")
-                Toggle(isOn: Binding(get: { trio.isEnabled }, set: { setEnabled($0) })) {
+                Toggle(isOn: Binding(get: { trio.isEnabled && !listening }, set: { setEnabled($0) })) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(verbatim: "Hand readings to Trio").font(Typography.body(size: 15, weight: .medium))
-                        Text(verbatim: "Writes each valid sensor reading to Trio's App Group. In Trio, choose xDrip4iOS as the CGM source.")
+                        Text(verbatim: listening ? ConnectionModeText.outputsOffWhileListening
+                                                 : "Writes each valid sensor reading to Trio's App Group. In Trio, choose xDrip4iOS as the CGM source.")
                             .font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
                     }
                 }
                 .frame(minHeight: Layout.minTarget)
+                .disabled(listening)
                 .accessibilityIdentifier("settings.trio.toggle")
                 Hairline()
                 if trio.pausedInDebugBuild {
@@ -203,6 +303,13 @@ struct TrioSettingsView: View {
                 }
                 if trio.isEnabled {
                     SettingsValueRow(title: "Last write", value: SettingsText.trioLastWrite(trio))
+                    if let heldBack = SettingsText.trioHeldBack(trio) {
+                        Text(verbatim: heldBack)
+                            .font(Typography.body(size: 12))
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("settings.trio.heldBack")
+                    }
                     SettingsValueRow(title: "Heartbeat", value: trio.heartbeatPublished ? "published" : "not published")
                     if let error = trio.heartbeatError {
                         WarningNote(text: "Trio's heartbeat couldn't be written: \(error). Trio may not loop in the background.")
@@ -210,7 +317,7 @@ struct TrioSettingsView: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     SettingsValueRow(title: "App Group", value: trio.appGroupID ?? "missing from this build")
-                    Text(verbatim: "Must match Trio's Settings › App Info › Group ID. Both apps need the same Team ID.")
+                    Text(verbatim: SettingsText.trioAppGroupHelp)
                         .font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -233,6 +340,9 @@ struct SharingSettingsView: View {
     let share: DexcomShareSettings
     var feedback = SettingsFeedback()
     let actions: SettingsActions
+    /// D45: listening alongside the Dexcom app forces both uploads off (switches off and disabled;
+    /// the Dexcom app keeps its own sharing). Site and credentials can still be saved for later.
+    var listening = false
     @State private var url = ""
     @State private var token = ""
     @State private var username = ""
@@ -245,7 +355,7 @@ struct SharingSettingsView: View {
                 PageTitle("Sharing")
                 nightscoutSection
                 shareSection
-                if nightscout.uploadEnabled || share.isEnabled {
+                if !listening, nightscout.uploadEnabled || share.isEnabled {
                     Button("Retry uploads now", action: actions.retryUploads)
                         .buttonStyle(SecondaryButtonStyle())
                 }
@@ -277,10 +387,17 @@ struct SharingSettingsView: View {
             if let message = feedback.nightscout {
                 Text(verbatim: message).font(Typography.body(size: 13)).foregroundStyle(message == "Saved." ? AnyShapeStyle(Theme.muted) : AnyShapeStyle(Theme.alert))
             }
-            Toggle(isOn: Binding(get: { nightscout.uploadEnabled }, set: { actions.setNightscoutUpload($0) })) {
-                Text(verbatim: "Upload readings").font(Typography.body(size: 15, weight: .medium))
+            Toggle(isOn: Binding(get: { nightscout.uploadEnabled && !listening }, set: { actions.setNightscoutUpload($0) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: "Upload readings").font(Typography.body(size: 15, weight: .medium))
+                    if listening {
+                        Text(verbatim: ConnectionModeText.outputsOffWhileListening).font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
+                    }
+                }
             }
             .frame(minHeight: Layout.minTarget)
+            .disabled(listening)
+            .accessibilityIdentifier("settings.nightscout.toggle")
             if nightscout.pausedInDebugBuild {
                 WarningNote(text: SettingsText.pausedInDebugBuild)
             }
@@ -298,14 +415,17 @@ struct SharingSettingsView: View {
     private var shareSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionLabel("DEXCOM SHARE")
-            Toggle(isOn: Binding(get: { share.isEnabled }, set: { actions.setShareEnabled($0) })) {
+            Toggle(isOn: Binding(get: { share.isEnabled && !listening }, set: { actions.setShareEnabled($0) })) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: "Upload to Dexcom Share").font(Typography.body(size: 15, weight: .medium))
-                    Text(verbatim: "Keeps Dexcom Follow working after the Dexcom app is removed. Unofficial: it may stop working if Dexcom changes its service.")
+                    Text(verbatim: listening ? ConnectionModeText.outputsOffWhileListening
+                                             : "Keeps Dexcom Follow working after the Dexcom app is removed. Unofficial: it may stop working if Dexcom changes its service.")
                         .font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
                 }
             }
             .frame(minHeight: Layout.minTarget)
+            .disabled(listening)
+            .accessibilityIdentifier("settings.share.toggle")
             Picker(selection: Binding(get: { share.region }, set: { actions.setShareRegion($0) })) {
                 ForEach(ShareRegion.allCases, id: \.self) { Text(verbatim: $0.label).tag($0) }
             } label: {
@@ -515,6 +635,8 @@ enum Credits {
         Entry(name: "Loop", license: "MIT", use: "Alert delivery approach: ringer-off playback, AlarmKit system alarms, stale/backfill guards."),
         Entry(name: "Nightscout cgm-remote-monitor", license: "AGPL-3.0", use: "REST API contract, authorization, entry dedupe, LOW/HIGH (39/401) conventions."),
         Entry(name: "share2nightscout-bridge", license: "GPL-3.0-only", use: "Dexcom trend-code numbering."),
+        Entry(name: "LoopFollow", license: "AGPL-3.0", use: "Follower alarm behaviour on a LOW reading (39)."),
+        Entry(name: "nightguard", license: "AGPL-3.0", use: "How a follower displays LOW and HIGH (39/401)."),
         Entry(name: "LoopKit dexcom-share-client-swift", license: "MIT", use: "Dexcom Share LOW/HIGH reading convention."),
         Entry(name: "Trio", license: "AGPL-3.0", use: "App Group CGM contract and Nightscout upload settings; integrated through its App Group contract only."),
     ]
