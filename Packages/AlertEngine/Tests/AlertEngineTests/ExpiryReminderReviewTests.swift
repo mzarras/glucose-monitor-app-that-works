@@ -160,6 +160,44 @@ final class ExpiryReminderReviewTests: XCTestCase {
         XCTAssertEqual(end.ensured, [.sensorGracePeriod], "only the grace start's moment check")
     }
 
+    /// Review n2: the phone clock set back 5 minutes a minute before the 2-hour reminder. iOS fires it
+    /// on real time; the next wake brings the session's dates shifted with the clock (the reading
+    /// first, then the state). The reminder's new date is in the past: it is checked, not posted again.
+    func test_aClockSetBackJustBeforeAReminderDoesNotPostItTwice() {
+        let h = harness()
+        h.mgdl(120)
+        h.send(.sensorState(active))
+        let twoHours = expiresAt.addingTimeInterval(-hours(2))
+        moveClock(h, to: twoHours.addingTimeInterval(-60))   // real 19:39
+        h.tick()
+        h.clock.advance(seconds: -300)                       // wall 19:34
+        h.clock.advance(seconds: 120)                        // wall 19:36, real 19:41: iOS fired it at real 19:40
+        let start = session.start.addingTimeInterval(-300)
+        h.session = SensorSession(serial: Fixtures.serial, start: start, warmUpEndsAt: start.addingTimeInterval(1800),
+                                  expiresAt: expiresAt.addingTimeInterval(-300), gracePeriodEndsAt: graceEndsAt.addingTimeInterval(-300))
+        let reading = h.mgdl(120).reminderActions
+        XCTAssertEqual(reading, [], "the reading's dates alone do not move the plan by halves")
+        let state = h.send(.sensorState(.active(sessionStart: start, expiresAt: expiresAt.addingTimeInterval(-300)))).reminderActions
+        XCTAssertEqual(state.fired, [], "not posted blindly")
+        XCTAssertNil(state.scheduled(.sensorExpiringIn2Hours), "nor added again")
+        XCTAssertFalse(state.contains(.cancelSlots(.sensorExpiringIn2Hours, [0])))
+        XCTAssertEqual(state.ensured, [.sensorExpiringIn2Hours], "checked: posted only if it is not there")
+        XCTAssertEqual(state.scheduled(.sensorGracePeriod), [expiresAt.addingTimeInterval(-300)], "later ones follow the clock")
+        XCTAssertEqual(state.scheduled(.sensorExpired), [graceEndsAt.addingTimeInterval(-300)])
+        XCTAssertEqual(h.tick().reminderActions, [])
+    }
+
+    func test_aClockSetBackPastARefusedReminderPostsIt() throws {
+        let h = harness()
+        h.mgdl(120)
+        let notice = try XCTUnwrap(h.send(.sensorState(active)).scheduledNotices(.sensorExpiringIn2Hours)?.first)
+        h.send(.notificationsNotScheduled([notice]))
+        moveClock(h, to: expiresAt.addingTimeInterval(-hours(2) - 60))
+        h.clock.advance(seconds: -180)
+        let state = h.send(.sensorState(.active(sessionStart: session.start, expiresAt: expiresAt.addingTimeInterval(-300)))).reminderActions
+        XCTAssertEqual(state.fired, [.sensorExpiringIn2Hours], "known to be missing: posted")
+    }
+
     func test_dismissingAReminderThatJustCameDueNeedsNoCheck() {
         let h = harness()
         h.mgdl(120)

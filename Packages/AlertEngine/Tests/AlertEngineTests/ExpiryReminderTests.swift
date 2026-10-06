@@ -182,8 +182,9 @@ final class ExpiryReminderTests: XCTestCase {
         XCTAssertEqual(actions.scheduled(.sensorExpiringIn2Hours), [moved.addingTimeInterval(-hours(2))])
         XCTAssertEqual(actions.scheduledNotices(.sensorExpiringIn2Hours)?.first?.title, "Sensor expires in 2 hours (at 10:10 PM)")
         XCTAssertEqual(actions.scheduledNotices(.sensorExpiringIn12Hours)?.first?.body,
-                       "The session ends today at 10:10 PM. An 11 h 30 min grace period follows.")
+                       "The session ends today at 10:10 PM. A 12-hour grace period follows.", "the grace end moves with it")
         XCTAssertEqual(actions.scheduled(.sensorGracePeriod), [moved])
+        XCTAssertEqual(actions.scheduled(.sensorExpired), [graceEndsAt.addingTimeInterval(1800)])
         XCTAssertEqual(actions.fired, [])
         XCTAssertFalse(actions.contains { if case .cancelSlots = $0 { return true } else { return false } }, "replaced, same identifiers")
         XCTAssertEqual(h.send(.sensorState(.active(sessionStart: session.start.addingTimeInterval(1801), expiresAt: moved.addingTimeInterval(1))))

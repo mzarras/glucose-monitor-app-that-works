@@ -88,6 +88,10 @@ final class AlertTextTests: XCTestCase {
         c.graceEndsAt = Fixtures.t0.addingTimeInterval(12 * 3600 + 30 * 60)
         XCTAssertEqual(AlertText.title(.sensorGracePeriod, context: c), "Sensor session ended — 12 h 30 min grace period")
         XCTAssertEqual(AlertText.body(.sensorExpiringIn2Hours, context: c, isRepeat: false), "Plan a sensor change. A 12 h 30 min grace period follows.")
+        c.graceEndsAt = Fixtures.t0.addingTimeInterval(11 * 3600 + 30 * 60)
+        XCTAssertEqual(AlertText.body(.sensorExpiringIn2Hours, context: c, isRepeat: false), "Plan a sensor change. An 11 h 30 min grace period follows.")
+        c.graceEndsAt = Fixtures.t0.addingTimeInterval(8 * 3600)
+        XCTAssertEqual(AlertText.body(.sensorExpiringIn2Hours, context: c, isRepeat: false), "Plan a sensor change. An 8-hour grace period follows.")
     }
 
     func test_kindProperties() {
