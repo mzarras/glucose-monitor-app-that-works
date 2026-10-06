@@ -47,13 +47,17 @@ enum ClockMismatchMonitor {
         now: Date,
         uptime: Uptime?
     ) -> ClockMismatchState {
+        // Nil means "not known yet" (e.g. the store is still opening at launch), not "no reading":
+        // keep the latch and the last clock record as they are, so a relaunch can neither clear a
+        // latch nor hide a clock change made while the latest reading was unknown (review B1).
+        guard let latest else { return state }
         var next = state
-        let latestReading = latest.map { LatestReading(reading: $0, previous: previous) }
+        let latestReading = LatestReading(reading: latest, previous: previous)
         next.latchedFor = ClockMismatchLatch.update(latchedFor: state.latchedFor, latest: latestReading, now: now)
         if let uptime, let lastUptime = state.lastCheckUptime, let lastWall = state.lastCheckWallClock,
            let realElapsed = uptime.seconds(since: lastUptime) {
             let wallElapsed = now.timeIntervalSince(lastWall)
-            if abs(wallElapsed - realElapsed) > tolerance, let latest {
+            if abs(wallElapsed - realElapsed) > tolerance {
                 next.latchedFor = latest.date
             }
         }

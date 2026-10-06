@@ -39,6 +39,7 @@ extension AlertKind {
         case .missedReadings: return "Missed readings"
         case .sensorWarmUpComplete: return "Warm-up complete"
         case .sensorExpiringIn24Hours: return "Sensor expires in 24 h"
+        case .sensorExpiringIn12Hours: return "Sensor expires in 12 h"
         case .sensorExpiringIn2Hours: return "Sensor expires in 2 h"
         case .sensorGracePeriod: return "Grace period started"
         case .sensorFailed: return "Sensor failed"
@@ -55,8 +56,8 @@ extension AlertKind {
         switch self {
         case .urgentLow, .urgentLowSoon, .low, .high, .fallingFast, .risingFast: return .glucose
         case .missedReadings, .bluetoothUnavailable, .trioBridge, .storageFailing: return .dataFlow
-        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod, .sensorFailed, .sensorError,
-             .calibrationNeeded, .sensorExpired:
+        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod,
+             .sensorFailed, .sensorError, .calibrationNeeded, .sensorExpired:
             return .sensor
         }
     }

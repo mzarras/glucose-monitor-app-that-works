@@ -31,9 +31,9 @@ extension LiveAppServices {
     /// of stored sensor readings (each passes the gate again). Also when it is switched on.
     func reseedTrio() async {
         guard !isReplaying, let store = productionStore, trioCoordinator.activeBridge != nil else { return }
-        let now = Date()
+        let date = now()
         do {
-            let recent = try await store.readings(from: now.addingTimeInterval(-5 * 3_600), to: now.addingTimeInterval(LiveReadingGate.futureTolerance))
+            let recent = try await store.readings(from: date.addingTimeInterval(-5 * 3_600), to: date.addingTimeInterval(LiveReadingGate.futureTolerance))
             await trioCoordinator.reseed(with: recent, session: await g7.currentSession)
         } catch {
             log(.bridge, "Trio re-seed skipped: \(error)")

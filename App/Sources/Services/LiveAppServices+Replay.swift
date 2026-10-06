@@ -84,6 +84,9 @@ extension LiveAppServices {
         productionAlerts = alerts
         sensorPipeline.outputs.alerts = alerts
         await alerts.start()
+        // The app is in the foreground when a replay run is stopped: production's expiry reminders
+        // are written again (D43; the replay service had `.foreground` while the run lasted).
+        await alerts.send(.foreground)
         await sendTrioAlertInput(force: true)
         attachOutputs()
         sensorPipeline.activate()

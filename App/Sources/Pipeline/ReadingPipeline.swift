@@ -100,6 +100,11 @@ final class ReadingPipeline {
     /// True when nothing is queued or being processed (readings may still wait for the store).
     var isIdle: Bool { pending.isEmpty && !isProcessing }
 
+    /// False while the latest reading cannot be known (the production store is not open yet at
+    /// launch): no widget snapshot is written then, because one without the latest reading would
+    /// clear the widget's clock-mismatch latch (review B1). The composition root sets it.
+    var publishesWidget = true
+
     /// Called on the main actor after something the UI shows changed.
     var onChange: (@MainActor (ServiceChange) -> Void)?
     /// Called after every drain attempt (a wake-up): pipeline heartbeat, clock latch, storage status.
@@ -437,7 +442,7 @@ final class ReadingPipeline {
         guard !readings.isEmpty else { return }
         if let trio = outputs.trio {
             let result = await trio.publish(readings.map(\.reading), session: sessionForTrio(readings.last?.session))
-            if let error = result.error {
+            if let error = result?.error {
                 log(.bridge, "Trio publish failed: \(error)")
             }
         }
@@ -525,7 +530,7 @@ final class ReadingPipeline {
 
     /// Writes the widget snapshot from what is stored now, plus readings waiting for the store.
     func publishWidget() async {
-        guard let widget = outputs.widget else { return }
+        guard publishesWidget, let widget = outputs.widget else { return }
         let date = now()
         let windowStart = date.addingTimeInterval(-3 * 3_600)
         let windowEnd = date.addingTimeInterval(LiveReadingGate.futureTolerance)

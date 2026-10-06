@@ -25,8 +25,9 @@ struct PipelineOutputs {
     /// Gets every reading that passed the gate (`.reading`), every sensor state (`.sensorState`),
     /// and a `.tick` after every drain attempt (a wake-up).
     var alerts: AlertService?
-    /// Nil while the Trio bridge is off or not allowed in this build.
-    var trio: TrioBridge?
+    /// The Trio path (the app's one `TrioCoordinator`); it writes nothing while the bridge is off or
+    /// not allowed in this build.
+    var trio: TrioCoordinator?
     /// The uploaders to submit stored readings to, read at the moment of use (Phase 2 review M2):
     /// an uploader replaced in Settings (one per queue file) is picked up without re-attaching, and
     /// the pipeline never keeps a released uploader alive. Nil or empty while uploads are off or

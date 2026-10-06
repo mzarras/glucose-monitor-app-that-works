@@ -55,7 +55,7 @@ final class ReadingPipelineTests: XCTestCase {
         let uploader = try ReadingUploader(destination: destination, queueFile: queueFile, clock: PipelineTestWallClock(clock: clock), log: diagnostics)
         let pipeline = ReadingPipeline(name: "test", source: source, diagnostics: diagnostics, now: clock.closure)
         pipeline.outputs.alerts = alerts
-        pipeline.outputs.trio = trio.activeBridge
+        pipeline.outputs.trio = trio
         pipeline.outputs.uploaders = { [uploader] }
         await alerts.start()
         pipeline.startConsuming()
@@ -198,7 +198,7 @@ final class ReadingPipelineTests: XCTestCase {
         let trioStore = RecordingTrioStore()
         let trio = TrioCoordinator(appGroupID: "group.org.nightscout.ABCDE12345.trio.trio-app-group", store: trioStore, diagnostics: diagnostics, clock: clock.closure)
         trio.configure(enabled: true, liveOutputsAllowed: true)
-        pipeline.outputs.trio = trio.activeBridge
+        pipeline.outputs.trio = trio
         pipeline.startConsuming()
         pipeline.attach(store: store)
 
@@ -334,10 +334,13 @@ final class ReadingPipelineTests: XCTestCase {
         XCTAssertEqual(harness.trioStore.writesOfReadings, 0)
         XCTAssertTrue(harness.center.posted.isEmpty)
 
-        // Protected data became available: bootstrap opens the store, then activates the pipeline.
-        harness.pipeline.attach(store: harness.repository)
+        // Protected data became available: bootstrap activates the pipeline (alerts and Trio get the
+        // held readings at once) and opens the store alongside; the readings are stored once it is.
         harness.pipeline.activate()
         await settle(harness, readings: 2, states: 1)
+        XCTAssertEqual(harness.trioStore.payload.count, 2, "Trio does not wait for the store")
+        harness.pipeline.attach(store: harness.repository)
+        await waitUntil("stored") { harness.pipeline.heldReadingCount == 0 && harness.pipeline.isIdle }
 
         XCTAssertEqual(harness.pipeline.heldReadingCount, 0)
         let stored = try await harness.store.readings(from: .distantPast, to: .distantFuture)

@@ -20,7 +20,15 @@ final class TrioCoordinator {
     var onChange: (@MainActor (TrioBridgeSummary) -> Void)?
 
     private let diagnostics: any DiagnosticLog
+    /// Trio's App Group suite, read once for the newest reading a previous process left there.
+    private let sharedStore: (any TrioSharedStore)?
     private var statusTask: Task<Void, Never>?
+    /// Review m1: until the launch re-seed (or a write with a reading newer than what the App
+    /// Group already holds), readings not newer than the App Group's newest are held here instead of
+    /// written, so this process's first write never makes Trio's newest reading go backwards.
+    private var holdsOlderReadings = true
+    private var heldOlderReadings: [GlucoseReading] = []
+    private var appGroupNewestAtLaunch: Date??
     /// What this process last wrote as the heartbeat (nil = removed), and whether that write
     /// succeeded; a failed or unknown state is rewritten at the next re-evaluation.
     private var heartbeatWritten: TrioHeartbeatPeripheral?
@@ -34,6 +42,7 @@ final class TrioCoordinator {
         // PROGRESS D21 (Michael): LOW → 39 and HIGH → 401 in Trio's payload; the package default withholds both.
         let policy = OutOfRangePolicy(low: .writeSentinel, high: .writeSentinel) // D21: LOW → 39, HIGH → 401, never 40/400 (S4)
         self.bridge = store.map { TrioBridge(store: $0, outOfRangePolicy: policy, diagnostics: diagnostics, clock: clock) }
+        self.sharedStore = store
         var summary = TrioBridgeSummary.off
         summary.appGroupID = appGroupID
         self.summary = summary
@@ -72,13 +81,62 @@ final class TrioCoordinator {
         summary.isEnabled && summary.liveOutputsAllowed ? bridge : nil
     }
 
-    /// Hands recent stored readings to the bridge (launch re-seed and switching it on). Every one
-    /// passes the gate again inside the bridge; only `.sensor` readings are offered (S6).
+    /// The pipeline's path to Trio: gate-passed readings (the bridge gates them again). Returns nil
+    /// when nothing was handed to the bridge (off, not allowed, or held — see `holdsOlderReadings`).
+    @discardableResult
+    func publish(_ readings: [GlucoseReading], session: SensorSession?) async -> TrioPublishResult? {
+        guard let bridge = activeBridge else { return nil }
+        var toWrite = readings
+        if holdsOlderReadings, !readings.isEmpty, let floor = appGroupNewestBeforeThisProcess() {
+            let older = readings.filter { $0.date <= floor }
+            let newer = readings.filter { $0.date > floor }
+            if newer.isEmpty {
+                // After a relaunch G7Kit may deliver backfill the App Group already has. Written
+                // alone, it would replace the previous payload with older readings until the re-seed.
+                heldOlderReadings += older
+                log("holding \(older.count) reading(s) not newer than Trio's current newest (\(floor.ISO8601Format())) until the launch re-seed")
+                return nil
+            }
+            // A newer reading keeps Trio's newest moving forward; the held ones can go with it.
+            toWrite = newer + older + heldOlderReadings
+            heldOlderReadings = []
+            holdsOlderReadings = false
+        }
+        return await bridge.publish(toWrite, session: session)
+    }
+
+    /// Hands recent stored readings to the bridge (launch re-seed and switching it on), with any
+    /// readings held until now. Every one passes the gate again inside the bridge; only `.sensor`
+    /// readings are offered (S6).
     func reseed(with readings: [GlucoseReading], session: SensorSession?) async {
         guard let bridge = activeBridge else { return }
-        let live = readings.filter { $0.source.isLiveSensor }
+        let live = (readings + heldOlderReadings).filter { $0.source.isLiveSensor }
+        heldOlderReadings = []
+        holdsOlderReadings = false
         let result = await bridge.publish(live, session: session)
-        log("re-seeded with \(live.count) stored sensor reading(s): \(result.addedReadingIDs.count) written, \(result.refusals.count) refused")
+        log("re-seeded with \(live.count) stored or held sensor reading(s): \(result.addedReadingIDs.count) written, \(result.refusals.count) refused")
+    }
+
+    /// The newest reading time in Trio's App Group as this process found it (read once; nil if
+    /// none, unreadable, or not in the expected `"/Date(<ms>)/"` form).
+    private func appGroupNewestBeforeThisProcess() -> Date? {
+        if let known = appGroupNewestAtLaunch { return known }
+        let newest = Self.newestReadingDate(in: sharedStore?.data(forKey: TrioAppGroupContract.readingsKey))
+        appGroupNewestAtLaunch = .some(newest)
+        return newest
+    }
+
+    /// The latest `DT` (`"/Date(<ms since 1970>)/"`, docs/trio-bridge.md) in a `latestReadings`
+    /// payload, whichever app wrote it.
+    static func newestReadingDate(in payload: Data?) -> Date? {
+        guard let payload, let elements = try? JSONSerialization.jsonObject(with: payload) as? [[String: Any]] else { return nil }
+        let dates = elements.compactMap { element -> Date? in
+            guard let text = element["DT"] as? String,
+                  let open = text.firstIndex(of: "("), let close = text.lastIndex(of: ")"), open < close,
+                  let milliseconds = Double(text[text.index(after: open)..<close]), milliseconds.isFinite else { return nil }
+            return Date(timeIntervalSince1970: milliseconds / 1000)
+        }
+        return dates.max()
     }
 
     /// Re-checks and retries a failed write without new readings (foreground, timer).
