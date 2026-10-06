@@ -153,6 +153,9 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Orchestrator gate run on 3517554 (`.build-logs/orch-p2-merge-check.txt`): gates 1, 3, 4 PASS; gate 2 PASS except NightscoutKit `test_concurrentRunIsRefused` (order-dependent `async let` race under load; passes alone, product guard correct). Sent to WS7 to make deterministic; main merge waits for a clean full run.
 - Follow-ups in flight: n1 phone-clock expiry (WS1 dc428bb, ready), n2 held-reading dedupe + store-open-before-activate note (Integrator A), D43 expiry reminders (WS4 + Integrator B). One combined safety review for these before merge.
 - Carry-overs for Phase 3: AGP "HIGH" marker at chart top (nit); onboarding pairing spinner could stay in progress if no connection step was observed (harden with hasStoredSensor false→true); `currentSession` grace-end check uses the phone clock (D28, readings withheld during clock mismatch anyway).
+- Follow-ups staged on `p2-followups` 0b6ea8a (ws1 dc428bb, p2-services 1323698, ws7 5352b43, p2-app 0f2c50f incl. ws4 60f03f5). Combined review: **FAIL ×2**.
+  - D43 review: B1 first "Sensor expired" relies on an unverified pending add made days earlier (failed add → nothing posted at detection; +120 min re-alert); M1 failed sensor keeps reminders; minors m1 quiet hours judged at fire date, m2 launch reconcile leaves strays, m4 dates not re-adopted, m5 early expired then grace, m7 countdown shown 4×, m8 adjacent switches, m9 render clock, m10 gate-4 sound assert, m11 S7 test, m12 comment. → WS4 (engine) and Integrator B (UI).
+  - Follow-ups review: n1 PASS, n2 PASS, m3 PASS, WS7 PASS; **B1 bootstrap reorder clears the persisted clock-mismatch latch on every relaunch** (activate before store open → latest nil → latch cleared; widget too); M1 no composition-level launch test; m1 Trio window during open; m2 stale comments. → Integrator A.
 
 ### Phase 1 — Parallel build (2026-09-23)
 
