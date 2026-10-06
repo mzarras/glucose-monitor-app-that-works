@@ -92,8 +92,57 @@ struct AGPChart: View {
         .chartXAxis { TimeOfDayAxis.xAxis }
         .chartYAxis { TimeOfDayAxis.yAxis }
         .chartPlotStyle { $0.overlay(alignment: .bottom) { Rectangle().fill(Theme.ink).frame(height: 1) } }
+        .chartOverlay { proxy in
+            // A percentile that is the sensor's HIGH/LOW flag is drawn at the top/bottom edge; a
+            // "HIGH"/"LOW" label at the start of each run says so, so the edge never reads as a value
+            // (S4, Phase 2 review nit).
+            GeometryReader { geometry in
+                if let anchor = proxy.plotFrame {
+                    let plot = geometry[anchor]
+                    ForEach(AGPFlagMarkers.runs(buckets)) { marker in
+                        if let x = proxy.position(forX: Double(marker.minuteOfDay) / 60) {
+                            Text(verbatim: marker.isHigh ? "HIGH" : "LOW")
+                                .font(Typography.fixedLabel(size: 8, medium: true))
+                                .foregroundStyle(Theme.band(marker.isHigh ? .veryHigh : .veryLow))
+                                .fixedSize()
+                                .position(x: min(max(plot.minX + x, plot.minX + 14), plot.maxX - 14),
+                                          y: marker.isHigh ? plot.minY + 7 : plot.maxY - 8)
+                        }
+                    }
+                }
+            }
+            .accessibilityHidden(true)
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: TrendsText.agpSpeech(buckets)))
+    }
+}
+
+/// Where the AGP chart labels a flag (S4): the first bucket of each run of buckets whose 95th
+/// percentile is HIGH, or whose 5th is LOW. Runs break where buckets are more than an hour apart
+/// (the lines break there too, `AGPSegmentation`).
+enum AGPFlagMarkers {
+    struct Marker: Equatable, Identifiable, Sendable {
+        let minuteOfDay: Int
+        let isHigh: Bool
+        var id: String { "\(isHigh ? "H" : "L")\(minuteOfDay)" }
+    }
+
+    static func runs(_ buckets: [AGPBucket]) -> [Marker] {
+        var markers: [Marker] = []
+        for segment in AGPSegmentation.segments(buckets) {
+            var previousHigh = false
+            var previousLow = false
+            for bucket in segment {
+                let high = bucket.p95 == .aboveRange
+                let low = bucket.p5 == .belowRange
+                if high && !previousHigh { markers.append(Marker(minuteOfDay: bucket.minuteOfDay, isHigh: true)) }
+                if low && !previousLow { markers.append(Marker(minuteOfDay: bucket.minuteOfDay, isHigh: false)) }
+                previousHigh = high
+                previousLow = low
+            }
+        }
+        return markers
     }
 }
 

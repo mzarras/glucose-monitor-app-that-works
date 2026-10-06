@@ -27,8 +27,20 @@ SensorApp → AppModel.launch(services: AppEnvironment.shared.services)   one mo
   lines under the control that failed (`SettingsFeedback`, `OnboardingState.*Message`), the share
   sheet, the optimistic Alerts draft (below).
 - **Clock.** `AppModel.clock` (injected in tests) is what the UI classifies against: Now's hero and
-  banners, the tab dot, the latch, "today". It is the phone clock, so DEBUG replay runs in the UI
-  use speed 1 (`-replayStartMinute` jumps ahead instead; see Open questions).
+  banners, the tab dot, the latch, "today". It is the phone clock; in a DEBUG replay run it is the
+  replay clock (`AppServices.replayClockNow`, compiled out of Release), so an accelerated replay's
+  readings are current on screen. The UI tests still use speed 1 with `-replayStartMinute`.
+- **Time zone and clock changes (Phase 3).** `NSSystemTimeZoneDidChange` →
+  `calendarDidChange(.current)`: "Today so far" and the Now chart's data are reloaded, Trends is
+  recomputed in the new zone (now if visible, else when opened), and the latch is re-checked.
+  `significantTimeChangeNotification` (midnight, DST, a manual clock change) → `tick()`. Clock-time
+  labels use `DisplayContext.current` (autoupdating) and follow on the next render (≤ 15 s on Now).
+  The Now chart draws and scrubs only points up to `now` (`NowMapping.visibleChartPoints`), so after
+  the clock is set back a future-dated reading is never selectable; the hero shows the clock
+  mismatch.
+- **Relaunch (Phase 3).** The selected tab and Trends period are stored with the appearance
+  (`AppUIPreferences`, read once protected data is available) and restored after the app is killed;
+  an explicit `-tab` launch argument wins (the UI tests pass `-tab now`).
 - **Fixtures.** DEBUG `AppModel.fixtures()` builds fixture view states with no services, for
   previews and the fixture-based unit tests only.
 - **Sensor state known (review M1).** Before the source's first state reaches it, the facade
@@ -165,7 +177,7 @@ low.").
 | Page | From | Actions |
 |---|---|---|
 | Sensor | `sensorState`, `sensorSession`, `storedSensorSerial`, `canStopSession`, `hasStoredSensor`, `bluetoothAuthorization` | `PairingGuidance.settingsOffer` → `pair(code:)` / `pairAgain(code:)` (`PairingError.noSensorToPairAgain` is shown, never retried as a new pairing); forget sensor; stop session only if `canStopSession` (G7: hidden); calibrate |
-| Trio | `trio` | `setTrioBridgeEnabled`; shows `TrioAppGroupID` to compare with Trio's Group ID, `unavailableReason`, last write, heartbeat, D20 pause note |
+| Trio | `trio` | `setTrioBridgeEnabled`; shows `TrioAppGroupID` to compare with Trio's Group ID, `unavailableReason`, last write, "N readings held back since …" (`heldBackReadings`/`heldBackSince`, the launch re-seed), heartbeat, D20 pause note |
 | Sharing | `nightscout`, `dexcomShare` | `saveNightscout(url:token:)`, `setNightscoutUploadEnabled`, `saveDexcomShare(accountName:password:receiverSerialNumber:)`, `setDexcomShareRegion` (US default, D7), `setDexcomShareEnabled`, `retryUploads`; errors under the Save button; D29/D30 notes |
 | Alert delivery | `alertDelivery` | `requestNotificationAuthorization`, `requestUrgentLowAlarmAuthorization`, open iOS Settings; `refreshAlertDelivery` on appear |
 | Data | `storage`, `historyImport` | import (sheet), `exportAllReadingsCSV` / `exportDiagnostics` → share sheet (`ActivityView`), `setRetention`; size + reading count; `refreshStorageSummary` on appear |
@@ -230,6 +242,21 @@ clock.
 Each reload carries a generation number; only the newest request's result is applied. The model
 tracks its async work so tests can `await model.settle()`.
 
+## Performance (Phase 3)
+
+`NinetyDayPerformanceTests` (hosted, Debug, simulator) seeds a production-role GlucoseStore on disk
+with 181 days at 5-minute cadence (52k readings — the Trends 90 D fetch window after six months) and
+measures the model's own work, median of 7 runs after a warm-up:
+
+| Work | Budget | Measured (M4 host, simulator, Debug) |
+|---|---|---|
+| Trends 90 D: fetch + compare + AGP + mapping | 500 ms | ~200 ms (fetch ~115 ms, statistics ~55 ms) |
+| Now: fetch 48 h + chart 24 H + "today so far" | 100 ms | ~3 ms |
+| One scrub hit test on 24 H (a drag update) | 2 ms | ~0.23 ms |
+
+A failure message names the median, best and budget; re-run the suite alone before treating one
+as a regression (other builds may share the machine).
+
 ## Tests
 
 `AppTests/AppModelWiringTests.swift` (the model on `PreviewAppServices`), `TrendsMappingTests`,
@@ -239,10 +266,5 @@ launches the DEBUG app on every ReplayKit scenario (`-replayScenario <name> -rep
 
 ## Open questions
 
-- **Pipeline clock for accelerated replay.** At `-replaySpeed` > 1 (or the Developer page's faster
-  speeds) replay readings are dated ahead of the phone clock, so the UI shows "Phone clock doesn't
-  match" — correct for the phone clock, unhelpful for a demo. Exposing the pipeline's `now` (the
-  replay clock during a run) on the facade would let `AppModel.clock` follow it. The UI tests use
-  speed 1 with `-replayStartMinute`, so they are unaffected.
 - **Stop session.** The facade has `canStopSession` but no `stopSession()`; the row is hidden while
   no source can stop a session (G7).

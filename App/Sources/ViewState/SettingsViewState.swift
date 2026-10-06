@@ -98,6 +98,10 @@ struct TrioSettings: Equatable, Sendable {
     var pausedInDebugBuild: Bool = false
     /// The bridge is on but can't run in this build (e.g. no Trio App Group), and why.
     var unavailableReason: String? = nil
+    /// Readings held back at launch until Trio's App Group is re-seeded, and since when (never
+    /// written older than Trio's newest).
+    var heldBackReadings: Int = 0
+    var heldBackSince: Date? = nil
 }
 
 struct NightscoutSettings: Equatable, Sendable {
@@ -240,6 +244,15 @@ enum SettingsText {
         case .repeatsNotScheduled(let alert, let missing):
             return "\(alert): \(missing) \(missing == 1 ? "repeat" : "repeats") fewer than planned while the app is in the background."
         }
+    }
+
+    /// Settings › Trio, while readings wait for the launch re-seed: "3 readings held back since
+    /// 12:35 PM, until Trio's App Group is brought up to date". Nil when none are held.
+    static func trioHeldBack(_ trio: TrioSettings, context: DisplayContext = .current) -> String? {
+        guard trio.heldBackReadings > 0 else { return nil }
+        let count = trio.heldBackReadings == 1 ? "1 reading" : "\(trio.heldBackReadings) readings"
+        let since = trio.heldBackSince.map { " since \(TimeText.time($0, context))" } ?? ""
+        return "\(count) held back\(since), until Trio's App Group is brought up to date."
     }
 
     /// DEBUG builds keep the Trio bridge and uploaders off unless the developer switch is on (D20).

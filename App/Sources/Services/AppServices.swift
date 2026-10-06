@@ -181,5 +181,9 @@ protocol AppServices: AnyObject {
     /// D20 developer switch: let the Trio bridge and uploaders run in this DEBUG build. They still
     /// refuse every non-sensor reading (S6).
     func setDeveloperLiveOutputsEnabled(_ enabled: Bool) async
+    /// The running replay's clock (scenario time; ahead of the phone clock above 1×), nil when no
+    /// replay runs. The UI classifies against it so an accelerated replay's readings are current
+    /// rather than "dated ahead of the phone clock" (Phase 2 carry-over).
+    var replayClockNow: Date? { get }
     #endif
 }

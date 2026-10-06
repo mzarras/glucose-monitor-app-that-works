@@ -208,9 +208,9 @@ struct NowContent: View {
     private var chartSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             GlucoseTraceChart(
-                points: state.chartPoints,
+                points: NowMapping.visibleChartPoints(state.chartPoints, now: now),
                 domain: now.addingTimeInterval(-state.chartWindow.duration)...now,
-                latestLive: state.latestLiveReading.map { ChartPoint(date: $0.date, value: $0.value) },
+                latestLive: state.latestLiveReading.flatMap { $0.date <= now ? ChartPoint(date: $0.date, value: $0.value) : nil },
                 fingersticks: state.fingersticks,
                 options: Self.chartOptions(state.chartWindow),
                 accessibilityTitle: state.chartWindow.spokenName,

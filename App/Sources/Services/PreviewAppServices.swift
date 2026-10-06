@@ -38,6 +38,8 @@ final class PreviewAppServices: AppServices {
     var accent = AccentChoice.default
     var forceQuitGap: ForceQuitGapReport?
     var replay = ReplayStatus.none
+    /// The replay clock to report (`AppServices.replayClockNow`); nil = no replay running.
+    var replayClockNow: Date?
     /// Set to make `pair(code:)` / `submitCalibration(_:)` fail.
     var pairingError: PairingError?
     var calibrationRefusal: CalibrationRefusal?

@@ -98,8 +98,7 @@ struct SensorSettingsView: View {
                 Text(verbatim: reason).font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
             }
             if let submission = calibration.lastSubmission {
-                let text = CalibrationRules.outcomeText(submission.outcome, state: calibration, now: Date())
-                Text(verbatim: "Last calibration \(submission.request.mgdl) mg/dL at \(TimeText.time(submission.request.takenAt)): \(text.title.lowercased()).")
+                Text(verbatim: CalibrationRules.lastCalibrationText(submission, state: calibration, now: Date()))
                     .font(Typography.body(size: 12))
                     .foregroundStyle(Theme.muted)
             }
@@ -203,6 +202,13 @@ struct TrioSettingsView: View {
                 }
                 if trio.isEnabled {
                     SettingsValueRow(title: "Last write", value: SettingsText.trioLastWrite(trio))
+                    if let heldBack = SettingsText.trioHeldBack(trio) {
+                        Text(verbatim: heldBack)
+                            .font(Typography.body(size: 12))
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("settings.trio.heldBack")
+                    }
                     SettingsValueRow(title: "Heartbeat", value: trio.heartbeatPublished ? "published" : "not published")
                     if let error = trio.heartbeatError {
                         WarningNote(text: "Trio's heartbeat couldn't be written: \(error). Trio may not loop in the background.")
