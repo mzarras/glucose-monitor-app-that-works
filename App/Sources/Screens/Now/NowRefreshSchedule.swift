@@ -15,11 +15,19 @@ struct NowRefreshSchedule: TimelineSchedule {
         return sequence(first: startDate) { schedule.nextDate(after: $0, start: startDate) }
     }
 
-    /// The moment to render a tick for: the later of the scheduled tick and the clock. A tick that
-    /// fires a few milliseconds early (review m9) still renders the state at its scheduled date, so
-    /// the switch at the grace end is not left for the next 15 s tick.
+    /// A tick may render at its scheduled date only when that is less than this far ahead of the
+    /// clock (an early tick); further ahead the scheduled date is stale (the clock was set back).
+    static let earlyTickTolerance: TimeInterval = 1
+
+    /// The moment to render a tick for. A tick that fires a few milliseconds early (review m9)
+    /// renders at its scheduled date, so the switch at the grace end isn't left for the next 15 s
+    /// tick. A scheduled date a second or more ahead of the clock is not an early tick: after the
+    /// phone's clock was set back, TimelineView can keep entries from before the change (review n1),
+    /// and rendering at them would put the screen in the future (a current reading would read as
+    /// stale). Then, and whenever the clock is ahead, the clock is used.
     static func renderDate(scheduled: Date, clock: Date) -> Date {
-        max(scheduled, clock)
+        let ahead = scheduled.timeIntervalSince(clock)
+        return ahead > 0 && ahead < earlyTickTolerance ? scheduled : clock
     }
 
     /// The next tick after `date`: the next one on the `interval` grid that starts at `start`, or an

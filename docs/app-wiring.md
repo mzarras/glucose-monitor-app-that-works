@@ -90,8 +90,9 @@ when the local day changed.
   period, 7 hours 40 minutes left"). The grace banner says only when readings stop ("Readings stop
   at 8:15 PM. Replace the sensor soon."); the SENSOR row keeps "grace period · 7h 40m left" (review
   m7). The Now screen's clock (`NowRefreshSchedule`: every 15 s plus exactly at `endsAt`) switches to
-  "Sensor expired" at zero; each tick renders the later of its scheduled date and the clock, so a
-  tick that fires a few ms early still shows the end (review m9). No widget countdown.
+  "Sensor expired" at zero; a tick that fires a few ms early renders at its scheduled date, so the
+  end still shows at zero (review m9), but a scheduled date 1 s or more ahead of the clock (entries
+  left from before the clock was set back) renders at the clock (review n1). No widget countdown.
 - **Status rows**: SENSOR from `sensorState` + `sensorSession` ("day 6 of 10 · 4d 7h left", keeping
   the day/time left through connection steps and transient failures); TRIO from
   `ServiceHealthMapping.trioStatus`.
