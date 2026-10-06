@@ -1,4 +1,4 @@
-// Ported from xDrip4iOS (https://github.com/JohanDegraeve/xdripswift), GPL-3.0, like this project.
+// Originally part of xDrip4iOS (https://github.com/JohanDegraeve/xdripswift), GPL-3.0, like this project.
 // ConstantsDexcomShare.swift has no copyright header in the original; DexcomShareModels.swift has:
 //
 //  DexcomShareModels.swift

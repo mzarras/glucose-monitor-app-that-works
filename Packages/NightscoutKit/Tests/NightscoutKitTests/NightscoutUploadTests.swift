@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 import XCTest
 import GlucoseCore
 @testable import NightscoutKit
@@ -319,7 +320,7 @@ final class NightscoutUploadTests: XCTestCase {
         await XCTAssertEqualAsync(await uploader.flush(), .nothingQueued)
         await XCTAssertEqualAsync(await server.requests.count, 0)
         await XCTAssertEqualAsync(await uploader.status.discarded, 2)
-        XCTAssertTrue(log.messages.contains { $0.contains("non-sensor") })
+        XCTAssertTrue(log.messages.contains { $0.contains("not from the live sensor") })
     }
 
     func test_concurrentFlushesSendOnce() async throws {

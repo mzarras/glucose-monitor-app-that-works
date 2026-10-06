@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // A small RFC 4180 CSV reader, enough for Dexcom Clarity exports: comma separator, optional
 // double-quoted fields with "" escapes, CRLF or LF line endings, optional UTF-8 byte-order mark
 // (real exports have both a BOM and CRLF).

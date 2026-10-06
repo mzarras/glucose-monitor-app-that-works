@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Where a `ReadingUploader` sends readings: Nightscout or Dexcom Share (HANDOFF §8A).
 
 import Foundation

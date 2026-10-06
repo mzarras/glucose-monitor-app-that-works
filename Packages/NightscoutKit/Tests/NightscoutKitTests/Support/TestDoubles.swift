@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Test doubles: repository fake (the GlucoseStore implementation is another workstream's), clock,
 // diagnostic log, and reading/session builders.
 

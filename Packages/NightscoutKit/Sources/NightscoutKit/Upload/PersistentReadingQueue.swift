@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // File-backed FIFO of readings waiting for upload (HANDOFF §8A: "Queue and retry offline").
 //
 // One JSON file per destination in a directory the app passes in. Every change rewrites the file

@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // What the onboarding progress view shows (HANDOFF §4.5 step 3: readings imported and the date
 // range covered).
 

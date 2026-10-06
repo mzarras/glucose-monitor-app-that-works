@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // HTTP plumbing for tests. No test talks to a real service: requests go either to an in-process
 // transport or to `LocalHTTPServer` on 127.0.0.1, and the backends below answer them.
 

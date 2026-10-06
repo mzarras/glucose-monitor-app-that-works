@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Keychain-backed `CredentialStore` (PROGRESS D6, D7).
 //
 // Accessibility is `kSecAttrAccessibleAfterFirstUnlock`: uploads run while the phone is locked
