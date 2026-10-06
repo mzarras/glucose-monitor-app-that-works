@@ -1,3 +1,4 @@
+import GlucoseCore
 import SwiftUI
 import WidgetCore
 import XCTest
@@ -128,6 +129,61 @@ final class ScreenshotTests: XCTestCase {
         .frame(width: 350, height: 200)
     }
 
+    /// D45/D47 design, before the facade offers them (docs/app-wiring.md "D45/D47"). Pages with
+    /// switches are left to the UI-test screenshots (ImageRenderer can't draw a Toggle).
+    @MainActor
+    func test_renderListenModeDesign() throws {
+        var listeningNow = Fixtures.now(.normal, at: now)
+        listeningNow.connection = ConnectionModeState(mode: .listen)
+        var listeningCalibration = Fixtures.calibration(.available, at: now)
+        listeningCalibration.listening = true
+        try render(phone(tab: .now, hasProblems: false) {
+            NowContent(state: listeningNow, calibration: listeningCalibration, now: now, actions: .noop, context: context)
+        }, name: "design-d45-now-listening-light", scheme: .light)
+        var settings = Fixtures.settings(at: now)
+        settings.connection = ConnectionModeState(mode: .listen)
+        try render(phone(tab: .settings, hasProblems: false) { SettingsContent(state: settings, now: now, actions: .noop, context: context) },
+                   name: "design-d45-settings-listening-light", scheme: .light, height: nil)
+        // Settings › Sensor and onboarding scroll (ImageRenderer draws no ScrollView content):
+        // render their D45 parts directly.
+        for (mode, scheme) in [(SensorConnectionMode.listen, ColorScheme.light), (.pair, .dark)] {
+            let parts = VStack(alignment: .leading, spacing: Layout.sectionSpacing) {
+                PageTitle("G7 sensor")
+                if mode == .listen {
+                    ListeningStatusLine()
+                    VStack(alignment: .leading, spacing: 6) {
+                        ExplanationNote(text: ConnectionModeText.calibrationWhileListening)
+                        ExplanationNote(text: ConnectionModeText.pairingWhileListening)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    SectionLabel("CONNECTION")
+                    ConnectionModeChoices(selected: mode, select: { _ in })
+                }
+            }
+            .padding(.horizontal, Layout.sideMargin)
+            .padding(.vertical, 12)
+            .editorialScreen()
+            try render(parts, name: "design-d45-sensor-\(mode.rawValue)-\(scheme.name)", scheme: scheme, height: nil)
+        }
+        let connectionStep = VStack(alignment: .leading, spacing: 16) {
+            ConnectionStep(state: Fixtures.onboarding(.connection, at: now), actions: .noop)
+        }
+        .padding(.horizontal, Layout.sideMargin)
+        .padding(.vertical, 12)
+        .editorialScreen()
+        try render(connectionStep, name: "design-d45-onboarding-connection-light", scheme: .light, height: nil)
+        for (sensorState, name) in [(Fixtures.onboarding(.listen, at: now).sensorState, "listening"), (SensorState.searching, "waiting")] {
+            var state = Fixtures.onboarding(.listen, at: now)
+            state.sensorState = sensorState
+            let listenStep = VStack(alignment: .leading, spacing: 16) { ListenStep(state: state, actions: .noop) }
+                .padding(.horizontal, Layout.sideMargin)
+                .padding(.vertical, 12)
+                .editorialScreen()
+            try render(listenStep, name: "design-d45-onboarding-\(name)-dark", scheme: .dark, height: nil)
+        }
+    }
+
     // MARK: Widgets
 
     @MainActor
@@ -141,6 +197,20 @@ final class ScreenshotTests: XCTestCase {
                 }
             }
             try render(gallery, name: "widget-medium-states-\(scheme.name)", scheme: scheme, width: 396, height: nil)
+            // Audit m9 (DEBUG): a replayed reading carries REPLAY on the widget.
+            let sample = WidgetSamples.content(.normal, now: live)
+            let replay = WidgetEntryContent(date: sample.date, display: sample.display, recent: sample.recent, accent: sample.accent,
+                                            snapshotWrittenAt: sample.snapshotWrittenAt, isReplay: true)
+            let replayTiles = VStack(alignment: .leading, spacing: 10) {
+                self.widgetTile(MediumWidgetView(content: replay))
+                RectangularAccessoryView(content: replay)
+                    .padding(12)
+                    .frame(width: 180, height: 80)
+                    .background(Theme.background)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(.horizontal, 16)
+            }
+            try render(replayTiles, name: "widget-replay-debug-\(scheme.name)", scheme: scheme, width: 396, height: nil)
             let small = HStack(spacing: 10) {
                 ForEach([WidgetSamples.State.normal, .lowFlag, .stale, .noData], id: \.self) { state in
                     SmallWidgetView(content: WidgetSamples.content(state, now: live))

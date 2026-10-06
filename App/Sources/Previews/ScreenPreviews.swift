@@ -118,6 +118,21 @@ private let previewNow = Date()
 #Preview("Onboarding · import failed · dark") { OnboardingContent(state: { var o = Fixtures.onboarding(.importHistory, at: previewNow); o.importProgress?.errorMessage = "Nightscout returned HTTP 401."; return o }(), actions: .noop, now: previewNow).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
 #Preview("Onboarding · pairing in progress · dark") { OnboardingContent(state: { var o = Fixtures.onboarding(.pairing, at: previewNow); o.pairing = .inProgress; return o }(), actions: .noop, now: previewNow).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
 
+// MARK: - D45 listen mode / D47 packet recording (design; shown once the facade offers them)
+
+#Preview("D45 · Now listening · light") { PreviewScreen(scheme: .light) { NowContent(state: { var n = Fixtures.now(.normal, at: previewNow); n.connection = ConnectionModeState(mode: .listen); return n }(), calibration: { var c = Fixtures.calibration(.available, at: previewNow); c.listening = true; return c }(), now: previewNow, actions: .noop) } }
+#Preview("D45 · Now listening · dark") { PreviewScreen(scheme: .dark) { NowContent(state: { var n = Fixtures.now(.normal, at: previewNow); n.connection = ConnectionModeState(mode: .listen); return n }(), calibration: { var c = Fixtures.calibration(.available, at: previewNow); c.listening = true; return c }(), now: previewNow, actions: .noop) } }
+#Preview("D45 · Settings listening · light") { NavigationStack { PreviewScreen(scheme: .light) { SettingsContent(state: Fixtures.settingsListening(at: previewNow), now: previewNow, actions: .noop) } } }
+#Preview("D45 · Settings listening · dark") { NavigationStack { PreviewScreen(scheme: .dark) { SettingsContent(state: Fixtures.settingsListening(at: previewNow), now: previewNow, actions: .noop) } } }
+#Preview("D45 · sensor page listening · light") { NavigationStack { SensorSettingsView(sensor: Fixtures.settings(at: previewNow).sensor, calibration: { var c = Fixtures.calibration(.accepted, at: previewNow); c.listening = true; return c }(), actions: .noop, connection: ConnectionModeState(mode: .listen)).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
+#Preview("D45 · sensor page paired · dark") { NavigationStack { SensorSettingsView(sensor: Fixtures.settings(at: previewNow).sensor, calibration: Fixtures.calibration(.accepted, at: previewNow), actions: .noop, connection: ConnectionModeState(mode: .pair)).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) } }
+#Preview("D45 · Trio listening · light") { NavigationStack { TrioSettingsView(trio: Fixtures.settings(at: previewNow).trio, setEnabled: { _ in }, listening: true).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
+#Preview("D45 · sharing listening · light") { NavigationStack { SharingSettingsView(nightscout: Fixtures.settings(at: previewNow).nightscout, share: Fixtures.settings(at: previewNow).dexcomShare, actions: .noop, listening: true).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
+#Preview("D45 · onboarding connection · light") { OnboardingContent(state: Fixtures.onboarding(.connection, at: previewNow), actions: .noop, now: previewNow).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("D45 · onboarding connection · dark") { OnboardingContent(state: Fixtures.onboarding(.connection, at: previewNow), actions: .noop, now: previewNow).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+#Preview("D45 · onboarding listening · light") { OnboardingContent(state: Fixtures.onboarding(.listen, at: previewNow), actions: .noop, now: previewNow).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("D45 · onboarding waiting · dark") { OnboardingContent(state: { var o = Fixtures.onboarding(.listen, at: previewNow); o.sensorState = .searching; return o }(), actions: .noop, now: previewNow).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+
 // MARK: - Calibration
 
 private enum CalibrationPreviews {

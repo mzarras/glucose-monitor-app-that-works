@@ -48,6 +48,9 @@ enum CalibrationRules {
     static let relativeLimitDivisor = 5
 
     static func availability(_ state: CalibrationViewState, now: Date) -> CalibrationAvailability {
+        if state.listening {
+            return .unavailable(reason: ConnectionModeText.calibrationWhileListening)
+        }
         guard state.acceptedRange != nil else {
             return .unavailable(reason: "This sensor doesn't accept calibrations.")
         }

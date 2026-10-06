@@ -155,8 +155,9 @@ protocol AppServices: AnyObject {
     func refreshStorageSummary() async
     /// Writes every stored reading as CSV (docs/storage.md format) to a temporary file.
     func exportAllReadingsCSV() async throws -> URL
-    /// Writes the diagnostic log (BLE transitions, bridge writes, uploads, alert decisions; no
-    /// personal data beyond readings) to a temporary text file.
+    /// Writes the diagnostic log (BLE and sensor events with the sensor's name and serial, reading
+    /// and alert decisions with glucose values, bridge writes, uploads with the Nightscout host name;
+    /// no passwords, tokens or pairing codes) to a temporary text file.
     func exportDiagnostics() async throws -> URL
 
     // MARK: Appearance shared with the widget

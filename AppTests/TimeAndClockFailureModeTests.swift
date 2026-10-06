@@ -104,16 +104,66 @@ final class TimeAndClockFailureModeTests: XCTestCase {
         XCTAssertEqual(state.dataSufficiency, 100, accuracy: 0.01)
     }
 
-    /// 1 D across fall back: today's trace starts at local midnight and holds all 24 real hours of
-    /// readings; the last one sits past "23:00" on the time-of-day axis (a 25-hour day).
+    /// 1 D across fall back: today's trace starts at local midnight and holds all 24 h 59 min of real
+    /// readings; on the time-of-day axis the last one sits at its clock time, 23:55 (review m17).
     func test_dayTraceOnTheFallBackDay() {
         let now = date(2026, 11, 1, 23, 59)
         let readings = everyFiveMinutes(from: date(2026, 10, 31, 0), to: now)
         let traces = TrendsMapping.dayTraces(dayCount: 1, readings: readings, now: now, calendar: ny)
         XCTAssertEqual(traces.first?.dayStart, date(2026, 11, 1, 0))
+        XCTAssertEqual(traces.first?.timeZone, Self.newYork)
         XCTAssertEqual(traces.first?.points.count, 300, "24 h 59 min of real time to 23:59, every 5 min")
-        let last = traces.first?.points.last.map { TimeOfDayAxis.hourOfDay($0.date, dayStart: date(2026, 11, 1, 0)) } ?? 0
-        XCTAssertGreaterThan(last, 24.9)
+        let last = traces.first?.points.last.map { TimeOfDayAxis.hourOfDay($0.date, dayStart: date(2026, 11, 1, 0), timeZone: Self.newYork) } ?? 0
+        XCTAssertEqual(last, 23 + 55.0 / 60, accuracy: 0.001)
+    }
+
+    /// Review m17: on both DST days every reading sits at its clock time on the overlay's axis (so
+    /// the 3 D overlay compares the same clock times), the repeated hour's two passes share x, and
+    /// the skipped hour is empty.
+    func test_overlayPlotsClockTimeOnDSTDays() {
+        let zone = Self.newYork
+        for (y, m, d) in [(2026, 3, 8), (2026, 11, 1), (2026, 9, 23)] {
+            let midnight = date(y, m, d, 0)
+            for (h, min) in [(0, 30), (1, 30), (3, 30), (12, 0), (18, 45), (23, 55)] {
+                let instant = date(y, m, d, h, min)
+                XCTAssertEqual(TimeOfDayAxis.hourOfDay(instant, dayStart: midnight, timeZone: zone), Double(h) + Double(min) / 60, accuracy: 0.0001,
+                               "\(m)/\(d) \(h):\(min)")
+                XCTAssertEqual(TimeOfDayAxis.date(atHour: Double(h) + Double(min) / 60, dayStart: midnight, timeZone: zone), instant,
+                               "the scrub's inverse, \(m)/\(d) \(h):\(min)")
+            }
+            let nextMidnight = ny.date(byAdding: .day, value: 1, to: midnight)!
+            XCTAssertEqual(TimeOfDayAxis.hourOfDay(nextMidnight, dayStart: midnight, timeZone: zone), 24, accuracy: 0.0001)
+            XCTAssertEqual(TimeOfDayAxis.date(atHour: 24, dayStart: midnight, timeZone: zone), nextMidnight)
+        }
+        // Fall back: 01:30 EDT and 01:30 EST (an hour later) are both at 1.5; the scrub picks the first.
+        let fallMidnight = date(2026, 11, 1, 0)
+        let firstPass = fallMidnight.addingTimeInterval(1.5 * 3_600)
+        let secondPass = firstPass.addingTimeInterval(3_600)
+        XCTAssertEqual(TimeOfDayAxis.hourOfDay(secondPass, dayStart: fallMidnight, timeZone: zone), 1.5, accuracy: 0.0001)
+        XCTAssertEqual(TimeOfDayAxis.date(atHour: 1.5, dayStart: fallMidnight, timeZone: zone), firstPass)
+        // Spring forward: 02:00–02:59 never happens; a finger there selects the moment of the jump.
+        let springMidnight = date(2026, 3, 8, 0)
+        let jump = springMidnight.addingTimeInterval(2 * 3_600)
+        XCTAssertEqual(TimeOfDayAxis.hourOfDay(jump, dayStart: springMidnight, timeZone: zone), 3, accuracy: 0.0001)
+        XCTAssertEqual(TimeOfDayAxis.date(atHour: 2.5, dayStart: springMidnight, timeZone: zone), jump)
+    }
+
+    /// Review m17: a line never joins two readings across a clock change (it would cross the
+    /// skipped hour or double back over the repeated one); every reading is still drawn.
+    func test_overlayLinesSplitAtTheClockChange() {
+        for midnight in [date(2026, 3, 8, 0), date(2026, 11, 1, 0)] {
+            let points = stride(from: 0.0, to: 23 * 3_600, by: 300).map { PlottedPoint(date: midnight.addingTimeInterval($0), mgdl: 120) }
+            let lines = TimeOfDayAxis.splitAtClockChanges(points, timeZone: Self.newYork)
+            XCTAssertEqual(lines.count, 2, "\(midnight)")
+            XCTAssertEqual(lines.flatMap { $0 }, points, "nothing dropped or added (S1)")
+            for line in lines {
+                let hours = line.map { TimeOfDayAxis.hourOfDay($0.date, dayStart: midnight, timeZone: Self.newYork) }
+                XCTAssertEqual(hours, hours.sorted(), "each line runs forward on the axis")
+                XCTAssertTrue(zip(hours, hours.dropFirst()).allSatisfy { $1 - $0 < 0.1 }, "no jump across the skipped hour")
+            }
+        }
+        let ordinary = stride(from: 0.0, to: 23 * 3_600, by: 300).map { PlottedPoint(date: date(2026, 9, 23, 0).addingTimeInterval($0), mgdl: 120) }
+        XCTAssertEqual(TimeOfDayAxis.splitAtClockChanges(ordinary, timeZone: Self.newYork).count, 1)
     }
 
     /// The Now chart's 24 H is 24 real hours, whatever the wall clock did.

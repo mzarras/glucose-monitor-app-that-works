@@ -111,4 +111,39 @@ final class RelaunchAndCarryOverTests: XCTestCase {
         services.replayClockNow = nil
         XCTAssertLessThan(abs(model.clock().timeIntervalSinceNow), 1)
     }
+
+    /// Audit m18: the import's future-dated count reaches the screen whichever field carries it
+    /// (`rejectedFutureDated` from a Clarity parse, `skipped["futureDated"]` from Nightscout), is not
+    /// counted again as a skipped entry, and is worded for the person.
+    func test_importFutureDatedReadingsAreShown() {
+        func state(rejected: Int, skipped: [String: Int]) -> HistoryImportState {
+            HistoryImportState(origin: .nightscout, phase: .finished, readingsImported: 500, readingsSkippedByStore: 0,
+                               coveredFrom: t0.addingTimeInterval(-86_400), coveredTo: t0, skipped: skipped,
+                               rejectedFutureDated: rejected, startedAt: t0, finishedAt: t0)
+        }
+        let nightscout = OnboardingMapping.importProgress(state(rejected: 0, skipped: ["futureDated": 4, "errorCode": 2]))
+        XCTAssertEqual(nightscout?.rejectedFutureDated, 4)
+        XCTAssertEqual(nightscout?.skippedNote, "2 entries skipped", "future-dated readings are not also \"skipped entries\"")
+        XCTAssertEqual(OnboardingMapping.importProgress(state(rejected: 3, skipped: [:]))?.rejectedFutureDated, 3)
+        XCTAssertEqual(OnboardingMapping.importProgress(state(rejected: 3, skipped: ["futureDated": 3]))?.rejectedFutureDated, 3, "not doubled")
+        XCTAssertNil(OnboardingMapping.importProgress(state(rejected: 0, skipped: [:]))?.skippedNote)
+
+        XCTAssertNil(OnboardingText.futureDatedNote(0))
+        XCTAssertEqual(OnboardingText.futureDatedNote(1), "1 reading was dated in the future and left out. Check the time zone chosen for the import.")
+        XCTAssertEqual(OnboardingText.futureDatedNote(4), "4 readings were dated in the future and left out. Check the time zone chosen for the import.")
+    }
+
+    /// Phase 3 copy fixes: Trio has no screen showing its App Group (only glucose notifications with
+    /// "Add Glucose Source to Alarm", and the CGM screen's "CGM address :" heartbeat line); the
+    /// diagnostics export says exactly what it holds; urgent low says it rings at snooze end (D44).
+    func test_phase3Copy() {
+        XCTAssertFalse(SettingsText.trioAppGroupHelp.contains("App Info"), "no such Trio screen")
+        XCTAssertTrue(SettingsText.trioAppGroupHelp.contains("Add Glucose Source to Alarm"))
+        XCTAssertTrue(SettingsText.trioAppGroupHelp.contains("CGM address :"))
+        for item in ["serial", "Nightscout host name", "glucose values", "No passwords, tokens or pairing codes"] {
+            XCTAssertTrue(SettingsText.diagnosticsContents.contains(item), item)
+        }
+        XCTAssertFalse(SettingsText.diagnosticsContents.contains("no personal data"))
+        XCTAssertTrue(AlertsText.urgentLowNote.contains("When the snooze ends it rings again"))
+    }
 }

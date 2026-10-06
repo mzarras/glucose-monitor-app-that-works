@@ -79,7 +79,8 @@ struct NowContent: View {
                     }
                 }
             }
-            NowHeroView(hero: NowHero.make(display, now: now, context: context, sensorStateKnown: state.sensorStateKnown), now: now,
+            NowHeroView(hero: ListenModeRules.hero(NowHero.make(display, now: now, context: context, sensorStateKnown: state.sensorStateKnown),
+                                                   listening: state.connection?.isListening == true), now: now,
                         pairSensor: actions.pairSensor, pairAgain: actions.pairAgain, calibrate: actions.openCalibration)
             stateLine(display)
             if let end = GraceCountdown.end(sensorState: state.sensorState, now: now) {
@@ -244,12 +245,22 @@ struct NowContent: View {
                       ? SensorStatusText.row(state.sensorState, session: state.sensorSession, now: now, context: context)
                       : "checking…")
                 .accessibilityIdentifier("now.sensorRow")
-            StatusRow(label: "TRIO", value: TrioStatusText.row(state.health.trio, context: context), valueIsAlert: isTrioFailing)
+            StatusRow(label: "TRIO", value: ListenModeRules.outputRow(TrioStatusText.row(state.health.trio, context: context), listening: isListening),
+                      valueIsAlert: isTrioFailing)
                 .accessibilityIdentifier("now.trioRow")
+            if isListening {
+                ListeningStatusLine()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+            }
         }
     }
 
+    /// D45: listening alongside the Dexcom app.
+    private var isListening: Bool { state.connection?.isListening == true }
+
     private var isTrioFailing: Bool {
+        guard !isListening else { return false }
         if case .failing = state.health.trio { return true }
         return false
     }

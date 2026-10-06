@@ -37,7 +37,9 @@ final class AppModel {
     /// G7Kit `hasStoredSensor` (review N2): whether `pairAgain(code:)` has a sensor to re-pair.
     var hasStoredSensor = false
     /// Whether a sensor was stored when the onboarding pairing started (review N1 item 3: the sensor
-    /// authenticated in this pairing once `hasStoredSensor` becomes true after that).
+    /// authenticated in this pairing once `hasStoredSensor` becomes true after that). Nil when the
+    /// pairing started before the stored sensor was known (`AppServices.storedSensorKnown`): then
+    /// nothing counts as authenticated in this pairing.
     @ObservationIgnored var hadStoredSensorAtPairingStart: Bool?
     /// A file to hand to the share sheet (CSV export, diagnostics).
     var sharedFile: SharedFile?
@@ -77,10 +79,10 @@ final class AppModel {
     /// onboarding code was submitted, so the sensor state now describes this pairing rather than
     /// the previous sensor.
     @ObservationIgnored var pairingSawConnectionStep = false
-    /// The last `hasStoredSensor` read came from a `.sensor` change, not the facade's launch default
-    /// (review m3 hardening: bootstrap's first stored-sensor report is not a connection).
-    @ObservationIgnored private var storedSensorBaselineIsLive = false
-    @ObservationIgnored private var isApplyingSensorChange = false
+    /// The last `hasStoredSensor` read was the source's, not the facade's launch default
+    /// (`AppServices.storedSensorKnown`; review m3 hardening: bootstrap's first stored-sensor report
+    /// is not a connection).
+    @ObservationIgnored private var storedSensorReadWasKnown = false
     /// Review M1: the facade's sensor state is real. Before the source's first state reaches the
     /// facade it reports `.notPaired` by default; until a `.sensor` change arrives (or the state is
     /// anything but `.notPaired`, or a sensor is stored) nothing offers to pair.
@@ -326,9 +328,7 @@ final class AppModel {
         if change == .sensor, !sensorStateKnown {
             sensorStateKnown = true
         }
-        isApplyingSensorChange = change == .sensor
         rebuild(change)
-        isApplyingSensorChange = false
         if !preferencesLoaded { loadPreferences() } // decides onboarding too
         if change == .sensor { decideOnboardingIfReady() }
     }
@@ -468,15 +468,15 @@ final class AppModel {
         guard let services else { return }
         let state = services.sensorState
         let wasStored = hasStoredSensor
-        let baselineIsLive = storedSensorBaselineIsLive
+        let baselineKnown = storedSensorReadWasKnown
         hasStoredSensor = services.hasStoredSensor
+        storedSensorReadWasKnown = services.storedSensorKnown
         if hasStoredSensor { sensorStateKnown = true }
         // Review m3 hardening: a sensor that became stored while a pairing was on its way is proof
         // the sensor answered this pairing, even if no connection step was reported. Only a change
-        // from a live "not stored" counts: a sensor stored before the pairing never flips, and the
-        // first report after launch (bootstrap reading the stored record) replaces a default.
-        if pairingInProgress, baselineIsLive, !wasStored, hasStoredSensor { pairingSawConnectionStep = true }
-        if isApplyingSensorChange { storedSensorBaselineIsLive = true }
+        // from a known "not stored" counts (`storedSensorKnown`): a sensor stored before the pairing
+        // never flips, and bootstrap's first read of the stored record replaces a default.
+        if pairingInProgress, baselineKnown, !wasStored, hasStoredSensor { pairingSawConnectionStep = true }
         now.sensorStateKnown = sensorStateKnown
         now.sensorState = state
         now.sensorSession = services.sensorSession

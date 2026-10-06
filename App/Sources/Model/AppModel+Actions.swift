@@ -111,7 +111,11 @@ extension AppModel {
         settings.feedback.pairing = nil
         if onboarding != nil {
             onboarding?.pairing = .inProgress
-            if !again, hadStoredSensorAtPairingStart == nil { hadStoredSensorAtPairingStart = hasStoredSensor }
+            // An exact baseline only: before the source's stored record is read, `hasStoredSensor`
+            // is a default (Phase 3, `storedSensorKnown`).
+            if !again, hadStoredSensorAtPairingStart == nil, services.storedSensorKnown {
+                hadStoredSensorAtPairingStart = services.hasStoredSensor
+            }
         }
         track { [weak self] in
             do throws(PairingError) {
