@@ -637,6 +637,55 @@ final class AppModelWiringTests: XCTestCase {
         XCTAssertEqual(model.onboarding?.pairing, .paired, "stays paired")
     }
 
+    /// Negative (review m3): a sensor already stored when the pairing starts (record not reset) is no
+    /// proof of a connection — the previous sensor's state is not shown as this pairing's result.
+    func test_onboardingPairingDoesNotCountAPreviouslyStoredSensor() async {
+        let services = PreviewAppServices(sensorState: .notPaired)
+        services.hasStoredSensor = true
+        let model = launch(services, onboardingCompleted: false)
+        model.presentOnboarding(at: .pairing)
+        model.pairNewSensor(code: "1234")
+        services.sensorState = activeSensor // the previous sensor, reported before any connection step
+        model.apply(.sensor)
+        XCTAssertEqual(model.onboarding?.pairing, .inProgress)
+        model.apply(.sensor) // still stored, still no connection step
+        XCTAssertEqual(model.onboarding?.pairing, .inProgress)
+        XCTAssertTrue(model.settings.sensor.pairingInProgress)
+    }
+
+    /// Negative (review m3): the sensor becomes stored, then the pairing fails — the step shows the
+    /// failure, not success (in two changes, and in one).
+    func test_onboardingPairingShowsAFailureAfterTheSensorWasStored() async {
+        let rejected = SensorFailure(kind: .pairingRejected, message: "The sensor didn't accept this phone.")
+        for sameChange in [false, true] {
+            let services = PreviewAppServices(sensorState: .notPaired)
+            let model = launch(services, onboardingCompleted: false)
+            model.presentOnboarding(at: .pairing)
+            model.pairNewSensor(code: "1234")
+            services.hasStoredSensor = true
+            if !sameChange {
+                model.apply(.sensor)
+                XCTAssertEqual(model.onboarding?.pairing, .inProgress, "stored, nothing reported yet")
+            }
+            services.sensorState = .failed(rejected)
+            model.apply(.sensor)
+            XCTAssertEqual(model.onboarding?.pairing, .failed(rejected), "same change: \(sameChange)")
+        }
+    }
+
+    /// Hardening (review m3): bootstrap's first stored-sensor report replaces the facade's launch
+    /// default; it is not a connection for a pairing started before it.
+    func test_bootstrapsFirstStoredSensorReportIsNotAConnection() {
+        let services = PreviewAppServices(sensorState: .notPaired)
+        let model = launch(services, onboardingCompleted: false, sensorStateArrived: false)
+        model.presentOnboarding(at: .pairing)
+        model.pairNewSensor(code: "1234")
+        services.hasStoredSensor = true // bootstrap read the record
+        services.sensorState = activeSensor
+        model.apply(.sensor) // the first `.sensor` change
+        XCTAssertEqual(model.onboarding?.pairing, .inProgress)
+    }
+
     // MARK: - Onboarding
 
     func test_onboardingShowsOnlyWithoutASensor() {
