@@ -247,6 +247,29 @@ compiled_out_check() {
     fi
 }
 
+# S2/S6 safety tests built in the Release configuration (no DEBUG), so `#else` branches such as
+# AlertEngine's test_S6_releaseBuildRefusesReplayReadings run too (Phase 3 audit m3). The debug
+# runs of gate 2 never compile them. `-enable-testing` keeps `@testable import` working.
+RELEASE_SAFETY_PACKAGES="GlucoseCore AlertEngine TrioBridge NightscoutKit"
+
+release_safety_tests() {
+    pkg="$1"
+    log="$LOGS/reltest-$pkg.log"
+    scratch="$LOGS/spm-rel-$pkg"
+    (cd "$ROOT/Packages/$pkg" && swift test -c release -Xswiftc -enable-testing \
+        --scratch-path "$scratch" --filter 'test_S[26]_') > "$log" 2>&1
+    status=$?
+    passed="$(grep -E "Test Case .*test_S[26]_[A-Za-z0-9_]*\]' passed" "$log" | sort -u | wc -l | tr -d ' ')"
+    if [ $status -ne 0 ]; then
+        fail "S2/S6 Release-configuration tests in $pkg (exit $status, see $log)"
+        grep -E "error:|failed" "$log" | head -20
+    elif [ "$passed" = "0" ]; then
+        fail "S2/S6 Release-configuration tests in $pkg: none ran"
+    else
+        pass "S2/S6 Release-configuration tests in $pkg: $passed passing"
+    fi
+}
+
 gate_safety() {
     note "== Gate 3: safety tests =="
     logs="$(ls "$LOGS"/test-*.log 2>/dev/null)"
@@ -278,6 +301,18 @@ gate_safety() {
     else
         pass "no XCTSkip/XCTExpectFailure in safety-test files"
     fi
+
+    for pkg in $RELEASE_SAFETY_PACKAGES; do
+        case " $PACKAGES " in *" $pkg "*) release_safety_tests "$pkg" ;; esac
+    done
+    # The one test that exists only without DEBUG must have run (and passed) when AlertEngine is in scope.
+    case " $PACKAGES " in *" AlertEngine "*)
+        if grep -qE "test_S6_releaseBuildRefusesReplayReadings\]' passed" "$LOGS/reltest-AlertEngine.log" 2>/dev/null; then
+            pass "S6: test_S6_releaseBuildRefusesReplayReadings ran in Release and passed"
+        else
+            fail "S6: test_S6_releaseBuildRefusesReplayReadings did not pass in the Release configuration"
+        fi ;;
+    esac
 
     # S6: replay code and the replay-accepting gate must not exist in Release builds.
     compiled_out_check ReplayKit '$s9ReplayKit' "ReplayKit"

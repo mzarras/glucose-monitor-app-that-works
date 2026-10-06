@@ -1,7 +1,8 @@
 // Contract (HANDOFF §11 step 6). Owned by the orchestrator; change only through PROGRESS.md.
 //
 // Modules record BLE state transitions, bridge writes, uploads and alert decisions here; the app
-// collects them for Settings → "Export diagnostics". No personal data beyond readings.
+// collects them for Settings → "Export diagnostics". Events may contain glucose readings, the
+// sensor serial number and the Nightscout host name; never passwords, tokens or pairing codes.
 
 import Foundation
 
