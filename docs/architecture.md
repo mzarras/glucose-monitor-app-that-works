@@ -129,9 +129,9 @@ checked, Trio is re-seeded with the last 5 h of stored sensor readings, retentio
 backfill the App Group already holds. So until the re-seed, readings not newer than the newest reading
 the App Group held when this process started are kept back (`TrioCoordinator`), and written with the
 first newer reading or by the re-seed — the first write never moves Trio's newest reading backwards.
-Nothing is written that did not pass the gate in this process. The hold is bounded (review m5): an App
-Group newest dated in the future is ignored; held readings go out when the store open fails, and at
-the latest after 2 minutes (`TrioCoordinator.maximumHoldTime`, on the next publish or retry); while
+Nothing is written that did not pass the gate in this process, and held readings are never written on
+their own (Phase 3 carry-over: an earlier 2-minute release could move Trio's newest backwards in a slow
+or failed open). An App Group newest dated in the future is ignored (review m5); while readings are
 held they are shown in the summary (`heldBackReadings`) and, held for 15 minutes, count as starving
 Trio (the Trio bridge alert).
 
@@ -190,6 +190,13 @@ exists in Release.
 | S6 live data only | Importers write to the store only; the pipeline gate refuses non-sensor readings (replay only in a DEBUG replay run, for alerts); Trio/uploads off in DEBUG without the developer switch, and refusing replay with it | `test_S6_importedReadingsNeverReachConsumers`, `test_S6_replayNeverReachesTrioOrUploads`, `test_S6_trioBridgeIsNotAttachedWithoutLiveOutputsAllowed`, `test_S6_uploadersAreNotCreatedWithoutLiveOutputsAllowed` |
 | S7 urgent low | Settings go through `AlertSettings` (no off switch, snooze ≤ 30); the AlarmKit Stop intent acknowledges through the engine (`AlarmIntentRouting`) | `AlarmStopIntentTests.test_S7_alarmStopIntentAcknowledgesUrgentLowForAtMost30Minutes`, `ReplayScenarioTests.test_slowFallToUrgentLow_…` (repeats until acknowledged, silent only for its snooze), AlertEngine's `test_S7_*` |
 | S8 auditable | Small files per concern; the order of every step written in the file headers | — |
+
+## Failure modes
+
+Each failure mode (system kill and Bluetooth relaunch, Bluetooth off or unauthorized, permissions
+denied or revoked, reboot before the first unlock, disk full, clock changes, time zones and DST,
+force-quit) — what the person sees, what alerts, what Trio and uploads get, and the test that proves
+it — is in `docs/failure-modes.md`.
 
 ## Known limits (for the on-device checks, HANDOFF §11)
 

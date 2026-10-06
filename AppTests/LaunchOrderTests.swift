@@ -343,7 +343,23 @@ final class ScriptedSensorDevice: SensorDevice, @unchecked Sendable {
         get async { lock.withLock { session } }
     }
 
-    func start(pairingCode: String?) async throws {}
+    private var starts = 0
+    private var failsToStart = false
+    /// How many times `start(pairingCode:)` was called (a relaunch, the first unlock).
+    var startCount: Int { lock.withLock { starts } }
+    /// True: `start` fails as G7Kit's does before the first unlock (pairing record unreadable).
+    var startFails: Bool {
+        get { lock.withLock { failsToStart } }
+        set { lock.withLock { failsToStart = newValue } }
+    }
+
+    func start(pairingCode: String?) async throws {
+        let fails = lock.withLock { () -> Bool in
+            starts += 1
+            return failsToStart
+        }
+        if fails { throw G7StartError.credentialStoreFailed("Keychain unavailable before the first unlock") }
+    }
     func stop() async {}
     func pair(code: String) async throws {}
     func pairAgain(code: String) async throws {}

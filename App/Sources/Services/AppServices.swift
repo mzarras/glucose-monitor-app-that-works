@@ -78,6 +78,10 @@ protocol AppServices: AnyObject {
     var hasStoredSensor: Bool { get }
     /// The stored sensor's serial ("DXCMxx-1A2B3C4D"), nil when none is stored.
     var storedSensorSerial: String? { get }
+    /// False until `hasStoredSensor` / `storedSensorSerial` have been read from the source after
+    /// bootstrap (before that they are only defaults). A change sends `.sensor`. Use it to take an
+    /// exact "stored sensor before pairing" baseline.
+    var storedSensorKnown: Bool { get }
 
     // MARK: Calibration (PROGRESS D16; never a reading, S1)
 
@@ -186,4 +190,9 @@ protocol AppServices: AnyObject {
     /// rather than "dated ahead of the phone clock" (Phase 2 carry-over).
     var replayClockNow: Date? { get }
     #endif
+}
+
+extension AppServices {
+    /// Default for stand-ins that always know (additive requirement).
+    var storedSensorKnown: Bool { true }
 }
