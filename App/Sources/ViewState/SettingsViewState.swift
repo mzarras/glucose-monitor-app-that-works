@@ -35,9 +35,12 @@ struct SettingsViewState: Equatable, Sendable {
     var feedback = SettingsFeedback()
     /// DEBUG builds only: the replay controls (D11, D20). Always nil in Release.
     var debug: DebugSettings? = nil
-    /// D45: listen alongside the Dexcom app or pair this app; nil until the facade offers it.
+    /// D45: listen alongside the Dexcom app or pair this app (the facade's `connectionMode`; nil
+    /// only for a fixture without it).
     var connection: ConnectionModeState? = nil
-    /// D47: Settings › Diagnostics "Record raw glucose packets"; nil until the facade offers it.
+    /// D45: a switch to this mode is on its way (the choices wait for it).
+    var connectionSwitchingTo: SensorConnectionMode? = nil
+    /// D47: Settings › Diagnostics "Record raw glucose packets" (`recordsRawGlucosePackets`).
     var packetRecording: PacketRecordingState? = nil
 
     /// D45: listening forces the Trio handoff and uploads off, and hides pairing-only actions.
@@ -50,6 +53,8 @@ struct SettingsFeedback: Equatable, Sendable {
     var dexcomShare: String?
     var pairing: String?
     var export: String?
+    /// D45: why the connection mode didn't change (`ConnectionModeText.errorText`).
+    var connection: String?
 }
 
 /// DEBUG builds: replay a ReplayKit scenario in the running app (PROGRESS D11, D19, D20).

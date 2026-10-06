@@ -20,12 +20,15 @@ enum NowHero: Equatable, Sendable {
         case pairAgain
         /// The sensor asks for a calibration (D36).
         case calibrate
+        /// D45: nothing chosen yet — Settings › Sensor, where the person chooses listen or pair.
+        case setUpSensor
 
         var title: String {
             switch self {
             case .pairSensor: return "Pair a sensor"
             case .pairAgain: return "Pair again"
             case .calibrate: return "Calibrate"
+            case .setUpSensor: return "Set up the sensor"
             }
         }
     }
@@ -143,7 +146,9 @@ struct StateLine: Equatable, Sendable {
 
 enum SensorStatusText {
     /// Now screen SENSOR row, e.g. "day 6 of 10 · 4d 7h left".
-    static func row(_ state: SensorState, now: Date, context: DisplayContext = .current) -> String {
+    /// - Parameter listening: D45 listen mode: its transient failures get their own words
+    ///   (`ListenModeRules.failure`).
+    static func row(_ state: SensorState, now: Date, context: DisplayContext = .current, listening: Bool = false) -> String {
         switch state {
         case .active(let start, let expiresAt):
             let day = Int(now.timeIntervalSince(start) / 86_400) + 1
@@ -160,24 +165,24 @@ enum SensorStatusText {
         case .expired:
             return "expired"
         case .notPaired, .searching, .connecting, .authenticating, .failed, .error, .calibrationNeeded, .calibrationError, .bluetoothUnavailable:
-            return connection(state)
+            return connection(state, listening: listening)
         }
     }
 
     /// Now screen SENSOR row with the session: while the state is a connection step or a transient
     /// problem, the session still gives the day and time left ("day 6 of 10 · 4d 7h left ·
     /// readings interrupted").
-    static func row(_ state: SensorState, session: SensorSession?, now: Date, context: DisplayContext = .current) -> String {
-        guard let session else { return row(state, now: now, context: context) }
+    static func row(_ state: SensorState, session: SensorSession?, now: Date, context: DisplayContext = .current, listening: Bool = false) -> String {
+        guard let session else { return row(state, now: now, context: context, listening: listening) }
         switch state {
         case .searching, .connecting, .authenticating, .bluetoothUnavailable, .failed:
             if case .failed(let failure) = state, failure.requiresSensorReplacement || failure.requiresPairing || failure.raisesSensorAlert {
-                return row(state, now: now, context: context)
+                return row(state, now: now, context: context, listening: listening)
             }
             let base = row(.active(sessionStart: session.start, expiresAt: session.expiresAt), now: now, context: context)
-            return "\(base) · \(connection(state))"
+            return "\(base) · \(connection(state, listening: listening))"
         case .notPaired, .warmingUp, .active, .gracePeriod, .expired, .error, .calibrationNeeded, .calibrationError:
-            return row(state, now: now, context: context)
+            return row(state, now: now, context: context, listening: listening)
         }
     }
 
@@ -187,7 +192,7 @@ enum SensorStatusText {
     }
 
     /// Short connection word, lower case.
-    static func connection(_ state: SensorState) -> String {
+    static func connection(_ state: SensorState, listening: Bool = false) -> String {
         switch state {
         case .notPaired: return "not paired"
         case .searching: return "searching for sensor"
@@ -198,6 +203,7 @@ enum SensorStatusText {
         case .gracePeriod: return "grace period"
         case .expired: return "sensor expired"
         case .failed(let failure):
+            if let text = ListenModeRules.failure(failure, listening: listening) { return text.row }
             if failure.requiresSensorReplacement { return "replace sensor" }
             if failure.requiresPairing { return "pair again" }
             if failure.raisesSensorAlert { return "sensor problem" }

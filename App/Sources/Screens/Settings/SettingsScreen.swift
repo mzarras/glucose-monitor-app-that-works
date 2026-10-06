@@ -78,7 +78,8 @@ struct SettingsScreen: View {
                 Group {
                     switch route {
                     case .sensor: SensorSettingsView(sensor: state.sensor, calibration: calibration, feedback: state.feedback.pairing, actions: actions,
-                                                     hasStoredSensor: hasStoredSensor, connection: state.connection)
+                                                     hasStoredSensor: hasStoredSensor, connection: state.connection,
+                                                     connectionSwitchingTo: state.connectionSwitchingTo, connectionFeedback: state.feedback.connection)
                     case .trio: TrioSettingsView(trio: state.trio, setEnabled: actions.setTrioEnabled, listening: state.isListening)
                     case .sharing: SharingSettingsView(nightscout: state.nightscout, share: state.dexcomShare, feedback: state.feedback, actions: actions,
                                                        listening: state.isListening)
@@ -120,10 +121,11 @@ struct SettingsContent: View {
             }
             SettingsGroup("SENSOR") {
                 SettingsLinkRow(title: "G7 sensor", value: state.sensor.isWaitingForFirstState ? "checking…"
-                                    : SensorStatusText.row(state.sensor.state, session: state.sensor.session, now: now, context: context), route: .sensor)
+                                    : SensorStatusText.row(state.sensor.state, session: state.sensor.session, now: now, context: context,
+                                                         listening: state.isListening), route: .sensor)
                     .accessibilityIdentifier("settings.sensor")
-                if let mode = state.connection?.mode {
-                    SettingsLinkRow(title: "Connection", value: ConnectionModeText.row(mode), route: .sensor)
+                if let connection = state.connection {
+                    SettingsLinkRow(title: "Connection", value: ConnectionModeText.row(connection.mode), route: .sensor)
                         .accessibilityIdentifier("settings.connection")
                 }
             }
@@ -132,16 +134,19 @@ struct SettingsContent: View {
                                 value: ListenModeRules.outputRow(state.trio.isEnabled ? TrioStatusText.row(state.trio.status, context: context) : "off",
                                                                  listening: state.isListening),
                                 route: .trio, valueIsAlert: !state.isListening && isFailing(state.trio.status))
+                    .accessibilityIdentifier("settings.trio")
             }
             SettingsGroup("SHARING") {
                 SettingsLinkRow(title: "Nightscout",
                                 value: ListenModeRules.outputRow(state.nightscout.uploadEnabled ? UploadStatusText.row(state.nightscout.status, context: context) : "off",
                                                                  listening: state.isListening),
                                 route: .sharing, valueIsAlert: !state.isListening && isFailing(state.nightscout.status))
+                    .accessibilityIdentifier("settings.nightscout")
                 SettingsLinkRow(title: "Dexcom Share",
                                 value: ListenModeRules.outputRow(state.dexcomShare.isEnabled ? UploadStatusText.row(state.dexcomShare.status, context: context) : "off",
                                                                  listening: state.isListening),
                                 route: .sharing, valueIsAlert: !state.isListening && isFailing(state.dexcomShare.status))
+                    .accessibilityIdentifier("settings.share")
             }
             SettingsGroup("ALERT DELIVERY") {
                 SettingsLinkRow(title: "Notifications", value: SettingsText.notifications(state.delivery.notifications).status,

@@ -19,9 +19,13 @@ struct SensorSettingsView: View {
     /// D45: nil until the facade offers listen mode; then the CONNECTION choice is shown, and while
     /// listening the pairing-only actions (calibrate, pair again, forget) are explained instead.
     var connection: ConnectionModeState? = nil
+    /// D45: a switch on its way, and why the last one didn't happen.
+    var connectionSwitchingTo: SensorConnectionMode? = nil
+    var connectionFeedback: String? = nil
     @State private var confirmingStop = false
     @State private var confirmingForget = false
     @State private var confirmingMode: SensorConnectionMode?
+    @State private var confirmingStopFollowing = false
 
     private var listening: Bool { connection?.isListening == true }
 
@@ -33,7 +37,8 @@ struct SensorSettingsView: View {
                 if listening {
                     ListeningStatusLine()
                 }
-                SettingsValueRow(title: "Status", value: SensorStatusText.row(sensor.state, now: Date()))
+                SettingsValueRow(title: "Status", value: SensorStatusText.row(sensor.state, now: Date(), listening: listening))
+                    .accessibilityIdentifier("settings.sensor.status")
                 if let serial = sensor.serial {
                     SettingsValueRow(title: "Serial", value: serial)
                 }
@@ -56,13 +61,19 @@ struct SensorSettingsView: View {
                 if let feedback {
                     FieldMessage(text: feedback)
                 }
-                if listening {
-                    listeningSection
-                } else {
-                    pairedSection
-                }
-                if let connection {
+                if let connection, connection.mode == nil {
+                    // Not chosen yet: the choice comes first, before anything about pairing.
+                    ExplanationNote(text: ConnectionModeText.chooseFirst)
                     connectionSection(connection)
+                } else {
+                    if listening {
+                        listeningSection
+                    } else {
+                        pairedSection
+                    }
+                    if let connection {
+                        connectionSection(connection)
+                    }
                 }
             }
             .padding(.horizontal, Layout.sideMargin)
@@ -75,26 +86,53 @@ struct SensorSettingsView: View {
     @ViewBuilder
     private var listeningSection: some View {
         if case .failed(let failure) = sensor.state {
-            FieldMessage(text: failure.message)
+            // S5: the failure stays on the page, in words for listening where it is one of those.
+            FieldMessage(text: ListenModeRules.failure(failure, listening: true)?.detail ?? failure.message)
         }
         VStack(alignment: .leading, spacing: 6) {
             ExplanationNote(text: ConnectionModeText.calibrationWhileListening)
             ExplanationNote(text: ConnectionModeText.pairingWhileListening)
         }
         .accessibilityIdentifier("settings.sensor.listeningNotes")
+        if ListenModeRules.offersStopFollowing(sensor) {
+            // G7Kit §14: forgetting the followed sensor is how listen mode follows the next one.
+            VStack(alignment: .leading, spacing: 6) {
+                Button(ConnectionModeText.stopFollowingButton) { confirmingStopFollowing = true }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .accessibilityIdentifier("settings.sensor.stopFollowing")
+                    .confirmationDialog(ConnectionModeText.stopFollowingTitle, isPresented: $confirmingStopFollowing, titleVisibility: .visible) {
+                        Button(ConnectionModeText.stopFollowingButton, role: .destructive, action: actions.forgetSensor)
+                    } message: {
+                        Text(verbatim: ConnectionModeText.stopFollowingMessage)
+                    }
+                ExplanationNote(text: ConnectionModeText.stopFollowingNote)
+            }
+        }
     }
 
     private func connectionSection(_ connection: ConnectionModeState) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             SectionLabel("CONNECTION")
-            ConnectionModeChoices(selected: connection.mode) { mode in
+            ConnectionModeChoices(selected: connectionSwitchingTo ?? connection.mode) { mode in
                 if mode != connection.mode { confirmingMode = mode }
+            }
+            .disabled(connectionSwitchingTo != nil)
+            if connectionSwitchingTo != nil {
+                HStack(spacing: 10) {
+                    ProgressView().accessibilityHidden(true)
+                    Text(verbatim: ConnectionModeText.switching).font(Typography.body(size: 13))
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if let connectionFeedback {
+                FieldMessage(text: connectionFeedback)
+                    .accessibilityIdentifier("settings.connection.message")
             }
         }
         .confirmationDialog(confirmingMode.map(ConnectionModeText.switchTitle(to:)) ?? "",
                             isPresented: Binding(get: { confirmingMode != nil }, set: { if !$0 { confirmingMode = nil } }),
                             titleVisibility: .visible, presenting: confirmingMode) { mode in
-            Button(mode == .listen ? "Listen alongside the Dexcom app" : "Pair this app") { actions.setConnectionMode(mode) }
+            Button(ConnectionModeText.switchButton(to: mode)) { actions.setConnectionMode(mode) }
         } message: { mode in
             Text(verbatim: ConnectionModeText.switchMessage(to: mode))
         }
@@ -115,6 +153,11 @@ struct SensorSettingsView: View {
                                                             hasStoredSensor: hasStoredSensor, now: Date()) {
             if case .failed(let failure) = sensor.state {
                 FieldMessage(text: failure.message)
+            }
+            if connection != nil {
+                // D45: said plainly before the code field.
+                WarningNote(text: ConnectionModeText.pairingTakeoverWarning)
+                    .accessibilityIdentifier("settings.sensor.takeoverWarning")
             }
             PairingOfferView(offer: offer, pair: actions.pair, pairAgain: actions.pairAgain)
         } else if sensor.canStopSession {
@@ -214,6 +257,7 @@ struct PairingCodeEntry: View {
             .padding(.horizontal, 12)
             .overlay(Rectangle().stroke(Theme.ink, lineWidth: 1))
             .accessibilityLabel(Text("Pairing code, 4 digits"))
+            .accessibilityIdentifier("pairing.code")
             Button(buttonTitle) { pair(code) }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(!PairingCode.isComplete(code))
@@ -591,6 +635,8 @@ enum Credits {
         Entry(name: "Loop", license: "MIT", use: "Alert delivery approach: ringer-off playback, AlarmKit system alarms, stale/backfill guards."),
         Entry(name: "Nightscout cgm-remote-monitor", license: "AGPL-3.0", use: "REST API contract, authorization, entry dedupe, LOW/HIGH (39/401) conventions."),
         Entry(name: "share2nightscout-bridge", license: "GPL-3.0-only", use: "Dexcom trend-code numbering."),
+        Entry(name: "LoopFollow", license: "AGPL-3.0", use: "Follower alarm behaviour on a LOW reading (39)."),
+        Entry(name: "nightguard", license: "AGPL-3.0", use: "How a follower displays LOW and HIGH (39/401)."),
         Entry(name: "LoopKit dexcom-share-client-swift", license: "MIT", use: "Dexcom Share LOW/HIGH reading convention."),
         Entry(name: "Trio", license: "AGPL-3.0", use: "App Group CGM contract and Nightscout upload settings; integrated through its App Group contract only."),
     ]

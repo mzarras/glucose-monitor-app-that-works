@@ -45,6 +45,11 @@ final class PreviewAppServices: AppServices {
     /// Set to make `pair(code:)` / `submitCalibration(_:)` fail.
     var pairingError: PairingError?
     var calibrationRefusal: CalibrationRefusal?
+    /// D45/D47 (`AppServices.connectionMode`, `recordsRawGlucosePackets`); set
+    /// `connectionModeError` to make `setConnectionMode(_:)` refuse (nothing changes then).
+    var connectionMode: SensorConnectionMode = .pair
+    var recordsRawGlucosePackets = false
+    var connectionModeError: ConnectionModeError?
 
     private var observers: [UUID: AsyncStream<ServiceChange>.Continuation] = [:]
 
@@ -90,6 +95,27 @@ final class PreviewAppServices: AppServices {
         calls.append("pairAgain(\(code))")
         if let pairingError { throw pairingError }
         sensorState = .searching
+        send(.sensor)
+    }
+
+    /// As the live facade: the outputs' `offWhileListening` follow the mode, listen starts at once
+    /// (`.searching`), pairing waits for a code (`.notPaired`), and the four changes are sent.
+    func setConnectionMode(_ mode: SensorConnectionMode) async throws(ConnectionModeError) {
+        calls.append("setConnectionMode(\(mode.rawValue))")
+        if let connectionModeError { throw connectionModeError }
+        guard mode != connectionMode else { return }
+        connectionMode = mode
+        trio.offWhileListening = mode == .listen
+        nightscout.upload.offWhileListening = mode == .listen
+        dexcomShare.upload.offWhileListening = mode == .listen
+        sensorState = mode == .listen ? .searching : .notPaired
+        sensorSession = nil
+        for change in [ServiceChange.sensor, .calibration, .trio, .uploads] { send(change) }
+    }
+
+    func setRecordsRawGlucosePackets(_ enabled: Bool) async {
+        calls.append("setRecordsRawGlucosePackets(\(enabled))")
+        recordsRawGlucosePackets = enabled
         send(.sensor)
     }
 

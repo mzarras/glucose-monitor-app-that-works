@@ -370,6 +370,14 @@ final class LiveAppServices: AppServices {
     func forgetSensor() async {
         await g7.forgetSensor()
         log(.sensor, "sensor forgotten")
+        // G7Kit's forget stops the source. In pairing mode it stays stopped until `pair(code:)`.
+        // In listen mode ("Stop following this sensor", D45) no code is needed: look for the Dexcom
+        // app's connection to the next sensor at once, or nothing would be followed until a relaunch.
+        if isListening, !isReplaying {
+            g7Started = false
+            await startG7()
+            log(.sensor, "listening again for the Dexcom app's connection to the next sensor")
+        }
         await refreshStoredSensor()
         await updateTrioHeartbeat()
         send(.sensor)

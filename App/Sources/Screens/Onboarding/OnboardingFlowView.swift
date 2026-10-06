@@ -28,8 +28,10 @@ struct OnboardingActions {
     var cancelImport: @MainActor () -> Void = {}
     /// "Set up later": leaves onboarding without completing it (review M1).
     var dismiss: @MainActor () -> Void = {}
-    /// D45: listen alongside the Dexcom app or pair this app (shown once the facade offers it).
+    /// D45: listen alongside the Dexcom app or pair this app (remembered on the step).
     var chooseConnection: @MainActor (SensorConnectionMode) -> Void = { _ in }
+    /// D45: Continue on the connection step: switches the facade to the choice, then moves on.
+    var continueConnection: @MainActor () -> Void = {}
 
     static var noop: OnboardingActions {
         OnboardingActions(goTo: { _ in }, startNightscoutImport: { _, _, _ in }, startClarityImport: { _, _ in }, requestBluetooth: {},
@@ -262,7 +264,7 @@ struct ImportProgressView: View {
                 FieldMessage(text: note)
             }
             if let error = progress.errorMessage {
-                FieldMessage(text: "\(error) Already-imported readings are kept; running the import again continues where it stopped.")
+                FieldMessage(text: OnboardingText.importFailure(error))
             }
         }
         .padding(12)
@@ -430,6 +432,7 @@ struct AlarmsStep: View {
         }
         Button("Continue") { actions.goTo(state.step(after: .alarms) ?? .pairing) }
             .buttonStyle(PrimaryButtonStyle())
+            .accessibilityIdentifier("onboarding.alarms.continue")
     }
 }
 
@@ -438,15 +441,39 @@ struct AlarmsStep: View {
 struct ConnectionStep: View {
     let state: OnboardingState
     let actions: OnboardingActions
+    @State private var confirming = false
 
     var body: some View {
         StepTitle(title: "How to connect", lead: "Choose how this app reaches your sensor. You can change it later in Settings › Sensor.")
         ConnectionModeChoices(selected: state.connection?.mode, select: actions.chooseConnection)
-        if let mode = state.connection?.mode {
-            Button("Continue") { actions.goTo(state.step(after: .connection) ?? .importHistory) }
-                .buttonStyle(PrimaryButtonStyle())
-                .accessibilityIdentifier("onboarding.connection.continue")
-                .accessibilityHint(Text(verbatim: ConnectionModeText.title(mode)))
+            .disabled(state.connectionSwitching)
+        if let message = state.connectionMessage {
+            FieldMessage(text: message)
+                .accessibilityIdentifier("onboarding.connection.message")
+        }
+        if state.connectionSwitching {
+            HStack(spacing: 10) {
+                ProgressView().accessibilityHidden(true)
+                Text(verbatim: ConnectionModeText.switching).font(Typography.body(size: 14))
+            }
+            .accessibilityElement(children: .combine)
+        } else if let mode = state.connection?.mode {
+            Button("Continue") {
+                // Switching replaces a stored sensor's pairing: ask first (as in Settings › Sensor).
+                if mode != state.currentConnectionMode, state.connectionSwitchNeedsConfirmation {
+                    confirming = true
+                } else {
+                    actions.continueConnection()
+                }
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .accessibilityIdentifier("onboarding.connection.continue")
+            .accessibilityHint(Text(verbatim: ConnectionModeText.title(mode)))
+            .confirmationDialog(ConnectionModeText.switchTitle(to: mode), isPresented: $confirming, titleVisibility: .visible) {
+                Button(ConnectionModeText.switchButton(to: mode), action: actions.continueConnection)
+            } message: {
+                Text(verbatim: ConnectionModeText.switchMessage(to: mode))
+            }
         }
     }
 }
@@ -465,25 +492,28 @@ struct ListenStep: View {
         }
     }
 
+    /// What stops readings right now, in words for listening (S5).
     private var problem: String? {
         switch state.sensorState {
-        case .failed(let failure): return failure.message
+        case .failed(let failure): return ListenModeRules.failure(failure, listening: true)?.detail ?? failure.message
         case .error(_, let description): return description
+        case .bluetoothUnavailable(.poweredOff): return "Bluetooth is off, so this app can't hear the sensor. Turn it on in Control Center or Settings."
+        case .bluetoothUnavailable(.unauthorized): return "Bluetooth isn't allowed for this app, so it can't hear the sensor. Allow it in iOS Settings."
+        case .bluetoothUnavailable(.unsupported): return "This device doesn't support Bluetooth Low Energy, so it can't hear the sensor."
+        case .bluetoothUnavailable(.resetting): return "Bluetooth is restarting; listening resumes when it's back."
         default: return nil
         }
     }
 
     var body: some View {
         StepTitle(title: "Listening", lead: "Keep the Dexcom app installed: it stays the sensor's connection, and this app reads along.")
+        ListeningStatusLine()
         if isListening {
-            ListeningStatusLine()
             Text(verbatim: ConnectionModeText.onboardingListening).font(Typography.body(size: 14)).fixedSize(horizontal: false, vertical: true)
-            Button("Continue") { actions.goTo(state.step(after: .listen) ?? .warmUp) }
-                .buttonStyle(PrimaryButtonStyle())
-                .accessibilityIdentifier("onboarding.listen.continue")
         } else {
             if let problem {
                 FieldMessage(text: problem)
+                    .accessibilityIdentifier("onboarding.listen.problem")
             }
             HStack(spacing: 10) {
                 ProgressView().accessibilityHidden(true)
@@ -494,6 +524,19 @@ struct ListenStep: View {
             .accessibilityElement(children: .combine)
         }
         ExplanationNote(text: ConnectionModeText.outputsOffWhileListening + ": Trio handoff, Nightscout and Dexcom Share upload. The Dexcom app keeps its own sharing.")
+        // Nothing to do here but wait, and the app keeps listening in the background: Continue is
+        // always offered (the primary action once the sensor is heard).
+        if isListening {
+            Button("Continue", action: next).buttonStyle(PrimaryButtonStyle())
+                .accessibilityIdentifier("onboarding.listen.continue")
+        } else {
+            Button("Continue", action: next).buttonStyle(SecondaryButtonStyle())
+                .accessibilityIdentifier("onboarding.listen.continue")
+        }
+    }
+
+    private func next() {
+        actions.goTo(state.step(after: .listen) ?? .warmUp)
     }
 }
 
@@ -504,6 +547,11 @@ struct PairingStep: View {
 
     var body: some View {
         StepTitle(title: "Pair your sensor", lead: "Apply the sensor first. iOS will ask to pair with it; tap Pair.")
+        if state.connection != nil {
+            // D45: said plainly before the code field.
+            WarningNote(text: ConnectionModeText.pairingTakeoverWarning)
+                .accessibilityIdentifier("onboarding.pairing.takeoverWarning")
+        }
         Text(verbatim: OnboardingState.otherG7AppsWarning)
             .font(Typography.body(size: 12))
             .foregroundStyle(Theme.muted)
@@ -566,5 +614,6 @@ struct WarmUpStep: View {
             .foregroundStyle(Theme.muted)
             .fixedSize(horizontal: false, vertical: true)
         Button("Done", action: finish).buttonStyle(PrimaryButtonStyle())
+            .accessibilityIdentifier("onboarding.done")
     }
 }

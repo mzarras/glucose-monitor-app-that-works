@@ -60,6 +60,13 @@ final class AppEnvironment {
         // saved mode (D45; the settings file is readable before the first unlock, see
         // SensorConnectionSettings.swift) with the saved raw-packet recording (D47).
         let connectionSettings = makeConnectionSettingsStore(support: support)
+        #if DEBUG
+        // UI tests: `-resetConnectionMode` starts this launch from the defaults (pairing mode,
+        // recording off), so one test's mode switch never carries into the next launch.
+        if arguments.contains("-resetConnectionMode") {
+            try? FileManager.default.removeItem(at: connectionSettings.fileURL)
+        }
+        #endif
         let g7 = G7CGMSource(configuration: connectionSettings.load().settings.g7Configuration, diagnostics: diagnostics)
 
         let credentials = KeychainCredentialStore()

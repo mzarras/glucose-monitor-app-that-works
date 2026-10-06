@@ -116,8 +116,16 @@ struct OnboardingState: Equatable, Sendable {
     /// Review M1: every step offers "Set up later", so onboarding is never a trap (without a new
     /// sensor, the pairing step has no other way out).
     var isDismissible: Bool = true
-    /// D45: nil until the facade offers listen mode (then the `.connection` step appears).
+    /// D45: the connection step's choice (nil mode until chosen). Nil for a fixture without it.
     var connection: ConnectionModeState? = nil
+    /// D45: the mode the facade is in now; Continue on the connection step switches to the choice
+    /// when they differ.
+    var currentConnectionMode: SensorConnectionMode = .pair
+    /// D45: switching would replace a stored sensor's pairing, so Continue asks first.
+    var connectionSwitchNeedsConfirmation: Bool = false
+    /// D45: a switch is on its way, or why it didn't happen (nothing changed).
+    var connectionSwitching: Bool = false
+    var connectionMessage: String? = nil
 
     var alarmsAvailable: Bool { urgentLowAlarm.isAvailable }
     var visibleSteps: [OnboardingStep] { OnboardingStep.visibleSteps(alarmsAvailable: alarmsAvailable, connection: connection) }
@@ -144,6 +152,15 @@ struct OnboardingState: Equatable, Sendable {
 }
 
 enum OnboardingText {
+    /// A stopped import's message in full (NightscoutKit's `unusableHistory` names the date range
+    /// and what to do), followed by what happens to the imported readings unless it says so itself.
+    static func importFailure(_ message: String) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sentence = trimmed.hasSuffix(".") ? trimmed : trimmed + "."
+        if trimmed.localizedCaseInsensitiveContains("imported so far are kept") { return sentence }
+        return "\(sentence) Already-imported readings are kept; running the import again continues where it stopped."
+    }
+
     /// Import readings dated in the future and left out (PROGRESS D33: a wrong time zone or a clock
     /// fault; never stored as readings), nil when there were none.
     static func futureDatedNote(_ count: Int) -> String? {
