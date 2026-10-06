@@ -21,6 +21,13 @@ public enum AlertInput: Sendable, Equatable {
     /// Time has passed. Send on every wake-up and about once a minute while the app is running;
     /// nothing is lost if ticks are late, because pending notifications cover the suspended app.
     case tick
+    /// The app came to the foreground (send it when the scene becomes active). Writes the pending
+    /// sensor expiry reminders again, adding any the system refused or dropped and refreshing their
+    /// text for the current time zone (D43 review B1).
+    case foreground
+    /// Pending notifications the delivery layer could not add (e.g. notifications not allowed yet).
+    /// `AlertService` sends this itself after each batch; the app never needs to (D43 review B1).
+    case notificationsNotScheduled([AlertNotice])
     /// The app process started (first input after restoring the snapshot). Reconciles what a
     /// previous process left pending: urgent-low repeats (notifications and system alarms) are
     /// rebuilt if urgent low is firing and removed otherwise; missed-readings notifications are

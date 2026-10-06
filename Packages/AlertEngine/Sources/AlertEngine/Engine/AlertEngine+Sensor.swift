@@ -1,4 +1,5 @@
-// Sensor state (HANDOFF §5 "Sensor", S5) and the one-off sensor announcements.
+// Sensor state (HANDOFF §5 "Sensor", S5) and the warm-up announcement. The expiry reminders are in
+// AlertEngine+ExpiryReminders.swift (D43).
 //
 // The G7 connects for a few seconds every 5 minutes, so the source reports searching →
 // connecting → authenticating → active (or error, …) on every cycle. Those transient states must
@@ -46,33 +47,10 @@ extension AlertEngine {
         return actions
     }
 
-    /// Expiring in 24 h / 2 h and grace period, checked on every input because they depend on time.
-    mutating func announceExpiryAndGracePeriod(now: Date) -> [AlertAction] {
-        switch snapshot.settledSensorState {
-        case .active(_, let expiresAt):
-            let remaining = expiresAt.timeIntervalSince(now)
-            guard remaining > 0 else { return [] }
-            if remaining <= 2 * 3600 {
-                // The 2-hour notice makes the 24-hour one redundant; never send both at once.
-                remember(.sensorExpiringIn24Hours, sessionDate: expiresAt)
-                return announce(.sensorExpiringIn2Hours, sessionDate: expiresAt, now: now)
-            }
-            if remaining <= 24 * 3600 {
-                return announce(.sensorExpiringIn24Hours, sessionDate: expiresAt, now: now)
-            }
-            return []
-        case .gracePeriod(let endsAt):
-            return announce(.sensorGracePeriod, sessionDate: endsAt, now: now)
-        default:
-            return []
-        }
-    }
-
     /// Fires a one-off announcement once per sensor session. Session dates are derived from the
     /// phone clock at each connection (S3), so the same session's expiry or grace end can shift by
     /// a second or so between connections (safety review WS4 M1). A date within an hour of the one
     /// already announced for this kind is the same session; a new sensor's dates are days apart.
-    /// A disabled announcement is not remembered, so turning it on later in the window delivers it.
     private mutating func announce(_ kind: AlertKind, sessionDate: Date, now: Date) -> [AlertAction] {
         guard settings.isEnabled(kind), !alreadyAnnounced(kind, sessionDate: sessionDate) else { return [] }
         remember(kind, sessionDate: sessionDate)

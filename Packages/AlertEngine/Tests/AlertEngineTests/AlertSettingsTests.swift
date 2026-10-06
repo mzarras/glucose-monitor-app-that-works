@@ -27,11 +27,12 @@ final class AlertSettingsTests: XCTestCase {
         XCTAssertTrue(s.missedReadings.isEnabled)
         XCTAssertEqual(s.missedReadings.windowMinutes, 15)
         for kind: AlertKind in [
-            .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod,
+            .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod,
             .sensorFailed, .sensorError, .calibrationNeeded, .sensorExpired, .bluetoothUnavailable, .trioBridge, .storageFailing,
         ] {
             XCTAssertTrue(s.isEnabled(kind), "\(kind) on by default")
         }
+        XCTAssertEqual(AlertKind.allCases.filter { !s.playsSound($0) }, [.sensorExpiringIn24Hours], "D43: only the 24-hour reminder is silent")
         XCTAssertFalse(s.quietHours.isEnabled)
     }
 
@@ -43,7 +44,7 @@ final class AlertSettingsTests: XCTestCase {
         ]
         let off: [AlertKind] = [
             .fallingFast, .risingFast,
-            .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod,
+            .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod,
             .storageFailing,   // D42: history is lost, alerts and Trio are not
         ]
         XCTAssertEqual(Set(on).union(off), Set(AlertKind.allCases), "every alert has a stated default")
@@ -215,6 +216,8 @@ final class AlertSettingsTests: XCTestCase {
         s.missedReadings = MissedReadingsSettings(isEnabled: false, windowMinutes: 25, sound: .cascade, soundsOnSilent: false, snoozeMinutes: 90)
         s.sensorWarmUpComplete = EventAlertSettings(isEnabled: false, sound: .summit, soundsOnSilent: true)
         s.sensorExpiringIn24Hours.isEnabled = false
+        s.sensorExpiringIn24Hours.playsSound = true
+        s.sensorExpiringIn12Hours = EventAlertSettings(isEnabled: false, sound: .sonar, soundsOnSilent: true, playsSound: false)
         s.sensorExpiringIn2Hours.sound = .tide
         s.sensorGracePeriod.soundsOnSilent = true
         s.sensorFailed = StatusAlertSettings(isEnabled: false, sound: .sonar, soundsOnSilent: false, snoozeMinutes: 15)
@@ -241,6 +244,24 @@ final class AlertSettingsTests: XCTestCase {
         XCTAssertEqual(stored.storageFailing.snoozeMinutes, 1440)
     }
 
+    func test_D43_expiryReminderSettingsDecodeWithDefaultsFromOlderStoredSettings() throws {
+        // Written before D43: no 12-hour reminder, no `playsSound`.
+        let older = try decode(#"{"sensorExpiringIn24Hours": {"isEnabled": true, "sound": "summit"}, "sensorExpiringIn2Hours": {"isEnabled": false}}"#)
+        XCTAssertEqual(older.sensorExpiringIn12Hours, EventAlertSettings.defaults(for: .sensorExpiringIn12Hours))
+        XCTAssertTrue(older.isEnabled(.sensorExpiringIn12Hours))
+        XCTAssertEqual(older.sound(.sensorExpiringIn12Hours), .doorbell)
+        XCTAssertTrue(older.playsSound(.sensorExpiringIn12Hours))
+        XCTAssertEqual(older.sensorExpiringIn24Hours.sound, .summit)
+        XCTAssertFalse(older.playsSound(.sensorExpiringIn24Hours), "the per-kind default: silent")
+        XCTAssertFalse(older.isEnabled(.sensorExpiringIn2Hours))
+        XCTAssertTrue(older.playsSound(.sensorExpiringIn2Hours))
+
+        let stored = try decode(#"{"sensorExpiringIn24Hours": {"playsSound": true}, "sensorExpiringIn12Hours": {"isEnabled": false, "playsSound": "loud"}}"#)
+        XCTAssertTrue(stored.playsSound(.sensorExpiringIn24Hours), "the user turned its sound on")
+        XCTAssertFalse(stored.isEnabled(.sensorExpiringIn12Hours))
+        XCTAssertTrue(stored.playsSound(.sensorExpiringIn12Hours), "unreadable: the default")
+    }
+
     func test_decodeOrDefaultNeverThrows() {
         XCTAssertEqual(AlertSettings.decodeOrDefault(nil), .defaults)
         XCTAssertEqual(AlertSettings.decodeOrDefault(Data("not json".utf8)), .defaults)
@@ -264,7 +285,13 @@ final class AlertSettingsTests: XCTestCase {
             XCTAssertTrue(s.soundsOnSilent(kind))
             s.setSoundsOnSilent(false, for: kind)
             XCTAssertEqual(s.soundsOnSilent(kind), kind == .urgentLow, "\(kind)")
+            // D43: only the announcements can go silent; every other alert always plays its sound.
+            XCTAssertEqual(s.setPlaysSound(false, for: kind), kind.isEventAlert, "\(kind)")
+            XCTAssertEqual(s.playsSound(kind), !kind.isEventAlert, "\(kind)")
+            s.setPlaysSound(true, for: kind)
+            XCTAssertTrue(s.playsSound(kind), "\(kind)")
         }
+        XCTAssertTrue(AlertSettings.defaults.playsSound(.urgentLow), "S7")
     }
 }
 

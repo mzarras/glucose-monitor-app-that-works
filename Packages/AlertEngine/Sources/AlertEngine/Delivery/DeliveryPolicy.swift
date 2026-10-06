@@ -22,6 +22,8 @@
 //                                      on; vibrates on silent. The documented gap (D17).
 // With "Sound on silent" off: Time Sensitive with the sound (respects the switch).
 // Quiet hours: passive, no sound, no in-app sound — never for urgent low.
+// Sound turned off (an announcement, D43: the 24-hour expiry reminder by default): active, no sound,
+// no in-app sound — a visible notification. Never for urgent low (S7).
 // Urgent low always counts as "Sound on silent" on and is never silenced (S7). Only urgent low
 // uses system alarms (D26).
 //
@@ -41,6 +43,9 @@ public enum DeliveryTiming: Sendable, Equatable, CaseIterable {
 public enum NotificationInterruption: Sendable, Equatable {
     /// Quietly into Notification Center (quiet hours).
     case passive
+    /// An ordinary notification: shown on the lock screen, held back by Focus and summaries. Used
+    /// with no sound for an announcement whose sound is off (D43).
+    case active
     /// Breaks through notification summaries and Focus if allowed; obeys the silent switch.
     case timeSensitive
     /// Critical Alert: plays even on silent and in Focus. Needs the entitlement and the user's grant.
@@ -110,6 +115,9 @@ public enum DeliveryPolicy {
 
         if silenced {
             return DeliveryDecision(interruption: .passive, notificationSound: .none, inAppSound: nil)
+        }
+        if !notice.playsSound && !isUrgent {
+            return DeliveryDecision(interruption: .active, notificationSound: .none, inAppSound: nil)
         }
         if soundsOnSilent && criticalAlertsEnabled {
             return DeliveryDecision(

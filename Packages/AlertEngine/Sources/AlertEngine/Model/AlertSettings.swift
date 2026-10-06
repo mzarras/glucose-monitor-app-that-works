@@ -15,6 +15,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
     public var missedReadings: MissedReadingsSettings
     public var sensorWarmUpComplete: EventAlertSettings
     public var sensorExpiringIn24Hours: EventAlertSettings
+    public var sensorExpiringIn12Hours: EventAlertSettings
     public var sensorExpiringIn2Hours: EventAlertSettings
     public var sensorGracePeriod: EventAlertSettings
     public var sensorFailed: StatusAlertSettings
@@ -35,10 +36,11 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         fallingFast = RateAlertSettings(sound: AlertSoundCatalog.defaultSound(for: .fallingFast))
         risingFast = RateAlertSettings(sound: AlertSoundCatalog.defaultSound(for: .risingFast))
         missedReadings = MissedReadingsSettings()
-        sensorWarmUpComplete = EventAlertSettings(sound: AlertSoundCatalog.defaultSound(for: .sensorWarmUpComplete))
-        sensorExpiringIn24Hours = EventAlertSettings(sound: AlertSoundCatalog.defaultSound(for: .sensorExpiringIn24Hours))
-        sensorExpiringIn2Hours = EventAlertSettings(sound: AlertSoundCatalog.defaultSound(for: .sensorExpiringIn2Hours))
-        sensorGracePeriod = EventAlertSettings(sound: AlertSoundCatalog.defaultSound(for: .sensorGracePeriod))
+        sensorWarmUpComplete = .defaults(for: .sensorWarmUpComplete)
+        sensorExpiringIn24Hours = .defaults(for: .sensorExpiringIn24Hours)   // no sound (D43)
+        sensorExpiringIn12Hours = .defaults(for: .sensorExpiringIn12Hours)
+        sensorExpiringIn2Hours = .defaults(for: .sensorExpiringIn2Hours)
+        sensorGracePeriod = .defaults(for: .sensorGracePeriod)
         sensorFailed = .defaults(for: .sensorFailed)
         sensorError = .defaults(for: .sensorError)
         calibrationNeeded = .defaults(for: .calibrationNeeded)
@@ -65,6 +67,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .missedReadings: return missedReadings.isEnabled
         case .sensorWarmUpComplete: return sensorWarmUpComplete.isEnabled
         case .sensorExpiringIn24Hours: return sensorExpiringIn24Hours.isEnabled
+        case .sensorExpiringIn12Hours: return sensorExpiringIn12Hours.isEnabled
         case .sensorExpiringIn2Hours: return sensorExpiringIn2Hours.isEnabled
         case .sensorGracePeriod: return sensorGracePeriod.isEnabled
         case .sensorFailed: return sensorFailed.isEnabled
@@ -88,6 +91,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .missedReadings: return missedReadings.sound
         case .sensorWarmUpComplete: return sensorWarmUpComplete.sound
         case .sensorExpiringIn24Hours: return sensorExpiringIn24Hours.sound
+        case .sensorExpiringIn12Hours: return sensorExpiringIn12Hours.sound
         case .sensorExpiringIn2Hours: return sensorExpiringIn2Hours.sound
         case .sensorGracePeriod: return sensorGracePeriod.sound
         case .sensorFailed: return sensorFailed.sound
@@ -112,6 +116,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .missedReadings: return missedReadings.soundsOnSilent
         case .sensorWarmUpComplete: return sensorWarmUpComplete.soundsOnSilent
         case .sensorExpiringIn24Hours: return sensorExpiringIn24Hours.soundsOnSilent
+        case .sensorExpiringIn12Hours: return sensorExpiringIn12Hours.soundsOnSilent
         case .sensorExpiringIn2Hours: return sensorExpiringIn2Hours.soundsOnSilent
         case .sensorGracePeriod: return sensorGracePeriod.soundsOnSilent
         case .sensorFailed: return sensorFailed.soundsOnSilent
@@ -143,8 +148,25 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .bluetoothUnavailable: return bluetoothUnavailable.snoozeMinutes
         case .trioBridge: return trioBridge.snoozeMinutes
         case .storageFailing: return storageFailing.snoozeMinutes
-        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod:
+        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod:
             return nil
+        }
+    }
+
+    /// `false`: the alert is posted as a visible notification with no sound (D43). Only the one-off
+    /// announcements can be silent; every other alert always plays its sound.
+    public func playsSound(_ kind: AlertKind) -> Bool {
+        eventSettings(kind)?.playsSound ?? true
+    }
+
+    private func eventSettings(_ kind: AlertKind) -> EventAlertSettings? {
+        switch kind {
+        case .sensorWarmUpComplete: return sensorWarmUpComplete
+        case .sensorExpiringIn24Hours: return sensorExpiringIn24Hours
+        case .sensorExpiringIn12Hours: return sensorExpiringIn12Hours
+        case .sensorExpiringIn2Hours: return sensorExpiringIn2Hours
+        case .sensorGracePeriod: return sensorGracePeriod
+        default: return nil
         }
     }
 
@@ -163,6 +185,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .missedReadings: missedReadings.isEnabled = enabled
         case .sensorWarmUpComplete: sensorWarmUpComplete.isEnabled = enabled
         case .sensorExpiringIn24Hours: sensorExpiringIn24Hours.isEnabled = enabled
+        case .sensorExpiringIn12Hours: sensorExpiringIn12Hours.isEnabled = enabled
         case .sensorExpiringIn2Hours: sensorExpiringIn2Hours.isEnabled = enabled
         case .sensorGracePeriod: sensorGracePeriod.isEnabled = enabled
         case .sensorFailed: sensorFailed.isEnabled = enabled
@@ -187,6 +210,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .missedReadings: missedReadings.sound = sound
         case .sensorWarmUpComplete: sensorWarmUpComplete.sound = sound
         case .sensorExpiringIn24Hours: sensorExpiringIn24Hours.sound = sound
+        case .sensorExpiringIn12Hours: sensorExpiringIn12Hours.sound = sound
         case .sensorExpiringIn2Hours: sensorExpiringIn2Hours.sound = sound
         case .sensorGracePeriod: sensorGracePeriod.sound = sound
         case .sensorFailed: sensorFailed.sound = sound
@@ -212,6 +236,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         case .missedReadings: missedReadings.soundsOnSilent = on
         case .sensorWarmUpComplete: sensorWarmUpComplete.soundsOnSilent = on
         case .sensorExpiringIn24Hours: sensorExpiringIn24Hours.soundsOnSilent = on
+        case .sensorExpiringIn12Hours: sensorExpiringIn12Hours.soundsOnSilent = on
         case .sensorExpiringIn2Hours: sensorExpiringIn2Hours.soundsOnSilent = on
         case .sensorGracePeriod: sensorGracePeriod.soundsOnSilent = on
         case .sensorFailed: sensorFailed.soundsOnSilent = on
@@ -225,11 +250,26 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         return true
     }
 
+    /// Turns a one-off announcement's sound on or off (D43). Returns `false`, and changes nothing,
+    /// for every other alert: they always play their sound.
+    @discardableResult
+    public mutating func setPlaysSound(_ on: Bool, for kind: AlertKind) -> Bool {
+        switch kind {
+        case .sensorWarmUpComplete: sensorWarmUpComplete.playsSound = on
+        case .sensorExpiringIn24Hours: sensorExpiringIn24Hours.playsSound = on
+        case .sensorExpiringIn12Hours: sensorExpiringIn12Hours.playsSound = on
+        case .sensorExpiringIn2Hours: sensorExpiringIn2Hours.playsSound = on
+        case .sensorGracePeriod: sensorGracePeriod.playsSound = on
+        default: return false
+        }
+        return true
+    }
+
     // MARK: Decoding (lossy, migration-safe)
 
     private enum CodingKeys: String, CodingKey {
         case urgentLow, urgentLowSoon, low, high, fallingFast, risingFast, missedReadings
-        case sensorWarmUpComplete, sensorExpiringIn24Hours, sensorExpiringIn2Hours, sensorGracePeriod
+        case sensorWarmUpComplete, sensorExpiringIn24Hours, sensorExpiringIn12Hours, sensorExpiringIn2Hours, sensorGracePeriod
         case sensorFailed, sensorError, calibrationNeeded, sensorExpired, bluetoothUnavailable, trioBridge, storageFailing
         case quietHours
     }
@@ -238,7 +278,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
     /// synthesized `encode(to:)` uses.
     private enum FieldKey: String, CodingKey {
         case isEnabled, thresholdMgdl, delayMinutes, thresholdMgdlPerMinute, windowMinutes
-        case sound, soundsOnSilent, snoozeMinutes, repeatMinutes
+        case sound, soundsOnSilent, playsSound, snoozeMinutes, repeatMinutes
         case startMinuteOfDay, endMinuteOfDay
     }
 
@@ -314,6 +354,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
 
         sensorWarmUpComplete = Self.event(fields(.sensorWarmUpComplete), default: d.sensorWarmUpComplete)
         sensorExpiringIn24Hours = Self.event(fields(.sensorExpiringIn24Hours), default: d.sensorExpiringIn24Hours)
+        sensorExpiringIn12Hours = Self.event(fields(.sensorExpiringIn12Hours), default: d.sensorExpiringIn12Hours)
         sensorExpiringIn2Hours = Self.event(fields(.sensorExpiringIn2Hours), default: d.sensorExpiringIn2Hours)
         sensorGracePeriod = Self.event(fields(.sensorGracePeriod), default: d.sensorGracePeriod)
         sensorFailed = Self.status(fields(.sensorFailed), default: d.sensorFailed)
@@ -355,7 +396,10 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         EventAlertSettings(
             isEnabled: f.value(.isEnabled, or: d.isEnabled),
             sound: f.value(.sound, or: d.sound),
-            soundsOnSilent: f.value(.soundsOnSilent, or: d.soundsOnSilent)
+            soundsOnSilent: f.value(.soundsOnSilent, or: d.soundsOnSilent),
+            // Settings stored before D43 have no `playsSound`: the per-kind default applies, so the
+            // 24-hour reminder becomes silent there too.
+            playsSound: f.value(.playsSound, or: d.playsSound)
         )
     }
 

@@ -61,6 +61,10 @@ final class FakeNotificationCenter: AlertNotificationCenter {
         }
     }
 
+    func presentIdentifiers() async -> Set<String> {
+        Set(pending.keys).union(delivered.keys)
+    }
+
     func removePending(identifiers: [String]) {
         removedPending += identifiers
         for id in identifiers {

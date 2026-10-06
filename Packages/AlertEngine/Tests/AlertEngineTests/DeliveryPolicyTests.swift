@@ -5,9 +5,10 @@ import XCTest
 /// Alert authorization, system alarms (iOS 26+ AlarmKit, authorized), and app awake (`.now`) vs
 /// suspended (`.scheduled`).
 final class DeliveryPolicyTests: XCTestCase {
-    private func notice(_ kind: AlertKind, soundsOnSilent: Bool, silenced: Bool = false, sound: AlertSoundID = .dusk) -> AlertNotice {
+    private func notice(_ kind: AlertKind, soundsOnSilent: Bool, silenced: Bool = false, sound: AlertSoundID = .dusk,
+                        playsSound: Bool = true) -> AlertNotice {
         AlertNotice(kind: kind, title: "t", body: "b", sound: sound, soundsOnSilent: soundsOnSilent,
-                    isSilenced: silenced, snoozeMinutes: 30, fireDate: nil)
+                    isSilenced: silenced, snoozeMinutes: 30, fireDate: nil, playsSound: playsSound)
     }
 
     private func decide(_ n: AlertNotice, critical: Bool = false, alarms: Bool = false, _ timing: DeliveryTiming) -> DeliveryDecision {
@@ -107,10 +108,10 @@ final class DeliveryPolicyTests: XCTestCase {
                 for timing in DeliveryTiming.allCases {
                     let loudestPossible = (critical || alarms) ? 3 : (timing == .now ? 2 : 1)
                     for soundsOnSilent in [false, true] {
-                        for silenced in [false, true] {
-                            let n = notice(.urgentLow, soundsOnSilent: soundsOnSilent, silenced: silenced, sound: .cascade)
+                        for (silenced, playsSound) in [(false, true), (true, true), (false, false), (true, false)] {
+                            let n = notice(.urgentLow, soundsOnSilent: soundsOnSilent, silenced: silenced, sound: .cascade, playsSound: playsSound)
                             let d = decide(n, critical: critical, alarms: alarms, timing)
-                            let label = "critical \(critical) alarms \(alarms) \(timing) silenced \(silenced)"
+                            let label = "critical \(critical) alarms \(alarms) \(timing) silenced \(silenced) playsSound \(playsSound)"
                             XCTAssertEqual(d.loudness, loudestPossible, label)
                             XCTAssertNotEqual(d.interruption, .passive, label)
                             XCTAssertNotEqual(d.notificationSound, NotificationSoundChoice.none, label)
@@ -123,6 +124,29 @@ final class DeliveryPolicyTests: XCTestCase {
                 }
             }
         }
+    }
+
+    /// D43: an announcement with its sound off (the 24-hour expiry reminder by default) is a visible
+    /// notification with no sound, whatever else is set; quiet hours still make it passive.
+    func test_anAnnouncementWithItsSoundOffIsAVisibleNotificationWithNoSound() {
+        for critical in [false, true] {
+            for alarms in [false, true] {
+                for timing in DeliveryTiming.allCases {
+                    for soundsOnSilent in [false, true] {
+                        let n = notice(.sensorExpiringIn24Hours, soundsOnSilent: soundsOnSilent, sound: .doorbell, playsSound: false)
+                        XCTAssertEqual(decide(n, critical: critical, alarms: alarms, timing),
+                                       DeliveryDecision(interruption: .active, notificationSound: .none, inAppSound: nil))
+                        let quiet = notice(.sensorExpiringIn24Hours, soundsOnSilent: soundsOnSilent, silenced: true, sound: .doorbell, playsSound: false)
+                        XCTAssertEqual(decide(quiet, critical: critical, alarms: alarms, timing).interruption, .passive)
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(DeliveryDecision(interruption: .active, notificationSound: .none, inAppSound: nil).loudness, 0)
+        let audible = notice(.sensorExpiringIn24Hours, soundsOnSilent: false, sound: .doorbell, playsSound: true)
+        XCTAssertEqual(decide(audible, .scheduled),
+                       DeliveryDecision(interruption: .timeSensitive, notificationSound: .named(fileName: "alert-doorbell.wav"), inAppSound: nil),
+                       "with its sound turned on")
     }
 
     func test_loudnessOrdering() {

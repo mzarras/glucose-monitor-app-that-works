@@ -61,6 +61,7 @@ public final class UserNotificationCenterAdapter: AlertNotificationCenter {
         content.userInfo = spec.userInfo
         switch spec.interruption {
         case .passive: content.interruptionLevel = .passive
+        case .active: content.interruptionLevel = .active
         case .timeSensitive: content.interruptionLevel = .timeSensitive
         case .critical: content.interruptionLevel = .critical
         }
@@ -77,6 +78,12 @@ public final class UserNotificationCenterAdapter: AlertNotificationCenter {
             UNTimeIntervalNotificationTrigger(timeInterval: max(1, $0.timeIntervalSinceNow), repeats: false)
         }
         try await center.add(UNNotificationRequest(identifier: spec.identifier, content: content, trigger: trigger))
+    }
+
+    public func presentIdentifiers() async -> Set<String> {
+        let pending = await center.pendingNotificationRequests().map(\.identifier)
+        let delivered = await center.deliveredNotifications().map(\.request.identifier)
+        return Set(pending).union(delivered)
     }
 
     public func removePending(identifiers: [String]) {

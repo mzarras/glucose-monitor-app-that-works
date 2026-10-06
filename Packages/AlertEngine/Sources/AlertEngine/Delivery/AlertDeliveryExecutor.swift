@@ -24,6 +24,9 @@ public final class AlertDeliveryExecutor {
     /// Alerts whose last plan could not schedule every repeat, with how many are missing (S5).
     /// Cleared by the next `.schedule` or cancel for that alert.
     public private(set) var repeatShortfalls: [AlertKind: Int] = [:]
+    /// Pending sensor expiry reminders the notification center refused, not yet reported back to
+    /// the engine (D43 review B1). `AlertService` takes them after each batch.
+    private var refusedReminders: [AlertNotice] = []
 
     public init(
         center: AlertNotificationCenter, audio: AlertAudioPlaying, alarms: SystemAlarmScheduling? = nil,
@@ -70,7 +73,7 @@ public final class AlertDeliveryExecutor {
             if let sound = decision.inAppSound {
                 playInApp(sound, for: notice.kind)
             }
-            await add(NotificationRequestBuilder.request(for: notice, decision: decision))
+            _ = await add(NotificationRequestBuilder.request(for: notice, decision: decision))
 
         case .playDueAlert(let notice):
             var decision = decide(notice, .now)
@@ -83,6 +86,22 @@ public final class AlertDeliveryExecutor {
             log("due \(notice.kind.rawValue): \(decision.inAppSound == nil ? "notification or alarm only" : "in-app sound")")
             if let sound = decision.inAppSound {
                 playInApp(sound, for: notice.kind)
+            }
+
+        case .ensurePosted(let notice, let soundIfPresent):
+            let decision = decide(notice, .now)
+            let request = NotificationRequestBuilder.request(for: notice, decision: decision)
+            if await center.presentIdentifiers().contains(request.identifier) {
+                log("due \(notice.kind.rawValue): notification is out\(soundIfPresent && decision.inAppSound != nil ? "; in-app sound" : "")")
+                if soundIfPresent, let sound = decision.inAppSound {
+                    playInApp(sound, for: notice.kind)
+                }
+            } else {
+                log("due \(notice.kind.rawValue): notification MISSING (not added, or removed); posting now: \(Self.describe(decision))")
+                if let sound = decision.inAppSound {
+                    playInApp(sound, for: notice.kind)
+                }
+                _ = await add(request)
             }
 
         case .schedule(let kind, let notices):
@@ -101,7 +120,10 @@ public final class AlertDeliveryExecutor {
                     alarmsOK = alarmsOK && ok
                 }
                 // The notification is posted either way: it is the visual, and the fallback sound.
-                await add(NotificationRequestBuilder.request(for: notice, decision: decision))
+                let added = await add(NotificationRequestBuilder.request(for: notice, decision: decision))
+                if !added, AlertKind.sensorExpiryReminders.contains(kind) {
+                    refusedReminders.append(notice)
+                }
             }
             if triedAlarms { recordAlarmOutcome(allSucceeded: alarmsOK) }
 
@@ -123,6 +145,11 @@ public final class AlertDeliveryExecutor {
             center.removePending(identifiers: identifiers)
             center.removeDelivered(identifiers: identifiers)
             if kind == .urgentLow { cancelAllAlarms() }
+            stopInApp(for: kind)
+
+        case .dismiss(let kind):
+            log("dismiss \(kind.rawValue)")
+            center.removeDelivered(identifiers: AlertNotificationIDs.all(kind))
             stopInApp(for: kind)
 
         case .stopSound(let kind):
@@ -211,11 +238,19 @@ public final class AlertDeliveryExecutor {
         soundOwner = nil
     }
 
-    private func add(_ request: NotificationRequestSpec) async {
+    /// Pending reminders refused since the last call (D43 review B1).
+    func takeRefusedReminders() -> [AlertNotice] {
+        defer { refusedReminders = [] }
+        return refusedReminders
+    }
+
+    private func add(_ request: NotificationRequestSpec) async -> Bool {
         do {
             try await center.add(request)
+            return true
         } catch {
             log("notification \(request.identifier) FAILED: \(error)")
+            return false
         }
     }
 
@@ -227,6 +262,7 @@ public final class AlertDeliveryExecutor {
         let level: String
         switch decision.interruption {
         case .passive: level = "passive (quiet hours)"
+        case .active: level = "active, no sound"
         case .timeSensitive: level = "time-sensitive"
         case .critical: level = "critical"
         }
