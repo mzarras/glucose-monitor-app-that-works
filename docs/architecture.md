@@ -191,7 +191,11 @@ kept from deleting a pairing of the other mode, the services set `connectionSett
 person to choose Listen or Pair again, and that choice rewrites the file — even for the mode shown —
 and starts the source. G7Kit's Keychain store is wrapped in `GuardedG7CredentialStore`, which refuses
 `delete()` except during the person's own actions (switching, Forget / Stop following, choosing
-again), because G7Kit drops a pairing of the other mode as soon as it loads one.
+again), because G7Kit drops a pairing of the other mode as soon as it loads one. A mode switch keeps a
+stored pairing that already belongs to the mode chosen (review n1: the source was created in the
+other mode because the setting was wrong), so choosing the pairing's own mode never costs the key.
+Entering a pairing code while the setting is unresolved records pairing mode first, or is refused with
+`PairingError.connectionSettingUnresolved` if that cannot be saved (review n2).
 
 `setConnectionMode(_:)` saves the new mode first, then calls `G7CGMSource.setMode` (stop, drop the old
 mode's pairing and session, report `.notPaired`/`.searching`); if G7Kit refuses, the saved mode is put

@@ -12,6 +12,7 @@ import AlertEngine
 import Foundation
 import G7Kit
 import GlucoseCore
+import NightscoutKit
 import TrioBridge
 import XCTest
 @testable import Sensor
@@ -224,6 +225,132 @@ final class ConnectionSettingRecoveryTests: XCTestCase {
         XCTAssertNotNil(try inner.load(), "unasked, G7Kit cannot delete it")
         await guarded.allowingDeletion { await source.forgetSensor() }
         XCTAssertNil(try inner.load())
+    }
+
+    // MARK: - n1/n2 with the real G7CGMSource (the production composition, an in-memory Keychain)
+
+    private struct RealLaunch {
+        let services: LiveAppServices
+        let inner: G7InMemoryCredentialStore
+        let settings: SensorConnectionSettingsStore
+    }
+
+    /// `AppEnvironment.makeLive` with the real G7CGMSource behind the guard, an in-memory Keychain
+    /// holding `stored`, and a settings file holding `fileText` (nil: missing).
+    private func launchReal(fileText: String?, stored: G7PairingRecord?,
+                            write: (@Sendable (Data, URL) throws -> Void)? = nil) throws -> RealLaunch {
+        let directory = PipelineFixtures.temporaryDirectory()
+        let url = directory.appendingPathComponent("SensorConnection.json")
+        if let fileText { try Data(fileText.utf8).write(to: url) }
+        let settings = SensorConnectionSettingsStore(fileURL: url, write: write ?? SensorConnectionSettingsStore.writeAtomically)
+        let inner = G7InMemoryCredentialStore(stored)
+        let guarded = GuardedG7CredentialStore(wrapping: inner)
+        let diagnostics = RingBufferDiagnosticLog(fileURL: nil)
+        let connectionLaunch = settings.load()
+        var configuration = connectionLaunch.settings.g7Configuration
+        configuration.restoreIdentifier = "com.mzarras.sensor.tests.\(UUID().uuidString)"
+        let g7 = G7CGMSource(configuration: configuration, credentialStore: guarded, diagnostics: diagnostics)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "connection-real-\(UUID().uuidString)"))
+        let services = LiveAppServices(LiveAppServices.Dependencies(
+            g7: g7, diagnostics: diagnostics, preferences: AppPreferences(defaults: defaults), credentials: InMemoryCredentialStore(),
+            trio: TrioCoordinator(appGroupID: nil, store: nil, diagnostics: diagnostics),
+            uploads: UploadCoordinator(credentials: InMemoryCredentialStore(), queueDirectory: directory.appendingPathComponent("Uploads"),
+                                       deviceName: "Test", transport: NeverCalledTransport(), diagnostics: diagnostics),
+            alertPorts: AppEnvironment.makeAlertPorts(arguments: ["-silenceAlertAudio"], diagnostics: diagnostics),
+            widget: nil, databaseURL: directory.appendingPathComponent("GlucoseStore/readings.sqlite"),
+            httpTransport: NeverCalledTransport(), launchReplay: nil
+        ).with(connectionSettings: settings, launch: connectionLaunch, credentialGuard: guarded))
+        return RealLaunch(services: services, inner: inner, settings: settings)
+    }
+
+    private func primaryRecord() -> G7PairingRecord {
+        var record = G7PairingRecord(pairingCode: "1234", slot: .recommendedDefault)
+        record.serial = "DXCM56-0A0B0C0D"
+        record.peripheralIdentifier = UUID()
+        record.sensorName = "DXCM56"
+        record.sharedKey = Data(repeating: 7, count: 16)
+        return record
+    }
+
+    private static let listenFile = "{\"mode\":\"listen\",\"recordsRawGlucosePackets\":false}"
+
+    /// Review n1: m3 left the file naming listen while the primary pairing is stored; at the next
+    /// launch the guard kept the key. Choosing Pair — the pairing's own mode — keeps and resumes it
+    /// (G7Kit's setMode would have deleted it).
+    func test_S5_choosingTheStoredPairingsOwnModeKeepsThePairing() async throws {
+        let stored = primaryRecord()
+        let live = try launchReal(fileText: Self.listenFile, stored: stored)
+        await live.services.bootstrap()
+        XCTAssertNotNil(live.services.connectionSettingProblem, "the file and the stored pairing disagree")
+        XCTAssertEqual(try live.inner.load(), stored, "kept at launch")
+
+        try await live.services.setConnectionMode(.pair)
+        XCTAssertNil(live.services.connectionSettingProblem)
+        XCTAssertEqual(live.settings.load(), .loaded(.defaults), "the file now says pairing mode")
+        let mode = await live.services.g7.mode
+        XCTAssertEqual(mode, .primary(slot: .recommendedDefault))
+        let kept = try XCTUnwrap(try live.inner.load(), "the pairing is kept")
+        XCTAssertFalse(kept.isListenRecord)
+        XCTAssertEqual(kept.serial, stored.serial)
+        XCTAssertEqual(kept.sharedKey, stored.sharedKey, "the key is kept: no new pairing needed")
+        XCTAssertTrue(live.services.hasStoredSensor, "and the source resumed it")
+        XCTAssertEqual(live.services.storedSensorSerial, stored.serial)
+    }
+
+    /// The other choice is the person's to make: choosing Listen drops the stored primary pairing.
+    func test_choosingTheOtherModeDropsTheStoredPairing() async throws {
+        let live = try launchReal(fileText: Self.listenFile, stored: primaryRecord())
+        await live.services.bootstrap()
+        try await live.services.setConnectionMode(.listen)
+        XCTAssertNil(live.services.connectionSettingProblem)
+        XCTAssertNotEqual(try live.inner.load()?.isListenRecord, false, "no primary pairing is left")
+        XCTAssertEqual(live.settings.load().settings.mode, .listen)
+    }
+
+    /// m2 on a listening phone: the source was created in the default pairing mode; choosing Listen
+    /// keeps the followed sensor (review n1 also covers this direction).
+    func test_unreadableFileOnAListeningPhoneChoosingListenKeepsTheFollowedSensor() async throws {
+        let stored = listenRecord()
+        let live = try launchReal(fileText: "garbage", stored: stored)
+        await live.services.bootstrap()
+        XCTAssertNotNil(live.services.connectionSettingProblem)
+        try await live.services.setConnectionMode(.listen)
+        XCTAssertNil(live.services.connectionSettingProblem)
+        let kept = try XCTUnwrap(try live.inner.load())
+        XCTAssertTrue(kept.isListenRecord)
+        XCTAssertEqual(kept.serial, stored.serial, "the followed sensor is kept")
+        XCTAssertEqual(live.services.storedSensorSerial, stored.serial)
+    }
+
+    /// Review n2: entering a pairing code while the setting is unresolved records pairing mode
+    /// first (the file rewritten, the banner cleared), then pairs.
+    func test_pairingWhileTheSettingIsUnresolvedRecordsPairingModeFirst() async throws {
+        let live = try launchReal(fileText: "garbage", stored: nil)
+        await live.services.bootstrap()
+        XCTAssertNotNil(live.services.connectionSettingProblem)
+
+        try await live.services.pair(code: "4321")
+        XCTAssertNil(live.services.connectionSettingProblem)
+        XCTAssertEqual(live.settings.load(), .loaded(.defaults))
+        let record = try XCTUnwrap(try live.inner.load(), "the pairing started")
+        XCTAssertFalse(record.isListenRecord)
+        XCTAssertEqual(record.pairingCode, "4321")
+    }
+
+    /// Review n2: if pairing mode cannot be recorded, nothing is paired and the reason is given.
+    func test_pairingWhileUnresolvedIsRefusedWhenTheSettingCannotBeSaved() async throws {
+        // Unreadable, and the disk is full: pairing mode cannot be recorded.
+        let unresolved = try launchReal(fileText: "garbage", stored: nil) { _, _ in throw CocoaError(.fileWriteOutOfSpace) }
+        await unresolved.services.bootstrap()
+        do {
+            try await unresolved.services.pair(code: "4321")
+            XCTFail("nothing may be paired while the setting cannot be recorded")
+        } catch {
+            guard case .connectionSettingUnresolved = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertNil(try unresolved.inner.load(), "nothing was paired")
+        XCTAssertNotNil(unresolved.services.connectionSettingProblem, "the banner stays")
+        XCTAssertFalse(OnboardingMapping.pairingErrorText(.connectionSettingUnresolved("disk full")).isEmpty)
     }
 
     // MARK: - m1: Trio is cleared when entering listen mode
