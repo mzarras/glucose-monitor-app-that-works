@@ -2,7 +2,7 @@
 # Proves scripts/check.sh fails on planted defects (Phase 0 review B1, M3, m6).
 # Runs in a throwaway git worktree of HEAD; never touches your working tree.
 #
-# Planted: a compiler warning in GlucoseCore (after warming a cache, so a cached build would hide
+# Planted: a Release-only failing S2 test, a compiler warning in GlucoseCore (after warming a cache, so a cached build would hide
 # it), a skipped safety test, a safety test that "passes" via XCTExpectFailure (separate files), a
 # ReplayKit symbol that leaks into Release, a .mock reading built outside #if DEBUG, and a package
 # with zero tests (WidgetCore's Phase 0 placeholder, if still present). Every plant must be reported.
@@ -33,6 +33,17 @@ import XCTest
 final class CheckSelftestExpectFailure: XCTestCase {
     func test_S7_plantedExpectedFailure() { XCTExpectFailure("planted"); XCTFail("planted") }
 }
+SWIFT
+# A safety test that fails only in the Release configuration (gate 2 runs debug, so only the
+# Release S2/S6 step can catch it; Phase 3 review m7).
+cat > Packages/GlucoseCore/Tests/GlucoseCoreTests/CheckSelftestReleaseOnly.swift <<'SWIFT'
+import XCTest
+
+#if !DEBUG
+final class CheckSelftestReleaseOnly: XCTestCase {
+    func test_S2_plantedReleaseOnlyFailure() { XCTFail("planted by check-selftest") }
+}
+#endif
 SWIFT
 # A Release symbol leak: ReplayKit code outside #if DEBUG.
 cat > Packages/ReplayKit/Sources/ReplayKit/CheckSelftestLeak.swift <<'SWIFT'
@@ -69,6 +80,7 @@ expect '^FAIL  S5: 1 skipped safety test' "skipped safety test"
 expect '^FAIL  safety tests live in files using XCTSkip/XCTExpectFailure:.*CheckSelftestSkip' "XCTSkip in a safety-test file"
 expect '^FAIL  safety tests live in files using XCTSkip/XCTExpectFailure:.*CheckSelftestExpectFailure' "XCTExpectFailure in a safety-test file"
 expect '^FAIL  S6: ReplayKit defines [0-9]+ symbols in Release' "ReplayKit symbol leak into Release"
+expect '^FAIL  S2/S6 Release-configuration tests in GlucoseCore' "safety test failing only in Release"
 expect '^FAIL  S6: .replay/.mock readings constructed outside #if DEBUG at: .*CheckSelftestMock.swift:[0-9]+' ".mock construction outside #if DEBUG"
 if [ -f Packages/WidgetCore/Tests/WidgetCoreTests/Placeholder.swift ]; then
     expect '^FAIL  WidgetCore executed no tests' "package with zero tests"
