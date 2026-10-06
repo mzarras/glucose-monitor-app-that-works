@@ -68,6 +68,24 @@ final class GraceCountdownTests: XCTestCase {
         XCTAssertEqual(NowRefreshSchedule.renderDate(scheduled: end, clock: end.addingTimeInterval(2)), end.addingTimeInterval(2))
     }
 
+    /// Review n1: after the phone's clock is set back 10 min, TimelineView can still hand over an
+    /// entry dated before the change; the screen renders at the clock, not 10 min in the future, so a
+    /// current reading stays current.
+    func test_clockSetBackRendersAtTheClockNotAStaleEntry() {
+        let staleEntry = t0
+        let clockSetBack = t0.addingTimeInterval(-10 * 60)
+        XCTAssertEqual(NowRefreshSchedule.renderDate(scheduled: staleEntry, clock: clockSetBack), clockSetBack)
+        var state = NowViewState.empty
+        state.sensorState = activeSensor
+        state.latestLiveReading = latest(.mgdl(120), ageMinutes: 2, now: clockSetBack)
+        guard case .current = state.display(now: NowRefreshSchedule.renderDate(scheduled: staleEntry, clock: clockSetBack)) else {
+            return XCTFail("a reading 2 min old by the phone clock is current")
+        }
+        // The early-tick window is under a second: 0.999 s ahead still renders the schedule.
+        XCTAssertEqual(NowRefreshSchedule.renderDate(scheduled: t0, clock: t0.addingTimeInterval(-0.999)), t0)
+        XCTAssertEqual(NowRefreshSchedule.renderDate(scheduled: t0, clock: t0.addingTimeInterval(-1)), t0.addingTimeInterval(-1))
+    }
+
     /// The Now screen's clock ticks every 15 s and exactly at the grace end, so the switch happens
     /// at zero, not up to 15 s later.
     @MainActor
