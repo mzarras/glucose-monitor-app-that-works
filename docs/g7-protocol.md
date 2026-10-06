@@ -865,6 +865,14 @@ package or folder behind `CGMSource`; nothing G7-specific leaks into GlucoseCore
     is not the session start (§14) — report it and do not rely on listen-mode expiry. Note which
     `0x31`/`0x25` status bytes appear ("listen: 0x31 status 0x…" lines); any reading withheld for a
     status such as `0x81` (low battery in G6 terms) should be reported.
+15. Listen mode, first follow (review m4): if the app stays on "Searching" and the diagnostic log shows
+    "not a G7 seen advertising", iOS reports the connected G7 as "Dexcom" + 2 and this app run has
+    not yet received the sensor's "DXCM…" advertisement. Keep the app open for a sensor wake (it
+    restarts its scan every 10 s until the first follow, so each advertisement is a new discovery),
+    or relaunch it. `AllowDuplicates` was not used: iOS ignores it in the background, and the
+    foreground scan restart gives the same effect only until the first follow. Also check that after
+    a failed attach the app recovers by itself at the next wake while in the background (review N1:
+    "backoff ended" or a pending connection in the log).
 
 ## 14. Listen mode (D45)
 
@@ -918,10 +926,17 @@ name. ONE+ ("DX02…"), Stelo ("DX01…"), unnamed peripherals and G6-style name
 advertisement are never attached. Once followed, a pending connection request to that sensor keeps
 this app awake at every wake, as primary mode does (`BluetoothTransmitter.swift:313-317`; the
 xDrip4iOS 7.1.1 coexistence fix 00c144e8 relies on the same request); iOS shares the one physical
-link with the Dexcom app. Only the followed sensor is retried after a failed connect (review m3); a
-connection that failed or dropped before a cycle could start (e.g. service discovery failed) is
-retried after 30 s, doubling to 5 min, never at once on the Dexcom app's link (review m6); a normal
-connection resets it. CoreBluetooth events carry their peripheral, and one for a peripheral that is
+link with the Dexcom app. Only the followed sensor is retried after a failed connect (review m3).
+When a connect or attach to it fails before a cycle could start (e.g. service discovery failed):
+- if the Dexcom app still holds the link (the sensor is system-connected), the retry waits 30 s,
+  doubling to 5 min, never at once on that link (review m6); meanwhile the scan is restarted, so the
+  sensor's next advertisement — it advertises again once that link drops — is a new discovery, which
+  also wakes a suspended app; that discovery ends the backoff and arms the pending connection
+  (review N1);
+- otherwise the pending connection is armed at once (it completes only at the next advertisement,
+  so it cannot loop) — a suspended app runs no timers, and a pending connection is what lets iOS
+  wake it (review N1);
+- Bluetooth off → on ends any backoff and re-arms; a normal connection resets it. CoreBluetooth events carry their peripheral, and one for a peripheral that is
 not the current connection is dropped (review m7). This app cancels its use of the link only when
 told to stop (`stop`, `setMode`, forget); iOS keeps the physical link for the Dexcom app.
 

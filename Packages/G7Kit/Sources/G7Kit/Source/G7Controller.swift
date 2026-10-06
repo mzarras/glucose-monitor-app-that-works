@@ -65,9 +65,11 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     /// D49: the session length is first awaited from observed `52` answers; this app asks itself only
     /// from this wake with proof on.
     static let listenWakesBeforeSessionLengthQuery = 2
-    /// Sensor policy (review m6): after a listen connection that failed before a cycle could start
-    /// (service discovery failed, connect failed), the next attempt waits this long, doubling up to
-    /// `listenRetryMaximumDelay`, so a failing attach cannot loop on the Dexcom app's link.
+    /// Sensor policy (review m6, N1): after a listen connection to the followed sensor failed before a
+    /// cycle could start (service discovery failed, connect failed) *while the Dexcom app still holds
+    /// the link*, the next attempt waits this long, doubling up to `listenRetryMaximumDelay`, so a
+    /// failing attach cannot loop on that link. When the link is down, a pending connection is armed
+    /// at once instead (it completes only at the sensor's next advertisement, so it cannot loop).
     static let listenRetryInitialDelay: TimeInterval = 30
     static let listenRetryMaximumDelay: TimeInterval = 5 * 60
 
@@ -443,6 +445,9 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
             return
         }
         guard power == .poweredOn, isRunning else { return }
+        // Review N1: every connection is new after Bluetooth returns; a listen-mode backoff from
+        // before must not leave the app without a pending connection.
+        clearListenRetry()
         if let lastSensorState {
             emit(lastSensorState)
         } else if record == nil {
@@ -589,7 +594,7 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
             // failed is dropped and looked for again on the Dexcom app's connection.
             listenCandidate = nil
             log(.ble, "listen: connection attempt failed")
-            if peripheralIdentifier == record?.peripheralIdentifier { scheduleListenRetry() }
+            if peripheralIdentifier == record?.peripheralIdentifier { listenAttachFailed() }
             return
         }
         log(.ble, "connection attempt failed; retrying")
@@ -893,7 +898,42 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
 
     private func listenDidDiscover() {
         guard isRunning, listenCycle == nil, record != nil else { return }
+        if listenRetryPending, record?.peripheralIdentifier != nil, !followedSensorIsSystemConnected() {
+            // Review N1: the sensor advertises again, so the Dexcom app's link is down: end the
+            // backoff and arm the pending connection now (the advertisement may be what woke the app).
+            log(.ble, "listen: the followed sensor advertises; backoff ended")
+            clearListenRetry()
+            listenReconnect()
+            return
+        }
         attachToSystemConnectedSensor()
+    }
+
+    /// The followed sensor is connected to this phone right now by another app (the Dexcom app).
+    private func followedSensorIsSystemConnected() -> Bool {
+        guard let followed = record?.peripheralIdentifier else { return false }
+        return central?.connectedSensors().contains { $0.identifier == followed } ?? false
+    }
+
+    /// Review m6 + N1: a connect or attach to the followed sensor failed before a cycle could start.
+    /// While the Dexcom app holds the link, back off (no tight loop on its link) and keep a freshly
+    /// started scan, whose discovery of the next advertisement can wake a suspended app. Otherwise
+    /// arm the pending connection at once, so iOS wakes the app at the sensor's next advertisement.
+    private func listenAttachFailed() {
+        if followedSensorIsSystemConnected() {
+            scheduleListenRetry()
+            central?.stopScanning() // restarted, so the next advertisement is a new discovery event
+            central?.scanForSensors()
+        } else {
+            clearListenRetry()
+            listenReconnect()
+        }
+    }
+
+    private func clearListenRetry() {
+        listenRetryDelay = 0
+        listenRetryPending = false
+        listenRetryGeneration += 1
     }
 
     /// Attach to a G7 that the Dexcom app has connected right now: the followed sensor once known,
@@ -960,6 +1000,10 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
             guard self.isListening, self.isRunning, self.listenCycle == nil, self.record?.peripheralIdentifier == nil else { return }
             self.listenCandidate = nil
             self.attachToSystemConnectedSensor()
+            // Review m4: until the first follow, restart the scan so the sensor's next advertisement is
+            // a new discovery (with its "DXCM" name); foreground only — timers do not run suspended.
+            self.central?.stopScanning()
+            self.central?.scanForSensors()
             self.scheduleListenSearch()
         }
     }
@@ -1003,9 +1047,11 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         if hadCycle {
             listenRetryDelay = 0
             listenReconnect()
+        } else if record?.peripheralIdentifier != nil {
+            // The link went down before a cycle could start (e.g. service discovery failed).
+            listenAttachFailed()
         } else {
-            // The link went down before a cycle could start (e.g. service discovery failed):
-            // back off instead of reattaching at once to the Dexcom app's link (review m6).
+            // First follow: the candidate was the Dexcom app's link; back off before reattaching (m6).
             scheduleListenRetry()
         }
     }
