@@ -7,6 +7,9 @@
 //
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/AESCrypt.m @ 7.1.0 (0370937)
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/DexcomG7AuthBridge.m @ 7.1.0 (0370937)
+// CGMBLEKit lineage: CGMBLEKit/AESCrypt.m (LoopKit CGMBLEKit, formerly xDripG5;
+//   MIT, Packages/G7Kit/licenses/CGMBLEKit-LICENSE), reached through xDrip4iOS;
+//   compared with loopandlearn/CGMBLEKit @ 98fae79 (Trio submodule).
 // Changes: Objective-C → Swift; one function for the challenge hash (DexcomG7AuthBridge.m
 // `challengeHashForChallenge:usingKey:`) on top of the AES-128-ECB call (AESCrypt.m).
 

@@ -5,6 +5,9 @@
 //  Copyright © 2018 LoopKit Authors. All rights reserved.
 //
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/DexcomTransmitterOpCode.swift @ 7.1.0 (0370937)
+// CGMBLEKit lineage: CGMBLEKit/Opcode.swift (LoopKit CGMBLEKit, formerly xDripG5;
+//   MIT, Packages/G7Kit/licenses/CGMBLEKit-LICENSE), reached through xDrip4iOS;
+//   compared with loopandlearn/CGMBLEKit @ 98fae79 (Trio submodule).
 // Changes: reduced to the opcodes G7 primary mode uses; 0x02 added (xDrip4iOS builds it inline
 // in DexcomG7AuthBridge.m); every value annotated with the file:line that sends or parses it.
 

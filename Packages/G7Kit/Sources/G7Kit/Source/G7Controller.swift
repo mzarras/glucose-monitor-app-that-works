@@ -91,6 +91,8 @@ final class G7Controller: G7ConnectionCycleDelegate {
     /// it is a clock mismatch the phone ↔ sensor time relation is not trusted, so a fingerstick
     /// cannot be converted to sensor time and calibration is refused (D37).
     private var lastPipelineFailure: SensorFailure.Kind?
+    /// Audit m1: what the app has durably stored, per sensor serial (only the latest call is kept).
+    private var backfillFloor: (serial: String, floor: G7ReadingPipeline.BackfillFloor)?
 
     init(
         store: G7CredentialStore,
@@ -299,6 +301,45 @@ final class G7Controller: G7ConnectionCycleDelegate {
         emit(.notPaired)
     }
 
+    // MARK: - Backfill floor (audit m1)
+
+    /// The app reports the newest reading it has durably stored for the sensor `serial` (nil: none of
+    /// that sensor's readings is stored). Backfill records the sensor sends for later sensor times are
+    /// published again even if G7Kit already published them (same id and date). A reading of another
+    /// sensor, or one whose id is not this sensor's `GlucoseReading.sensorID`, is ignored (logged).
+    func setLatestStoredReading(_ reading: GlucoseReading?, serial: String) {
+        let floor: G7ReadingPipeline.BackfillFloor
+        if let reading {
+            guard reading.sensorSerial == serial, let timestamp = Self.sensorTimestamp(of: reading, serial: serial) else {
+                log(.sensor, "backfill floor: reading \(reading.id) is not a reading of \(serial); ignored")
+                return
+            }
+            floor = .storedThrough(sensorTimestamp: timestamp)
+        } else {
+            floor = .nothingStored
+        }
+        if backfillFloor?.serial != serial || backfillFloor?.floor != floor {
+            log(.sensor, "backfill floor for \(serial): \(floor)")
+        }
+        backfillFloor = (serial, floor)
+        applyBackfillFloor()
+    }
+
+    /// The sensor timestamp encoded in a G7Kit reading id (`GlucoseReading.sensorID`), verified by
+    /// rebuilding the id.
+    static func sensorTimestamp(of reading: GlucoseReading, serial: String) -> UInt32? {
+        let prefix = serial + ":"
+        guard reading.id.hasPrefix(prefix), let timestamp = UInt32(reading.id.dropFirst(prefix.count)),
+              GlucoseReading.sensorID(serial: serial, sensorTimestamp: timestamp) == reading.id else { return nil }
+        return timestamp
+    }
+
+    /// A floor applies only to the pipeline of the same serial (never across sensors or sessions).
+    private func applyBackfillFloor() {
+        guard let pipeline else { return }
+        pipeline.backfillFloor = backfillFloor?.serial == pipeline.serial ? backfillFloor?.floor : nil
+    }
+
     // MARK: - Calibration
 
     func submitCalibration(_ request: CalibrationRequest) throws(CalibrationRefusal) {
@@ -457,6 +498,7 @@ final class G7Controller: G7ConnectionCycleDelegate {
                 self?.log(.sensor, message)
             }
             pipeline?.beginConnection()
+            applyBackfillFloor()
         }
         connectionAuthenticated = true
         log(.ble, "authenticated")

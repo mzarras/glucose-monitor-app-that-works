@@ -95,6 +95,41 @@ final class G7AttributionTests: XCTestCase {
         }
     }
 
+    /// Audit m7: code that reached xDrip4iOS from LoopKit CGMBLEKit (MIT) names its CGMBLEKit file in
+    /// a lineage line, and CGMBLEKit's MIT notice ships with the package. Any file with a Racklyeft /
+    /// LoopKit header must be in this list.
+    private static let cgmbleKitLineage: [String: [String]] = [
+        "Sources/G7Kit/Messages/G7Opcode.swift": ["CGMBLEKit/Opcode.swift"],
+        "Sources/G7Kit/Messages/G7AuthStatusMessage.swift": ["CGMBLEKit/Messages/AuthChallengeRxMessage.swift"],
+        "Sources/G7Kit/Messages/G7AuthChallengeMessages.swift": ["CGMBLEKit/Messages/AuthRequestRxMessage.swift"],
+        "Sources/G7Kit/Auth/G7ChallengeHash.swift": ["CGMBLEKit/AESCrypt.m"],
+        "Sources/G7Kit/Messages/G7CRC16.swift": ["CGMBLEKit/NSData+CRC.swift"],
+        "Sources/G7Kit/Messages/G7OwnershipMessages.swift": ["CGMBLEKit/Messages/KeepAliveTxMessage.swift", "CGMBLEKit/Messages/BondRequestTxMessage.swift"],
+        "Sources/G7Kit/Auth/G7AuthenticationSlot.swift": ["CGMBLEKit/Messages/AuthRequestTxMessage.swift"],
+    ]
+
+    func test_S8_cgmbleKitDerivedFilesShipItsLicense() throws {
+        let license = try String(contentsOf: packageRoot.appendingPathComponent("licenses/CGMBLEKit-LICENSE"), encoding: .utf8)
+        XCTAssertTrue(license.contains("The MIT License (MIT)"))
+        XCTAssertTrue(license.contains("Copyright (c) 2015 Nathan Racklyeft"))
+        XCTAssertTrue(license.contains("The above copyright notice and this permission notice shall be included"))
+        for file in try sourceFiles() where file.hasPrefix("Sources/") {
+            let text = try String(contentsOf: packageRoot.appendingPathComponent(file), encoding: .utf8)
+            let lineage = text.split(separator: "\n").filter { $0.hasPrefix("// CGMBLEKit lineage: ") }
+                .map { String($0.dropFirst("// CGMBLEKit lineage: ".count).prefix { $0 != " " }) }
+            if let expected = Self.cgmbleKitLineage[file] {
+                XCTAssertEqual(lineage, expected, "\(file): CGMBLEKit lineage lines")
+                XCTAssertTrue(text.contains("Packages/G7Kit/licenses/CGMBLEKit-LICENSE"), file)
+                XCTAssertTrue(text.contains("loopandlearn/CGMBLEKit @ 98fae79"), file)
+                XCTAssertNotNil(Self.manifest[file], "\(file) must also name its xDrip4iOS source")
+            } else {
+                XCTAssertTrue(lineage.isEmpty, "\(file) has a lineage line but is not listed")
+                XCTAssertFalse(text.contains("Racklyeft") || text.contains("LoopKit Authors"),
+                               "\(file) carries a CGMBLEKit-era header but no lineage line")
+            }
+        }
+    }
+
     /// micro-ecc (BSD-2-Clause) keeps its license and pinned revision next to the vendored code.
     func test_S8_vendoredMicroECCKeepsItsLicense() throws {
         let folder = packageRoot.appendingPathComponent("Sources/G7ECC/micro-ecc")

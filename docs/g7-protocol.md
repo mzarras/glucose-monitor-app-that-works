@@ -393,7 +393,13 @@ No captured G7 J-PAKE exchange exists in either repository. Tests:
   dates pass the last published one). A backfill record that fails it is withheld the same way and the
   batch reports `.failed(sensorClockMismatch)`; a gap-filling record that still fits between its
   neighbours is kept. The newest published reading (sensor timestamp and date, `G7ReadingMark`) is
-  persisted with the pairing record, so the rule also holds across app relaunches.
+  persisted with the pairing record, so after a relaunch nothing is dated before it. Across a
+  relaunch the rule is checked against that one mark only, not against every reading published
+  before the relaunch (audit m15). Residual: if the phone clock changed and the new process
+  re-anchored, a backfill record for a never-published sensor time *before* the mark is dated with
+  the new anchor and can sit up to the clock change away from its stored neighbours. Its id still
+  dedupes, alerts never evaluate backfill, and it is withheld anyway when it would land after the
+  mark.
 - **The "wedge" (accepted consequence of the rule above).** After a large backward move of the anchor
   (the phone clock was fast and is corrected, or is set back by hand by Δ), the session re-anchors
   after two agreeing wakes, and every new reading is then dated up to Δ earlier than the readings
@@ -461,6 +467,45 @@ follows a calibration.
 (`DXCM`+2 chars, ~1 300 values; G7SensorKit matches on `suffix(2)`) would repeat across sensors,
 and because sensor timestamps restart near 0 every session, `sensorID` collisions would make the
 store's insert-or-ignore silently drop a later sensor's readings.
+
+### 5.6 Backfill floor from the store (audit m1)
+
+**The G7 has no backfill request.** In primary mode neither xDrip4iOS 7.1.0 nor G7SensorKit sends
+one: enabling Backfill notifications after the `0x4E` makes the sensor send the records it chooses,
+then `59` (§2.3; `CGMG7Transmitter.swift:1165-1174`, `:1010-1012`; G7SensorKit
+`G7Sensor.swift:131-136`, `:285-311`). So G7Kit cannot ask for "everything since X". What it controls
+is which received records it publishes.
+
+Problem: G7Kit marks a reading as published when it yields it (and persists the newest mark). If the
+app's store is failing (D42) and iOS terminates the app, readings delivered to alerts and Trio were
+never stored; a later backfill copy of the newest one was skipped as "already published".
+
+API: `G7CGMSource.setLatestStoredReading(_ reading: GlucoseReading?, forSerial serial: String)` —
+the newest reading the app has durably stored for that sensor (nil: none). Rules:
+- A backfill record whose sensor time is **above** the floor is published again even if G7Kit
+  published it before, with the same id and date as the first delivery and `isBackfill = true`
+  (byte-identical otherwise). It must carry the date it was first published with; after a re-anchor
+  it would not, and it is withheld (one id, one date, S3). The store and Trio dedupe by id; alerts
+  never evaluate backfill.
+- Never in the connection that first published it (the app cannot have stored it yet).
+- At or below the floor: unchanged behaviour (published only if G7Kit does not know it as published,
+  e.g. gap filling after a relaunch).
+- Everything else is unchanged: authentication, the gate (`LiveReadingGate`: session start,
+  warm-up, grace end, future), the session clock, the latch (after a latched end nothing is
+  published), unsupported sensors. The floor applies only to the pipeline of the serial it names, so
+  no reading of another sensor or session is re-published; a reading whose id is not that sensor's
+  `GlucoseReading.sensorID` is ignored (logged).
+- Without any call (no store), nothing already published is re-published (the previous behaviour).
+- A floor that is too low only causes duplicates (deduped by id); one that is too high is the
+  previous behaviour.
+The app calls it once the store is readable at launch, and after each successful store write of this
+source's readings. Which records the G7 resends after a gap is the sensor's choice and is **to be
+verified on device** (§13): if it never resends a reading that was delivered live, the floor
+recovers only what it does resend, and full recovery needs the held readings persisted by the app.
+Tests `test_S3_backfillAboveTheStoredFloorIsPublishedAgain`,
+`test_S3_republishedCopyKeepsTheFirstDateOrIsWithheld`,
+`test_S3_crashWithUnstoredReadingsRepublishesFromTheStoredFloor`,
+`test_S3_backfillFloorAppliesOnlyToItsOwnSensor`.
 
 ## 6. Session timing
 
@@ -748,6 +793,25 @@ withheld (§5.4); serial with the iOS identifier (§5.5); `0x52` before GetData 
 (§2.3, §6.1); persisted `currentSession`, ended only by a sensor-reported end on two connections
 (§6.1a); backfill state byte checked (§4.2); calibration clock pairing (§8.2).
 
+**Code from LoopKit CGMBLEKit (MIT; audit m7).** Seven ported files carry code that xDrip4iOS took
+over from CGMBLEKit (formerly xDripG5, Nathan Racklyeft / LoopKit Authors). Its MIT notice ships as
+`Packages/G7Kit/licenses/CGMBLEKit-LICENSE` (verbatim from loopandlearn/CGMBLEKit @ 98fae79, the Trio
+submodule in `vendor-ref`), and each file has a "CGMBLEKit lineage" header line (checked by
+`test_S8_cgmbleKitDerivedFilesShipItsLicense`):
+
+| G7Kit file | CGMBLEKit file | What came from it |
+|---|---|---|
+| `Messages/G7Opcode.swift` | `Opcode.swift` | the opcode enum pattern and the values 0x03-0x07 (auth request rx, challenge tx/rx, keep-alive, bond request) |
+| `Messages/G7AuthStatusMessage.swift` | `Messages/AuthChallengeRxMessage.swift` | parsing `05 authenticated paired` |
+| `Messages/G7AuthChallengeMessages.swift` | `Messages/AuthRequestRxMessage.swift` | parsing `03 tokenHash(8) challenge(8)` |
+| `Auth/G7ChallengeHash.swift` | `AESCrypt.m` | the AES-128-ECB call through CommonCrypto |
+| `Messages/G7CRC16.swift` | `NSData+CRC.swift` | CRC-16 CCITT (XModem) |
+| `Messages/G7OwnershipMessages.swift` | `Messages/KeepAliveTxMessage.swift`, `Messages/BondRequestTxMessage.swift` | the `06 <seconds>` keep-alive and `07` bond-request packets |
+| `Auth/G7AuthenticationSlot.swift` | `Messages/AuthRequestTxMessage.swift` | the slot byte enum of the `02` auth request |
+
+The CGMBLEKit release xDrip4iOS took these from is not recorded upstream; the xDrip4iOS release is
+(7.1.0, 0370937), and the copies were compared with CGMBLEKit @ 98fae79.
+
 Layering for future sensor families (HANDOFF §1.1): `Messages/` (pure parsers), `Auth/`,
 `Connection/` (link + cycle), `Session/` (clock, pipeline, status), `Calibration/`, `Credentials/`,
 `Source/` (controller, CoreBluetooth adapter, public `G7CGMSource`). Another family would add its own
@@ -775,3 +839,7 @@ package or folder behind `CGMSource`; nothing G7-specific leaks into GlucoseCore
 10. With another G7 app installed (Dexcom G7 or xDrip4iOS in primary mode), `.failed(otherAppRejected)`
     surfaces (after `.failed(rejectedAfterAuthentication)` the first time), never "Pair again" while
     this phone's key is accepted (§3.1, D35).
+11. Backfill floor (§5.6): with the store made to fail (or the app terminated right after a wake),
+    check in the diagnostics which records the G7 sends on Backfill at the next wakes — whether a
+    reading already delivered live is ever sent again — and whether "published again (m1)" lines
+    appear after a relaunch.

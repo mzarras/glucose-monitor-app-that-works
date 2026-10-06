@@ -148,6 +148,19 @@ public final class G7CGMSource: CalibratingCGMSource, @unchecked Sendable {
         get async { await onQueue { self.controller.storedSensorSerial } }
     }
 
+    /// Audit m1: tell G7Kit the newest reading the app has durably stored for the sensor `serial`
+    /// (use `storedSensorSerial`; pass nil when none of that sensor's readings is stored). Call it as
+    /// soon as the store is readable at launch, and again after each successful store write of this
+    /// source's readings. Backfill records the sensor sends for later sensor times are then published
+    /// again even if they were delivered before (e.g. delivered while the store was failing, then the
+    /// app was terminated), with the same id and date as the first delivery and `isBackfill = true`;
+    /// dedupe by id. A floor that is too low only causes such duplicates; without any call, nothing
+    /// already delivered is re-published. The G7 decides which records it backfills (there is no
+    /// backfill request), so only records it sends again are recovered (docs/g7-protocol.md §5.6).
+    public func setLatestStoredReading(_ reading: GlucoseReading?, forSerial serial: String) async {
+        await onQueue { self.controller.setLatestStoredReading(reading, serial: serial) }
+    }
+
     /// Stops, deletes the pairing code and key, and reports `.notPaired`.
     public func forgetSensor() async {
         await onQueue { self.controller.forget() }

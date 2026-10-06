@@ -242,6 +242,85 @@ final class G7ReadingPipelineTests: XCTestCase {
         XCTAssertEqual(flushed.state, .failed(G7FailureReason.sensorClockMismatch))
     }
 
+    /// Audit m1: with a stored floor, a backfill record above it is published again although this
+    /// pipeline published it before — byte-identical to the first delivery except `isBackfill` — and
+    /// only above the floor, never in the connection that first published it, never with a date the
+    /// first delivery did not have, never without a floor, and never past the gate (S2).
+    func test_S3_backfillAboveTheStoredFloorIsPublishedAgain() throws {
+        let t0 = receivedAt
+        let pipeline = makePipeline()
+        var first: [UInt32: GlucoseReading] = [:]
+        for (clock, mgdl) in [(UInt32(200_000), UInt16(100)), (200_300, 101), (200_600, 102)] {
+            pipeline.beginConnection()
+            let reading = try XCTUnwrap(pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: mgdl, state: 0x06, trend: 0x10)),
+                                                               receivedAt: arrival(clock, t0: t0)).readings.first)
+            first[clock - 5] = reading
+        }
+        /// One wake: a live reading, then the sensor resends every reading delivered so far and this
+        /// wake's own reading as backfill.
+        func resend(_ clock: UInt32) throws -> G7ReadingPipeline.Output {
+            pipeline.beginConnection()
+            let live = try XCTUnwrap(pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: 110, state: 0x06, trend: 0x10)),
+                                                            receivedAt: arrival(clock, t0: t0)).readings.first)
+            first[clock - 5] = live
+            for (timestamp, reading) in first {
+                pipeline.handleBackfillFrame(Fixture.backfill(timestamp: timestamp, glucose: UInt16(reading.value.numericMgdl!), trend: 0x10), now: arrival(clock, t0: t0))
+            }
+            return pipeline.endConnection()
+        }
+        XCTAssertTrue(try resend(200_900).readings.isEmpty, "no floor: nothing already published is re-published")
+
+        pipeline.backfillFloor = .storedThrough(sensorTimestamp: 199_995)
+        let again = try resend(201_200)
+        XCTAssertEqual(again.readings.map(\.id), ["\(serial):200295", "\(serial):200595", "\(serial):200895"],
+                       "above the floor, ascending; not this wake's own reading (201195)")
+        for reading in again.readings {
+            let original = try XCTUnwrap(first[UInt32(reading.id.split(separator: ":").last!)!])
+            XCTAssertFalse(original.isBackfill)
+            XCTAssertEqual(reading, GlucoseReading(id: original.id, date: original.date, value: original.value, trendRate: original.trendRate,
+                                                   isBackfill: true, source: original.source, sensorSerial: original.sensorSerial),
+                           "byte-identical except isBackfill")
+        }
+        XCTAssertNil(again.state)
+        XCTAssertTrue(logs.contains { $0.contains("published again (m1)") })
+
+        pipeline.backfillFloor = .nothingStored
+        XCTAssertEqual(try resend(201_500).readings.count, 5, "nothing stored: every resent record but this wake's own")
+
+        // S2: the gate still applies; a warm-up record is refused even with nothing stored.
+        let early = makePipeline()
+        early.backfillFloor = .nothingStored
+        early.beginConnection()
+        _ = early.handleGlucose(glucose(Fixture.glucose(sensorClock: 3_000, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(3_000, t0: t0))
+        early.handleBackfillFrame(Fixture.backfill(timestamp: 1_000, glucose: 90), now: arrival(3_000, t0: t0))
+        XCTAssertTrue(early.endConnection().readings.isEmpty)
+        XCTAssertTrue(logs.contains { $0.contains("duringWarmUp") })
+    }
+
+    /// Audit m1: a re-anchor since the first delivery would give a re-published copy another date;
+    /// it is not re-published (S3: one id, one date). A latched end publishes nothing (S2).
+    func test_S3_republishedCopyKeepsTheFirstDateOrIsWithheld() throws {
+        let t0 = receivedAt
+        let back = t0.addingTimeInterval(-3_600)
+        let pipeline = makePipeline()
+        pipeline.backfillFloor = .nothingStored
+        pipeline.beginConnection()
+        _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(200_000, t0: t0))
+        for clock: UInt32 in [200_300, 200_600] { // two agreeing anchors an hour back: re-anchor
+            pipeline.beginConnection()
+            _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: 100, state: 0x06)), receivedAt: arrival(clock, t0: back))
+        }
+        pipeline.handleBackfillFrame(Fixture.backfill(timestamp: 199_995, glucose: 100), now: arrival(200_600, t0: back))
+        XCTAssertTrue(pipeline.endConnection().readings.isEmpty, "would be dated an hour earlier than its first delivery")
+
+        let ended = G7ReadingPipeline(serial: serial, reportedParameters: tenDayParameters, sessionStart: t0, sessionEnd: .sensorFailed) { _ in }
+        ended.backfillFloor = .nothingStored
+        ended.beginConnection()
+        _ = ended.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 100, state: 0x06)), receivedAt: t0.addingTimeInterval(200_000))
+        ended.handleBackfillFrame(Fixture.backfill(timestamp: 199_000, glucose: 100), now: t0.addingTimeInterval(200_000))
+        XCTAssertTrue(ended.endConnection().readings.isEmpty)
+    }
+
     /// Probe P4 (relaunch): the newest published reading is persisted, so a relaunched pipeline whose
     /// clock is re-anchored backwards still publishes nothing dated before it.
     func test_S3_dateOrderHoldsAcrossRelaunch() throws {
