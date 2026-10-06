@@ -65,10 +65,7 @@ final class AppEnvironment {
             store: trioGroupID.map { AppGroupUserDefaultsStore(appGroupID: $0) },
             diagnostics: diagnostics
         )
-        let uploads = UploadCoordinator(
-            credentials: credentials, queueDirectory: support.appendingPathComponent("Uploads"),
-            deviceName: AppIdentity.displayName, diagnostics: diagnostics
-        )
+        let uploads = makeUploads(credentials: credentials, support: support, diagnostics: diagnostics)
         let ports = makeAlertPorts(arguments: arguments, diagnostics: diagnostics)
         let widget = WidgetSnapshotPublisher.appGroup().map { LiveWidgetPublisher(publisher: $0, accent: .default, diagnostics: diagnostics) }
         if widget == nil {
@@ -82,6 +79,17 @@ final class AppEnvironment {
             alertPorts: ports, widget: widget, databaseURL: support.appendingPathComponent("GlucoseStore/readings.sqlite"),
             httpTransport: URLSessionTransport(), launchReplay: launchReplay(arguments)
         ))
+    }
+
+    /// The Nightscout / Dexcom Share uploaders. Queues in the app's own container
+    /// (`Application Support/Uploads`, not an App Group: docs/architecture.md "Upload queues"); the
+    /// Nightscout `device` field is the app's name, `APP_DISPLAY_NAME` (via CFBundleDisplayName).
+    static func makeUploads(credentials: any CredentialStore, support: URL, diagnostics: any DiagnosticLog,
+                            transport: any HTTPTransport = URLSessionTransport()) -> UploadCoordinator {
+        UploadCoordinator(
+            credentials: credentials, queueDirectory: support.appendingPathComponent("Uploads"),
+            deviceName: AppIdentity.displayName, transport: transport, diagnostics: diagnostics
+        )
     }
 
     /// The alert service's delivery ports: UNUserNotificationCenter, the `.playback` audio player and

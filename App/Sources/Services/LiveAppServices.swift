@@ -58,6 +58,9 @@ final class LiveAppServices: AppServices {
         var openStore: @Sendable (URL, any DiagnosticLog) async throws -> GlucoseStore = { url, diagnostics in
             try await GlucoseStore.production(at: url, diagnostics: diagnostics)
         }
+        /// The foreground ticker's period (drain attempt, Trio retry, heartbeat, clock check); tests
+        /// shorten it.
+        var foregroundTickInterval: Duration = .seconds(60)
     }
 
     struct LaunchReplay: Equatable {
@@ -84,6 +87,7 @@ final class LiveAppServices: AppServices {
     let uptime: @MainActor () -> Uptime?
     private let openStore: @Sendable (URL, any DiagnosticLog) async throws -> GlucoseStore
     private let protectedDataAvailable: @MainActor () -> Bool
+    private let foregroundTickInterval: Duration
     let historyImports: HistoryImportCoordinator
 
     /// The G7 pipeline, for the whole process.
@@ -149,6 +153,7 @@ final class LiveAppServices: AppServices {
         uptime = dependencies.uptime
         openStore = dependencies.openStore
         protectedDataAvailable = dependencies.isProtectedDataAvailable
+        foregroundTickInterval = dependencies.foregroundTickInterval
         historyImports = HistoryImportCoordinator(diagnostics: dependencies.diagnostics)
         sensorPipeline = ReadingPipeline(name: "sensor", source: dependencies.g7, diagnostics: dependencies.diagnostics, now: dependencies.clock)
         // B1: no widget snapshot until the store is open — before that the latest reading is
@@ -182,11 +187,17 @@ final class LiveAppServices: AppServices {
         protectedDataObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
         ) { [weak self] _ in
+            // assumeIsolated is sound here: `queue: .main` makes NotificationCenter run this block
+            // on OperationQueue.main, i.e. the main thread, whoever posts the notification (UIKit
+            // posts it on the main thread anyway). The block's type is not @MainActor, so the
+            // compiler cannot see that; assumeIsolated states it and traps if it is ever wrong
+            // (e.g. someone changes `queue:` to nil), rather than racing silently.
             MainActor.assumeIsolated {
                 self?.protectedDataDidBecomeAvailable()
             }
         }
         log(.app, "launch: G7 source created (restore id \(G7Configuration.defaultRestoreIdentifier))")
+        logMonotonicClock()
         Task { await self.startG7() }
     }
 
@@ -686,9 +697,10 @@ final class LiveAppServices: AppServices {
     /// retry a failed write without waiting for a reading) and heartbeat-key check, clock check.
     private func startForegroundTicker() {
         guard foregroundTicker == nil else { return }
+        let interval = foregroundTickInterval
         foregroundTicker = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
+                try? await Task.sleep(for: interval)
                 guard let self, !Task.isCancelled else { return }
                 // A drain attempt: waiting readings, storage health, tick (D42).
                 self.activePipeline.retryHeldEvents()
@@ -703,6 +715,23 @@ final class LiveAppServices: AppServices {
     }
 
     // MARK: - Diagnostics
+
+    /// Once per launch: the monotonic clock and whether its boot session (`kern.bootsessionuuid`) is
+    /// readable on this phone. docs/alerts.md §10 step 5 asks for this line: without the boot
+    /// session, a wall-clock rollback with no input in between is not detected and only the
+    /// latest-wall-clock fallback applies.
+    private func logMonotonicClock() {
+        guard let uptime = uptime() else {
+            log(.alert, "monotonic clock: unavailable; clock-change detection uses the latest wall clock only")
+            return
+        }
+        let seconds = Int(uptime.seconds)
+        if let boot = uptime.boot {
+            log(.alert, "monotonic clock: \(seconds) s since boot, boot session \(boot) (kern.bootsessionuuid readable)")
+        } else {
+            log(.alert, "monotonic clock: \(seconds) s since boot, boot session unreadable (kern.bootsessionuuid): a clock rollback with no input in between is not detected; the latest-wall-clock fallback applies")
+        }
+    }
 
     func log(_ category: DiagnosticEvent.Category, _ message: String) {
         diagnostics.record(DiagnosticEvent(date: now(), category: category, message: message))

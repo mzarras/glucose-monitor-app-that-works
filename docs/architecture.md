@@ -33,6 +33,14 @@ Exactly one of each, for the whole process:
 | History importers | on demand, `UserDefaultsNightscoutImportCheckpointStore` | write to the production store only (S6) |
 | `LiveAppServices` | all of the above | the `AppServices` the UI gets |
 
+**Upload queues live in Application Support, not in an App Group (D48).** Each destination's queue is
+one file in the app's own container, `Application Support/Uploads/` (`AppEnvironment.makeUploads`). Only
+the app process uploads, so nothing else needs the queues: the widget reads only its snapshot from
+`group.com.mzarras.sensor`, and Trio's App Group carries only `latestReadings` and the heartbeat keys,
+both written by this app for Trio. Keeping the queues out of a shared container keeps queued health
+data away from other processes and means `QueueFileInUse` (one uploader per file, same process) is the
+only coordination they need. The Phase 2 must-do that named an App Group for them is superseded.
+
 A unit-test host (DEBUG, `XCTestConfigurationFilePath` set) gets an inert `PreviewAppServices`:
 tests build their own pipelines. `-replayScenario <name>` starts a DEBUG replay run at launch.
 

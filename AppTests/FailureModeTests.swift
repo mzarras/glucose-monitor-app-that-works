@@ -81,12 +81,17 @@ final class LiveServicesHarness {
     let widget = RecordingWidgetPublisher()
     let protectedData: Flag
     let storeOpens: Flag
+    /// The Keychain stand-in, shared by the services and the uploaders (as in production).
+    let credentials = InMemoryCredentialStore()
 
     /// - Parameters:
     ///   - protectedData: false simulates a launch before the first unlock after a reboot.
     ///   - storeOpens: false makes opening the database fail (disk full, I/O error) until set true.
+    ///   - uploadTransport: what the uploaders send through (default: fails the test if used).
+    ///   - foregroundTickInterval: the foreground ticker's period (default: production's 60 s).
     init(_ persistence: Persistence, trioEnabled: Bool = true, protectedData: Bool = true, storeOpens: Bool = true,
-         launchedByBluetoothRestoration: Bool = false) {
+         launchedByBluetoothRestoration: Bool = false, uploadTransport: (any HTTPTransport)? = nil,
+         foregroundTickInterval: Duration? = nil) {
         self.persistence = persistence
         self.protectedData = Flag(protectedData)
         self.storeOpens = Flag(storeOpens)
@@ -100,16 +105,17 @@ final class LiveServicesHarness {
         let diagnostics = RingBufferDiagnosticLog(fileURL: nil)
         let clock = persistence.clock
         var dependencies = LiveAppServices.Dependencies(
-            g7: sensor, diagnostics: diagnostics, preferences: preferences, credentials: InMemoryCredentialStore(),
+            g7: sensor, diagnostics: diagnostics, preferences: preferences, credentials: credentials,
             trio: TrioCoordinator(appGroupID: "group.org.nightscout.ABCDE12345.trio.trio-app-group", store: persistence.trioStore,
                                   diagnostics: diagnostics, clock: clock.closure),
-            uploads: UploadCoordinator(credentials: InMemoryCredentialStore(), queueDirectory: persistence.directory.appendingPathComponent("Uploads"),
-                                       deviceName: "Test", transport: NeverCalledTransport(), diagnostics: diagnostics),
+            uploads: UploadCoordinator(credentials: credentials, queueDirectory: persistence.directory.appendingPathComponent("Uploads"),
+                                       deviceName: "Test", transport: uploadTransport ?? NeverCalledTransport(), diagnostics: diagnostics),
             alertPorts: AlertPorts(notificationCenter: persistence.center, audio: audio, alarms: persistence.alarms,
                                    configuration: PipelineFixtures.utcConfiguration, diagnostics: diagnostics),
             widget: widget, databaseURL: persistence.databaseURL, httpTransport: NeverCalledTransport(), launchReplay: nil
         )
         dependencies.clock = clock.closure
+        if let foregroundTickInterval { dependencies.foregroundTickInterval = foregroundTickInterval }
         let uptime = persistence.uptime
         dependencies.uptime = { uptime.value }
         let protected = self.protectedData
@@ -177,6 +183,38 @@ final class UnwritableTrioStore: TrioSharedStore, TrioPayloadReading, @unchecked
     func setString(_ value: String, forKey key: String) {}
     func removeValue(forKey key: String) {}
     var payload: [[String: Any]] { [] }
+}
+
+/// Trio's App Group where writes stop sticking (the suite drops them: a full disk, a system that
+/// refuses the defaults write): `setData` / `setString` change nothing while `failing`, so the
+/// bridge's read-back fails (`readBackMismatch`). Otherwise an in-memory suite like
+/// `RecordingTrioStore` (whose writes never fail).
+final class FailingTrioStore: TrioSharedStore, TrioPayloadReading, @unchecked Sendable {
+    // @unchecked Sendable: `inner` is Sendable and `isFailing` is only touched while holding `lock`.
+    private let inner = RecordingTrioStore()
+    private let lock = NSLock()
+    private var isFailing: Bool
+
+    init(failing: Bool = false) { isFailing = failing }
+
+    var failing: Bool {
+        get { lock.withLock { isFailing } }
+        set { lock.withLock { isFailing = newValue } }
+    }
+
+    func checkAccess() throws(TrioBridgeError) {}
+    func data(forKey key: String) -> Data? { inner.data(forKey: key) }
+    func setData(_ data: Data, forKey key: String) {
+        guard !failing else { return }
+        inner.setData(data, forKey: key)
+    }
+    func string(forKey key: String) -> String? { inner.string(forKey: key) }
+    func setString(_ value: String, forKey key: String) {
+        guard !failing else { return }
+        inner.setString(value, forKey: key)
+    }
+    func removeValue(forKey key: String) { inner.removeValue(forKey: key) }
+    var payload: [[String: Any]] { inner.payload }
 }
 
 /// AlarmKit stand-in: records alarms; permission can be revoked, after which the system list
@@ -368,10 +406,225 @@ final class FailureModeTests: XCTestCase {
         await harness.services.bootstrap()
         await harness.deliver(state: harness.activeState)
         await harness.deliver(persistence.reading(.mgdl(120), at: now.addingTimeInterval(-10)))
-        await waitUntil("bridge status") { harness.services.trio.isFailing }
-        await harness.services.sendTrioAlertInput()
-        XCTAssertTrue(harness.isFiring(.trioBridge), "a Trio write failure alerts (S5)")
+        // No manual alert input: the bridge's status reaches the alert engine on its own.
+        await waitUntil("the Trio bridge alert fires") { harness.isFiring(.trioBridge) }
+        XCTAssertTrue(harness.services.trio.isFailing)
         XCTAssertNotNil(harness.services.trio.lastErrorDescription)
+    }
+
+    /// Audit m4: a Trio App Group write that fails (the suite drops it; the bridge's read-back
+    /// catches it), end to end — the reading arrives from the sensor, the `trioBridge` alert fires
+    /// and is posted with no other prompt, Settings › Trio and the Now banner show the failure, and
+    /// it all clears when writes stick again (S5).
+    func test_S5_trioWriteFailureAlertsAndShowsInSettingsEndToEnd() async throws {
+        let now = Date()
+        let store = FailingTrioStore()
+        let persistence = LiveServicesHarness.Persistence(now: now, trioStore: store)
+        let harness = LiveServicesHarness(persistence)
+        await harness.services.bootstrap()
+        let model = AppModel.launch(services: harness.services, arguments: [],
+                                    preferences: AppUIPreferences(defaults: UserDefaults(suiteName: "m4-\(UUID().uuidString)")!),
+                                    clock: { persistence.clock.now }, protectedDataAvailable: { true })
+        await harness.deliver(state: harness.activeState)
+        await harness.deliver(persistence.reading(.mgdl(120), at: now.addingTimeInterval(-10)))
+        XCTAssertEqual(store.payload.first?["Value"] as? Int, 120)
+        await waitUntil("Settings shows Trio OK") { if case .ok = model.settings.trio.status { return true }; return false }
+        XCTAssertFalse(harness.isFiring(.trioBridge))
+
+        // Writes stop sticking. The next reading's write fails.
+        store.failing = true
+        persistence.clock.advance(by: 5 * 60)
+        await harness.deliver(persistence.reading(.mgdl(118), at: persistence.clock.now.addingTimeInterval(-10)))
+        await waitUntil("the Trio bridge alert fires") { harness.isFiring(.trioBridge) }
+        XCTAssertFalse(persistence.center.posted("trioBridge").isEmpty, "the person is told, not only the engine")
+        XCTAssertEqual(store.payload.first?["Value"] as? Int, 120, "Trio still has the last reading that was written")
+        XCTAssertTrue(harness.services.trio.isFailing)
+        await waitUntil("Settings shows the failure") { if case .failing = model.settings.trio.status { return true }; return false }
+        guard case .failing(_, let message) = model.settings.trio.status else { return XCTFail("Settings › Trio") }
+        XCTAssertEqual(message, harness.services.trio.lastErrorDescription, "Settings says what failed")
+        guard case .failing = model.now.health.trio else { return XCTFail("the Now banner shows the Trio failure: \(model.now.health.trio)") }
+
+        // Writes stick again: the next reading goes through, the alert and Settings clear.
+        store.failing = false
+        persistence.clock.advance(by: 5 * 60)
+        await harness.deliver(persistence.reading(.mgdl(116), at: persistence.clock.now.addingTimeInterval(-10)))
+        XCTAssertEqual(store.payload.first?["Value"] as? Int, 116)
+        await waitUntil("the Trio bridge alert clears") { !harness.isFiring(.trioBridge) }
+        await waitUntil("Settings shows Trio OK again") { if case .ok = model.settings.trio.status { return true }; return false }
+    }
+
+    // MARK: - D21 wiring (audit m5)
+
+    /// LOW reaches Trio as 39 and HIGH as 401 through the app's own TrioCoordinator (its D21
+    /// OutOfRangePolicy), from the sensor to the App Group payload. Fails if the policy is changed to
+    /// withhold (`.doNotWrite`): nothing would be written for either flag.
+    func test_S4_lowAndHighReachTrioAs39And401() async throws {
+        let now = Date()
+        let persistence = LiveServicesHarness.Persistence(now: now)
+        let harness = LiveServicesHarness(persistence)
+        await harness.services.bootstrap()
+        await harness.deliver(state: harness.activeState)
+
+        let low = persistence.reading(.belowRange, at: now.addingTimeInterval(-10))
+        await harness.deliver(low)
+        let afterLow = persistence.trioStore.payload
+        XCTAssertEqual(afterLow.count, 1, "the LOW reading was written, not withheld")
+        XCTAssertEqual(afterLow.first?["Value"] as? Int, 39, "D21: LOW → 39 (never 40, S4)")
+        XCTAssertEqual(afterLow.first?["DT"] as? String, "/Date(\(GlucoseReading.epochMilliseconds(low.date)))/")
+
+        persistence.clock.advance(by: 5 * 60)
+        let high = persistence.reading(.aboveRange, at: persistence.clock.now.addingTimeInterval(-10))
+        await harness.deliver(high)
+        let afterHigh = persistence.trioStore.payload
+        XCTAssertEqual(afterHigh.count, 2, "the HIGH reading was written, not withheld")
+        XCTAssertEqual(afterHigh.first?["Value"] as? Int, 401, "D21: HIGH → 401 (never 400, S4); newest first")
+        XCTAssertEqual(afterHigh.last?["Value"] as? Int, 39)
+        XCTAssertEqual(harness.services.trio.lastErrorDescription, nil)
+    }
+
+    // MARK: - Untested wiring (audit m18)
+
+    /// A failed Trio write is retried when the app comes to the foreground, with no new reading.
+    func test_S5_failedTrioWriteIsRetriedOnForeground() async throws {
+        let now = Date()
+        let store = FailingTrioStore(failing: true)
+        let persistence = LiveServicesHarness.Persistence(now: now, trioStore: store)
+        let harness = LiveServicesHarness(persistence) // production's 60 s ticker: it won't tick here
+        await harness.services.bootstrap()
+        await harness.deliver(state: harness.activeState)
+        let reading = persistence.reading(.mgdl(130), at: now.addingTimeInterval(-10))
+        await harness.deliver(reading)
+        XCTAssertTrue(store.payload.isEmpty)
+        await waitUntil("failing") { harness.services.trio.isFailing }
+
+        store.failing = false
+        await harness.services.handleForeground()
+        defer { harness.services.handleBackground() }
+        XCTAssertEqual(store.payload.first?["Value"] as? Int, 130, "the foreground retry wrote the pending reading")
+        await waitUntil("recovered") { !harness.services.trio.isFailing }
+    }
+
+    /// A failed Trio write is retried by the foreground ticker (60 s in production; shortened here),
+    /// with no new reading and no other prompt.
+    func test_S5_failedTrioWriteIsRetriedByTheForegroundTicker() async throws {
+        let now = Date()
+        let store = FailingTrioStore()
+        let persistence = LiveServicesHarness.Persistence(now: now, trioStore: store)
+        let harness = LiveServicesHarness(persistence, foregroundTickInterval: .milliseconds(200))
+        await harness.services.bootstrap()
+        await harness.services.handleForeground()
+        defer { harness.services.handleBackground() }
+        await harness.deliver(state: harness.activeState)
+
+        store.failing = true
+        await harness.deliver(persistence.reading(.mgdl(140), at: now.addingTimeInterval(-10)))
+        XCTAssertTrue(store.payload.isEmpty)
+        store.failing = false
+        await waitUntil("the ticker's retry wrote the pending reading") { store.payload.first?["Value"] as? Int == 140 }
+    }
+
+    /// Saving Nightscout credentials flushes the queue at once (the missing-token backoff is 30 min).
+    func test_S5_savingNightscoutCredentialsFlushesTheQueueAtOnce() async throws {
+        let now = Date()
+        let transport = RecordingTransport()
+        let persistence = LiveServicesHarness.Persistence(now: now)
+        let preferences = persistence.preferences
+        preferences.nightscoutUploadEnabled = true
+        preferences.nightscoutSiteURL = "https://ns.example.invalid"
+        let harness = LiveServicesHarness(persistence, uploadTransport: transport)
+        await harness.services.bootstrap()
+        await harness.deliver(state: harness.activeState)
+        let reading = persistence.reading(.mgdl(125), at: now.addingTimeInterval(-10))
+        await harness.deliver(reading)
+        await waitUntil("upload failed for the missing token") { harness.services.nightscout.upload.isFailing }
+        XCTAssertTrue(transport.requests.isEmpty, "nothing is sent without a token")
+        XCTAssertEqual(harness.services.nightscout.upload.status?.queueDepth, 1)
+
+        try await harness.services.saveNightscout(url: "https://ns.example.invalid", token: "new-token")
+        let request = try XCTUnwrap(transport.requests.first, "the save flushed the queue without waiting for the backoff")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.host, "ns.example.invalid")
+        let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+        XCTAssertTrue(body.contains("\"date\":\(GlucoseReading.epochMilliseconds(reading.date))"), body)
+        await waitUntil("uploaded") { harness.services.nightscout.upload.status?.queueDepth == 0 }
+        XCTAssertFalse(harness.services.nightscout.upload.isFailing)
+    }
+
+    /// Found while adding the test above: `applyUploadConfiguration` ran during bootstrap before
+    /// `isBootstrapped` was set and read the site through the UI's bootstrap guard (nil), so after
+    /// every launch no Nightscout uploader existed until a Nightscout setting was changed — readings
+    /// were silently not uploaded and Settings said "No access token is saved".
+    func test_S5_savedNightscoutSettingsUploadAfterALaunch() async throws {
+        let now = Date()
+        let transport = RecordingTransport()
+        let persistence = LiveServicesHarness.Persistence(now: now)
+        let preferences = persistence.preferences
+        preferences.nightscoutUploadEnabled = true
+        preferences.nightscoutSiteURL = "https://ns.example.invalid"
+        let harness = LiveServicesHarness(persistence, uploadTransport: transport)
+        try harness.credentials.write("token", for: .nightscoutToken)
+        await harness.services.bootstrap()
+        XCTAssertTrue(harness.services.nightscout.upload.isConfigured)
+        XCTAssertNotNil(harness.services.nightscout.upload.status, "the uploader exists after launch")
+
+        await harness.deliver(state: harness.activeState)
+        let reading = persistence.reading(.mgdl(111), at: now.addingTimeInterval(-10))
+        await harness.deliver(reading)
+        await waitUntil("uploaded") { !transport.requests.isEmpty }
+        let body = String(decoding: transport.requests.first?.httpBody ?? Data(), as: UTF8.self)
+        XCTAssertTrue(body.contains("\"date\":\(GlucoseReading.epochMilliseconds(reading.date))"), body)
+    }
+
+    /// The Nightscout `device` field is the app's name, `APP_DISPLAY_NAME`: Config/Base.xcconfig →
+    /// Info.plist CFBundleDisplayName → `AppIdentity.displayName` → the composition root's uploaders.
+    func test_nightscoutDeviceNameIsAppDisplayName() async throws {
+        let xcconfig = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Config/Base.xcconfig")
+        let line = try String(contentsOf: xcconfig, encoding: .utf8).split(separator: "\n")
+            .first { $0.trimmingCharacters(in: .whitespaces).hasPrefix("APP_DISPLAY_NAME") }
+        let configured = try XCTUnwrap(line?.split(separator: "=", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces))
+        XCTAssertFalse(configured.isEmpty)
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, configured,
+                       "the test host is the app; its Info.plist carries APP_DISPLAY_NAME (not AppIdentity's fallback)")
+
+        let transport = RecordingTransport()
+        let uploads = AppEnvironment.makeUploads(credentials: InMemoryCredentialStore([.nightscoutToken: "t"]),
+                                                 support: PipelineFixtures.temporaryDirectory(), diagnostics: NullDiagnosticLog(),
+                                                 transport: transport)
+        await uploads.apply(UploadCoordinator.Configuration(
+            nightscoutEnabled: true, nightscoutSite: try NightscoutSite("https://ns.example.invalid"), nightscoutHasToken: true,
+            shareEnabled: false, shareRegion: .us, shareReceiverSerial: nil, shareHasCredentials: false, liveOutputsAllowed: true
+        ))
+        let uploader = try XCTUnwrap(uploads.activeUploaders.first)
+        let now = Date()
+        let session = SensorSession(serial: PipelineFixtures.serial, start: now.addingTimeInterval(-86_400), warmUpEndsAt: now.addingTimeInterval(-86_000),
+                                    expiresAt: now.addingTimeInterval(86_400), gracePeriodEndsAt: now.addingTimeInterval(90_000))
+        let reading = GlucoseReading(id: "\(PipelineFixtures.serial):86390", date: now.addingTimeInterval(-10), value: .mgdl(120), trendRate: 0,
+                                     isBackfill: false, source: .sensor, sensorSerial: PipelineFixtures.serial)
+        try await uploader.submit(reading, session: session)
+        await uploads.flushNow()
+        let body = try XCTUnwrap(transport.requests.first?.httpBody)
+        let entries = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [[String: Any]])
+        XCTAssertEqual(entries.first?["device"] as? String, configured)
+    }
+
+    // MARK: - Monotonic clock boot session (docs/alerts.md §10 step 5)
+
+    func test_launchLogsTheMonotonicClockBootSessionOnce() async {
+        let persistence = LiveServicesHarness.Persistence(now: Date(), uptime: Uptime(seconds: 1_234, boot: "BOOT-SESSION-1"))
+        let harness = LiveServicesHarness(persistence)
+        await harness.services.bootstrap()
+        await harness.services.handleForeground()
+        harness.services.handleBackground()
+        let lines = harness.services.diagnostics.snapshot.filter { $0.message.hasPrefix("monotonic clock:") }
+        XCTAssertEqual(lines.count, 1, "once per launch")
+        XCTAssertEqual(lines.first?.category, .alert)
+        XCTAssertTrue(lines.first?.message.contains("boot session BOOT-SESSION-1") == true, lines.first?.message ?? "")
+
+        persistence.uptime.value = Uptime(seconds: 1_300, boot: nil)
+        let unreadable = LiveServicesHarness(persistence)
+        XCTAssertTrue(unreadable.services.diagnostics.snapshot.contains { $0.message.contains("boot session unreadable") },
+                      "an unreadable boot session is called out")
     }
 
     func test_S5_uploadQueueThatCannotBeSavedIsSurfaced() async throws {

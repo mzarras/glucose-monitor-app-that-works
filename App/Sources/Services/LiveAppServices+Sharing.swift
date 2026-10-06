@@ -50,9 +50,17 @@ extension LiveAppServices {
 
     // MARK: - Uploads
 
+    /// For the UI: nil until bootstrap (preferences are not read before the first unlock).
     var nightscoutSite: NightscoutSite? {
         guard isBootstrapped else { return nil }
-        return preferences.nightscoutSiteURL.flatMap { try? NightscoutSite($0) }
+        return savedNightscoutSite
+    }
+
+    /// The saved site, read without the bootstrap guard: `applyUploadConfiguration` runs during
+    /// bootstrap (protected data is available by then), before `isBootstrapped` is set. Reading
+    /// `nightscoutSite` there returned nil, so no Nightscout uploader was created at launch.
+    private var savedNightscoutSite: NightscoutSite? {
+        preferences.nightscoutSiteURL.flatMap { try? NightscoutSite($0) }
     }
 
     var nightscout: NightscoutSummary {
@@ -86,7 +94,7 @@ extension LiveAppServices {
     func applyUploadConfiguration() async {
         await uploads.apply(UploadCoordinator.Configuration(
             nightscoutEnabled: preferences.nightscoutUploadEnabled,
-            nightscoutSite: nightscoutSite,
+            nightscoutSite: savedNightscoutSite,
             nightscoutHasToken: nightscoutHasToken,
             shareEnabled: preferences.dexcomShareUploadEnabled,
             shareRegion: preferences.dexcomShareRegion,

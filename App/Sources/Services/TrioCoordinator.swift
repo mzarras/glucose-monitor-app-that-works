@@ -59,7 +59,7 @@ final class TrioCoordinator {
         statusTask = Task { [weak self] in
             for await status in await bridge.statusUpdates() {
                 guard let self else { return }
-                self.summary.update(from: status, now: Date())
+                self.summary.update(from: status, now: self.clock())
                 self.onChange?(self.summary)
             }
         }
@@ -72,7 +72,7 @@ final class TrioCoordinator {
         if enabled, liveOutputsAllowed, bridge == nil {
             // Turned on, but this build cannot reach Trio at all: fail loud (S5, review minor 4).
             summary.unavailableReason = "This build has no Trio App Group (Info.plist TrioAppGroupID is missing), so nothing reaches Trio. Rebuild with the team ID set (docs/trio-bridge.md, Setup)."
-            summary.problemSince = summary.problemSince ?? Date()
+            summary.problemSince = summary.problemSince ?? clock()
             log("turned on but unavailable: no TrioAppGroupID in this build")
         } else {
             summary.unavailableReason = nil
@@ -233,6 +233,6 @@ final class TrioCoordinator {
     }
 
     private func log(_ message: String) {
-        diagnostics.record(DiagnosticEvent(date: Date(), category: .bridge, message: "Trio coordinator: " + message))
+        diagnostics.record(DiagnosticEvent(date: clock(), category: .bridge, message: "Trio coordinator: " + message))
     }
 }
