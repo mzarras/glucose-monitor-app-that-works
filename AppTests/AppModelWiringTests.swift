@@ -106,6 +106,7 @@ final class AppModelWiringTests: XCTestCase {
             ("force-quit gap", { $0.forceQuitGap = ForceQuitGapReport(from: minutes(-300), to: minutes(-200)) }, .forceQuitGap),
             ("store locked", { $0.storage.availability = .waitingForFirstUnlock(heldReadings: 2) }, .storageUnavailable),
             ("store failed", { $0.storage.availability = .failed(message: "disk full") }, .storageUnavailable),
+            ("connection setting unreadable (review m2/m3)", { $0.connectionSettingProblem = "SensorConnection.json could not be read" }, .connectionSettingUnreadable),
             ("inserts failing (D42)", { $0.storage.availability = .failed(message: "3 reading(s) are held in memory: disk full") }, .storageUnavailable),
             ("bluetooth denied", { $0.bluetoothAuthorization = .denied }, .bluetoothUnauthorized),
             ("bluetooth restricted", { $0.bluetoothAuthorization = .restricted }, .bluetoothUnauthorized),

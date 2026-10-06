@@ -11,6 +11,8 @@ struct AppBanner: Equatable, Identifiable, Sendable {
         case missedReadings
         /// The reading database isn't open: readings are held in memory or can't be saved (S5).
         case storageUnavailable
+        /// Review m2/m3: the connection setting couldn't be read; the sensor isn't connected.
+        case connectionSettingUnreadable
         case bluetoothOff
         case bluetoothUnauthorized
         case bluetoothUnavailable
@@ -229,6 +231,14 @@ enum AppBanners {
                 action: nil, actionTitle: nil))
         case .opening, .open:
             break
+        }
+
+        if let problem = health.connectionSettingProblem {
+            banners.append(AppBanner(
+                kind: .connectionSettingUnreadable, severity: .critical,
+                title: "Connection setting couldn't be read",
+                detail: "Choose Listen or Pair again in Settings › Sensor. Until then this app doesn't connect to the sensor. (\(problem))",
+                action: .openSensorSettings, actionTitle: "Open Settings"))
         }
 
         switch health.bluetoothAuthorization {

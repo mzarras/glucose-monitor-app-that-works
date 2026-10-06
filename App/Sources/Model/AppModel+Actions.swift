@@ -151,7 +151,9 @@ extension AppModel {
             return
         }
         settings.feedback.connection = nil
-        guard services.connectionMode != mode else {
+        // While the setting can't be trusted (review m2/m3) the choice is recorded even for the mode
+        // shown: the services rewrite it and start the sensor connection.
+        guard services.connectionMode != mode || services.connectionSettingProblem != nil else {
             noteConnectionModeChosen()
             return
         }

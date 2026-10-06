@@ -50,6 +50,8 @@ final class PreviewAppServices: AppServices {
     var connectionMode: SensorConnectionMode = .pair
     var recordsRawGlucosePackets = false
     var connectionModeError: ConnectionModeError?
+    /// Review m2/m3: set to show the "Connection setting couldn't be read" state; a choice clears it.
+    var connectionSettingProblem: String?
 
     private var observers: [UUID: AsyncStream<ServiceChange>.Continuation] = [:]
 
@@ -103,7 +105,8 @@ final class PreviewAppServices: AppServices {
     func setConnectionMode(_ mode: SensorConnectionMode) async throws(ConnectionModeError) {
         calls.append("setConnectionMode(\(mode.rawValue))")
         if let connectionModeError { throw connectionModeError }
-        guard mode != connectionMode else { return }
+        guard mode != connectionMode || connectionSettingProblem != nil else { return }
+        connectionSettingProblem = nil
         connectionMode = mode
         trio.offWhileListening = mode == .listen
         nightscout.upload.offWhileListening = mode == .listen

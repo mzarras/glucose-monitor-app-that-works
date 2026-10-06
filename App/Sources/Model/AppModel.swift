@@ -546,7 +546,8 @@ final class AppModel {
         if preferencesLoaded, let preferences, !preferences.connectionModeChosen, mode == .listen || hasStoredSensor {
             preferences.connectionModeChosen = true
         }
-        let chosen = preferencesLoaded && preferences?.connectionModeChosen == true
+        // Review m2/m3: an untrusted setting is no choice: Settings asks again.
+        let chosen = preferencesLoaded && preferences?.connectionModeChosen == true && services.connectionSettingProblem == nil
         now.connection = ConnectionModeState(mode: mode)
         now.connectionChosen = chosen
         // Nothing paired (pairing: the state says so) or followed (listening: no followed serial once
@@ -576,6 +577,7 @@ final class AppModel {
             delivery: services.alertDelivery, forceQuitGap: services.forceQuitGap, storage: services.storage,
             bluetooth: services.bluetoothAuthorization, now: time
         )
+        health.connectionSettingProblem = services.connectionSettingProblem
         // Keep the "since" of a problem that is already showing, so the banner doesn't move.
         if case .failing(_, let message) = health.trio, case .failing(let since, let shownMessage) = now.health.trio, message == shownMessage {
             health.trio = .failing(since: since, message: message)

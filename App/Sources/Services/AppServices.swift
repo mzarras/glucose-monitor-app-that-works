@@ -101,6 +101,12 @@ protocol AppServices: AnyObject {
     var sharingOffWhileListening: Bool { get }
     /// False in listen mode: the source refuses calibrations there (calibrate in the Dexcom app).
     var supportsCalibration: Bool { get }
+    /// Review m2/m3: set when the connection setting cannot be trusted — the saved file could not be
+    /// read, a failed switch could not be rolled back, or the stored sensor connection belongs to the
+    /// other mode. The sensor is not connected until the person chooses Listen or Pair again
+    /// (`setConnectionMode`, which then rewrites the setting even for the mode shown). Nil when fine.
+    /// A change sends `.sensor` and `.health`.
+    var connectionSettingProblem: String? { get }
     /// D47 (Settings › Diagnostics): the hex of every received glucose packet goes to the diagnostic
     /// log. Off by default; saved for the next launch. A change sends `.sensor`.
     var recordsRawGlucosePackets: Bool { get }
@@ -221,6 +227,7 @@ extension AppServices {
     var storedSensorKnown: Bool { true }
     /// Defaults for stand-ins without a sensor connection choice (additive requirements, D45/D47).
     var connectionMode: SensorConnectionMode { .pair }
+    var connectionSettingProblem: String? { nil }
     func setConnectionMode(_ mode: SensorConnectionMode) async throws(ConnectionModeError) {}
     var sharingOffWhileListening: Bool { connectionMode == .listen }
     var supportsCalibration: Bool { connectionMode != .listen }

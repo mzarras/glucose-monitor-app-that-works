@@ -67,6 +67,12 @@ final class LiveAppServices: AppServices {
         var connectionSettings = SensorConnectionSettingsStore(
             fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("SensorConnection-\(UUID().uuidString).json")
         )
+        /// Review m5: what `connectionSettings` held when the G7 source was created — read once, by
+        /// `AppEnvironment`, and handed to both. Nil: read it here (tests that need no source).
+        var connectionLaunch: SensorConnectionSettingsLoad?
+        /// Review m2/m3: the G7 source's credential store, which refuses deletions the person did not
+        /// ask for. Nil where the source has no Keychain store (scripted tests).
+        var credentialGuard: GuardedG7CredentialStore?
     }
 
     struct LaunchReplay: Equatable {
@@ -95,6 +101,7 @@ final class LiveAppServices: AppServices {
     private let protectedDataAvailable: @MainActor () -> Bool
     private let foregroundTickInterval: Duration
     let connectionSettingsStore: SensorConnectionSettingsStore
+    let credentialGuard: GuardedG7CredentialStore?
     let historyImports: HistoryImportCoordinator
 
     /// The G7 pipeline, for the whole process.
@@ -142,6 +149,10 @@ final class LiveAppServices: AppServices {
     private(set) var storedSensorSerial: String?
     /// D45/D47, as saved (and as the G7 source was created with at launch).
     var connectionSettings = SensorConnectionSettings.defaults
+    /// Review m2/m3: the connection setting cannot be trusted (the file was unreadable, or a failed
+    /// switch could not be rolled back, or G7Kit was kept from deleting a pairing of the other mode).
+    /// The source stays stopped until the person chooses Listen or Pair again; nil when fine.
+    var connectionSettingProblem: String?
     /// False in listen mode (calibrate in the Dexcom app); read from the source.
     var supportsCalibration = true
     var nightscoutHasToken = false
@@ -166,9 +177,11 @@ final class LiveAppServices: AppServices {
         protectedDataAvailable = dependencies.isProtectedDataAvailable
         foregroundTickInterval = dependencies.foregroundTickInterval
         connectionSettingsStore = dependencies.connectionSettings
-        let loaded = dependencies.connectionSettings.load()
+        credentialGuard = dependencies.credentialGuard
+        let loaded = dependencies.connectionLaunch ?? dependencies.connectionSettings.load()
         connectionSettings = loaded.settings
         supportsCalibration = loaded.settings.mode != .listen
+        connectionSettingProblem = loaded.problem
         historyImports = HistoryImportCoordinator(diagnostics: dependencies.diagnostics)
         sensorPipeline = ReadingPipeline(name: "sensor", source: dependencies.g7, diagnostics: dependencies.diagnostics, now: dependencies.clock)
         // B1: no widget snapshot until the store is open — before that the latest reading is
@@ -217,7 +230,10 @@ final class LiveAppServices: AppServices {
         }
         log(.app, "launch: G7 source created (restore id \(G7Configuration.defaultRestoreIdentifier)), \(connectionSettings.g7Mode.summary)"
             + (connectionSettings.recordsRawGlucosePackets ? ", raw glucose packet recording on (D47)" : ""))
-        if let problem = loaded.problem { log(.sensor, problem) }
+        if let problem = loaded.problem {
+            log(.sensor, "connection setting unreadable, the sensor is not connected until Listen or Pair is chosen again: \(problem)")
+        }
+        noteRefusedDeletion()
         logMonotonicClock()
         Task { await self.startG7() }
     }
@@ -368,7 +384,12 @@ final class LiveAppServices: AppServices {
     }
 
     func forgetSensor() async {
-        await g7.forgetSensor()
+        // The person's own action: G7Kit may delete the pairing (GuardedG7CredentialStore).
+        if let credentialGuard {
+            await credentialGuard.allowingDeletion { await g7.forgetSensor() }
+        } else {
+            await g7.forgetSensor()
+        }
         log(.sensor, "sensor forgotten")
         // G7Kit's forget stops the source. In pairing mode it stays stopped until `pair(code:)`.
         // In listen mode ("Stop following this sensor", D45) no code is needed: look for the Dexcom
@@ -400,6 +421,8 @@ final class LiveAppServices: AppServices {
 
     func startG7() async {
         guard !isReplaying, !g7Started else { return }
+        // Review m2/m3: never started on a connection setting that cannot be trusted.
+        guard connectionSettingProblem == nil else { return }
         do {
             try await g7.start(pairingCode: nil)
             g7Started = true
@@ -407,6 +430,7 @@ final class LiveAppServices: AppServices {
             // Before the first unlock the pairing record cannot be read; the source reports
             // `.failed(credentialsUnavailable)` and is started again when protected data arrives.
             log(.sensor, "G7 start failed, retrying when protected data is available: \(error)")
+            noteRefusedDeletion()
         }
     }
 
@@ -793,10 +817,14 @@ extension StoreAvailability {
 }
 
 extension LiveAppServices.Dependencies {
-    /// The same dependencies with the sensor connection settings file the G7 source was created with.
-    func with(connectionSettings: SensorConnectionSettingsStore) -> Self {
+    /// The same dependencies with the sensor connection settings file the G7 source was created with,
+    /// what it held at launch (read once, review m5) and the source's guarded credential store.
+    func with(connectionSettings: SensorConnectionSettingsStore, launch: SensorConnectionSettingsLoad,
+              credentialGuard: GuardedG7CredentialStore?) -> Self {
         var copy = self
         copy.connectionSettings = connectionSettings
+        copy.connectionLaunch = launch
+        copy.credentialGuard = credentialGuard
         return copy
     }
 }
