@@ -4,8 +4,9 @@
 // screen as before D45.
 //
 // D45 (PROGRESS): listen mode only observes the BLE connection the Dexcom app on this phone
-// authenticated — no pairing code, nothing written to the sensor (no auth, backfill, calibration or
-// control commands). Readings pass the same gate (S2) and alerts work. While listening, the Trio
+// authenticated — no pairing code, no auth, backfill, calibration or control commands; the only
+// write is, if needed, one read-only session-length question per connection (D49/D50, as Trio's
+// G7SensorKit asks). Readings pass the same gate (S2) and alerts work. While listening, the Trio
 // handoff and Nightscout/Share uploads are forced off. Pairing this app (slot 2) is for the next
 // sensor, after the Dexcom app is deleted.
 
@@ -15,7 +16,8 @@ import WidgetCore
 
 /// How this app reaches the G7 sensor (D45). Also the facade's `AppServices.connectionMode`.
 enum SensorConnectionMode: String, CaseIterable, Identifiable, Sendable {
-    /// Observe the Dexcom app's connection to the current sensor; send nothing.
+    /// Observe the Dexcom app's connection to the current sensor; at most one read-only
+    /// session-length question per connection (D49/D50).
     case listen
     /// This app is the sensor's primary device (the Dexcom app removed): pairing code, backfill,
     /// calibration, Trio handoff and uploads.
@@ -44,7 +46,7 @@ enum ConnectionModeText {
     static func explanation(_ mode: SensorConnectionMode) -> String {
         switch mode {
         case .listen:
-            return "Keep the Dexcom app. This app reads the sensor through the Dexcom app's connection and sends it nothing: no code, no calibration, and Trio handoff and uploads stay off."
+            return "Keep the Dexcom app. This app reads the sensor through the Dexcom app's connection and sends it nothing except, if needed, one read-only question for the session length (the same one Trio asks). No code, no calibration; Trio handoff and uploads stay off."
         case .pair:
             return "Delete the Dexcom app first. This app becomes the sensor's only connection: pairing code, calibration, Trio handoff and uploads."
         }
@@ -74,6 +76,7 @@ enum ConnectionModeText {
 
     /// The Now hero before the person has chosen listen or pair.
     static let notSetUpTitle = "No sensor set up"
+    static let notSetUpStateLine = "NO SENSOR SET UP"
     static let notSetUpDetail = "Choose how this app connects: listen alongside the Dexcom app on this phone, or pair this app with the Dexcom app removed."
 
     /// The Now hero and state line while listening and no sensor is followed.
@@ -91,7 +94,7 @@ enum ConnectionModeText {
     static let outputsOffRow = "off while listening"
 
     /// Pairing-only actions, explained instead of offered while listening.
-    static let calibrationWhileListening = "Calibrate in the Dexcom app: while listening, this app sends nothing to the sensor."
+    static let calibrationWhileListening = "Calibrate in the Dexcom app: while listening, this app doesn't calibrate the sensor."
     static let pairingWhileListening = "Pairing isn't used while listening. To pair this app, delete the Dexcom app, then choose \u{201C}\(title(.pair))\u{201D} under Connection in Settings \u{203A} Sensor."
     static let sensorProblemWhileListening = "Check the sensor in the Dexcom app: it owns the connection while this app listens."
 
@@ -155,12 +158,32 @@ enum ListenModeRules {
         sensor.serial != nil
     }
 
-    /// G7Kit's three transient listen-mode failures (`G7FailureReason.listen…`), recognised by kind
-    /// while listening (D36: decisions from the kind). Nil for anything else, which keeps its usual
-    /// wording.
+    /// Every failure kind whose source wording would be wrong for a listening person (it says to pair,
+    /// or names this app's own connection), in listen words, recognised by kind (D36: decisions from
+    /// the kind). Kinds reachable in listen mode (G7Controller, G7ReadingPipeline): sessionLengthUnknown,
+    /// authenticationFailed, rejectedAfterAuthentication (the three `G7FailureReason.listen…`),
+    /// credentialsUnavailable, clockMismatch, noGlucoseValue, unsupportedSensor, sensorFailed,
+    /// sessionStopped. The pairing kinds and otherAppRejected are primary-only today; they are covered
+    /// so none can ever tell a listening person to pair. Nil keeps the source's wording (clock,
+    /// glucose value, an ended sensor: `endedSensorDetail` adds how to follow the new one).
     static func failure(_ failure: SensorFailure, listening: Bool) -> ListenFailureText? {
         guard listening else { return nil }
         switch failure.kind {
+        case .credentialsUnavailable:
+            return ListenFailureText(
+                title: "Waiting for the phone to unlock",
+                detail: "Waiting for the phone to unlock — readings resume after you unlock it.",
+                row: "waiting for unlock")
+        case .otherAppRejected:
+            return ListenFailureText(
+                title: "Connection interrupted",
+                detail: "Another app on this phone seems to be connecting to the sensor and being refused, which cuts connections short. Close other apps that connect to G7 sensors (xDrip4iOS, Trio's or Loop's own G7 connection); keep the Dexcom app.",
+                row: "connection interrupted")
+        case .pairingRejected, .pairingCodeNeeded, .bondRemoved, .bluetoothPairingIncomplete:
+            return ListenFailureText(
+                title: "Sensor not reachable",
+                detail: "The sensor isn't accepting the connection this app listens to. Check the sensor in the Dexcom app; nothing needs pairing here.",
+                row: "check the Dexcom app")
         case .sessionLengthUnknown:
             return ListenFailureText(
                 title: "Waiting for session details",
@@ -194,6 +217,14 @@ enum ListenModeRules {
         if case .notPaired = display {
             return .message(title: ConnectionModeText.notFollowingTitle, detail: ConnectionModeText.notFollowingDetail, action: nil)
         }
+        if case .sensorFailed(let failure, _) = display {
+            if let text = Self.failure(failure, listening: true) {
+                return .message(title: text.title, detail: text.detail, action: nil)
+            }
+            if failure.requiresSensorReplacement {
+                return .message(title: "Replace the sensor", detail: endedSensorDetail(failure.message), action: nil)
+            }
+        }
         guard case .message(let title, let detail, let action?) = hero else { return hero }
         switch action {
         case .calibrate:
@@ -206,9 +237,26 @@ enum ListenModeRules {
         }
     }
 
-    /// The Now state line while listening with no followed sensor.
-    static func stateLine(_ line: StateLine, display: GlucoseDisplayState, listening: Bool) -> StateLine {
-        guard listening, case .notPaired = display else { return line }
+    /// An ended sensor while listening: the source's words, then how to go on (the new sensor starts
+    /// in the Dexcom app; this app follows it once this one is no longer followed).
+    static func endedSensorDetail(_ failureMessage: String) -> String {
+        "\(failureMessage) Start the new sensor in the Dexcom app, then stop following this one in Settings \u{203A} Sensor."
+    }
+
+    /// A failure's words for a listening person: listen wording, an ended sensor with how to go on,
+    /// or the source's own message.
+    static func listeningDetail(_ failure: SensorFailure) -> String {
+        if let text = Self.failure(failure, listening: true) { return text.detail }
+        if failure.requiresSensorReplacement { return endedSensorDetail(failure.message) }
+        return failure.message
+    }
+
+    /// The Now state line with no sensor: "NO SENSOR SET UP" before a choice (as the hero, P3 review
+    /// n5), "NOT FOLLOWING A SENSOR" while listening.
+    static func stateLine(_ line: StateLine, display: GlucoseDisplayState, listening: Bool, chosen: Bool = true) -> StateLine {
+        guard case .notPaired = display else { return line }
+        if !chosen, line.text == "NO SENSOR PAIRED" { return StateLine(text: ConnectionModeText.notSetUpStateLine, dot: line.dot) }
+        guard listening else { return line }
         return StateLine(text: ConnectionModeText.notFollowingStateLine, dot: line.dot)
     }
 

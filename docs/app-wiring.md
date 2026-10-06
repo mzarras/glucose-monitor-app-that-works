@@ -38,9 +38,10 @@ SensorApp → AppModel.launch(services: AppEnvironment.shared.services)   one mo
   The Now chart draws and scrubs only points up to `now` (`NowMapping.visibleChartPoints`), so after
   the clock is set back a future-dated reading is never selectable; the hero shows the clock
   mismatch.
-- **Relaunch (Phase 3).** The selected tab and Trends period are stored with the appearance
-  (`AppUIPreferences`, read once protected data is available) and restored after the app is killed;
-  an explicit `-tab` launch argument wins (the UI tests pass `-tab now`).
+- **Relaunch (Phase 3).** The Trends period is stored with the appearance (`AppUIPreferences`, read
+  once protected data is available) and restored after the app is killed. A cold launch always opens
+  Now (P3 review m6: a notification or widget tap lands on the current reading); a `-tab` launch
+  argument picks another tab (UI tests).
 - **Fixtures.** DEBUG `AppModel.fixtures()` builds fixture view states with no services, for
   previews and the fixture-based unit tests only.
 - **Stored-sensor baseline (Phase 3).** `hasStoredSensor` is only a default until
@@ -284,7 +285,7 @@ screens word it "off while listening".
 | Settings main | Connection row; Trio, Nightscout, Dexcom Share rows "off while listening" | — |
 | Trio, Sharing pages | switches off and disabled, "Off while listening alongside the Dexcom app"; Retry uploads hidden; site and credentials can still be saved | — |
 | Now | Before a choice, no sensor reads "No sensor set up" with "Set up the sensor" (Settings › Sensor's choice), never "Pair a sensor". Listening: TRIO row "off while listening", the listening line under the status rows, no Pair/Calibrate button in the hero (`ListenModeRules.hero`; an ended sensor says to start the new one in the Dexcom app and stop following this one), no followed sensor reads "Not following a sensor" | — |
-| Calibration (Now menu, flow, Settings) | "Calibrate in the Dexcom app: while listening, this app sends nothing to the sensor." (`CalibrationRules.availability`) | — |
+| Calibration (Now menu, flow, Settings) | "Calibrate in the Dexcom app: while listening, this app doesn't calibrate the sensor." (`CalibrationRules.availability`) | — |
 | Banners, SENSOR rows | G7Kit's three transient listen failures (`listenSessionLengthUnknown`, `listenNoAuthenticatedConnection`, `listenConnectionRejected`, by kind while listening) stay up as warnings with their own words (`ListenModeRules.failure`): "Waiting for session details", "Connection not confirmed", "Sensor rejected the connection". Missed readings and alerts are unchanged. | — |
 | Settings › DIAGNOSTICS | "Record raw glucose packets" (D47, off by default) with its line | `setRecordsRawGlucosePackets(_:)` |
 
@@ -294,8 +295,21 @@ simulator's live source (Bluetooth unsupported there) or are refused in a replay
 A choice is recorded when onboarding's Continue or Settings' confirmation succeeds; listening, or a
 sensor stored in pairing mode (an install from before D45), counts as chosen.
 
-Open (services): after `forgetSensor()` in listen mode the live facade does not start listening
-again (`g7Started` stays true, so `startG7()` returns) until the next launch.
+"Stop following this sensor" (shown while a sensor is followed, `ListenModeRules.offersStopFollowing`)
+→ `forgetSensor()`, after which the facade looks for the Dexcom app's connection to the next sensor at
+once (`LiveAppServices.forgetSensor`).
+
+Every failure kind whose source text would tell a listening person to pair (or names this app's own
+connection) has listen wording (`ListenModeRules.failure`): credentials unavailable ("Waiting for the
+phone to unlock"), the three listen failures, another app refused, and the pairing kinds (primary-only
+today). An ended sensor adds "Start the new sensor in the Dexcom app, then stop following this one".
+Calibration banners say to calibrate in the Dexcom app and have no button. Onboarding always confirms
+a switch away from listening (`OnboardingState.continueNeedsConfirmation`).
+
+**Not connected (P3 review m1).** Once a mode is chosen, no paired sensor (pairing: `.notPaired`) or
+no followed sensor (listening: no followed serial and no session once the stored record is read)
+raises the calm "Not connected to a sensor" banner (warning), so it never looks like monitoring is
+running.
 
 Screenshots: `docs/screenshots/listen-*.png` and `first-run-*.png` (UI tests).
 

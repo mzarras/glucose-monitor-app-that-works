@@ -1,7 +1,7 @@
 // UI-only preferences the app keeps itself (everything else is owned by `AppServices`): whether
 // onboarding was completed, light/dark appearance, whether the sensor is still waiting for a
-// calibration (review minor 4, kept across relaunches with the Now state), and the selected tab
-// and Trends period (restored after the app is killed and relaunched). UserDefaults of the app's
+// calibration (review minor 4, kept across relaunches with the Now state), and the Trends period
+// (restored after the app is killed and relaunched; a cold launch always opens Now, review m6). UserDefaults of the app's
 // own container; injectable for tests.
 
 import Foundation
@@ -14,7 +14,6 @@ final class AppUIPreferences {
         static let onboardingCompleted = "ui.onboardingCompleted"
         static let appearance = "ui.appearance"
         static let sensorNeedsCalibration = "ui.sensorNeedsCalibration"
-        static let selectedTab = "ui.selectedTab"
         static let trendsPeriodDays = "ui.trendsPeriodDays"
         static let connectionModeChosen = "ui.connectionModeChosen"
     }
@@ -36,12 +35,6 @@ final class AppUIPreferences {
     var sensorNeedsCalibration: Bool {
         get { defaults.bool(forKey: Key.sensorNeedsCalibration) }
         set { defaults.set(newValue, forKey: Key.sensorNeedsCalibration) }
-    }
-
-    /// The tab last selected; nil if never stored (launch on Now).
-    var selectedTab: AppTab? {
-        get { defaults.string(forKey: Key.selectedTab).flatMap(AppTab.init(rawValue:)) }
-        set { defaults.set(newValue?.rawValue, forKey: Key.selectedTab) }
     }
 
     /// D45: the person has chosen how the app connects (listen or pair). Until then no screen

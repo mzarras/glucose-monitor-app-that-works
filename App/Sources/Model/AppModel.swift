@@ -204,14 +204,12 @@ final class AppModel {
         #endif
         refreshConnection()
         settings.appearance = preferences.appearance
-        // Phase 3: the tab and Trends period from before the app was killed (an explicit `-tab`
-        // launch argument wins).
+        // Phase 3: the Trends period from before the app was killed. A cold launch always opens Now
+        // (P3 review m6: a notification or widget tap must land on the current reading), unless a
+        // `-tab` launch argument picks another tab.
         if let period = preferences.trendsPeriod, period != trends.period, !trendsComputed {
             trends = .empty(period: period)
             trendsStale = true
-        }
-        if !launchArguments.contains("-tab"), let tab = preferences.selectedTab {
-            selectTab(tab)
         }
         // The stored need, or one seen since launch, kept or cleared by the state now (review minor 4).
         let needsCalibration = CalibrationNeed.update(previous: preferences.sensorNeedsCalibration || now.sensorNeedsCalibration,
@@ -551,6 +549,13 @@ final class AppModel {
         let chosen = preferencesLoaded && preferences?.connectionModeChosen == true
         now.connection = ConnectionModeState(mode: mode)
         now.connectionChosen = chosen
+        // Nothing paired (pairing: the state says so) or followed (listening: no followed serial once
+        // the stored record has been read), after a choice: say so (S5 spirit — never look like
+        // monitoring is running).
+        let nothingConnected = mode == .listen
+            ? services.storedSensorKnown && services.storedSensorSerial == nil && services.sensorSession == nil
+            : services.sensorState == .notPaired
+        now.notConnected = chosen && sensorStateKnown && nothingConnected
         settings.connection = ConnectionModeState(mode: chosen ? mode : nil)
         settings.packetRecording = PacketRecordingState(isOn: services.recordsRawGlucosePackets)
         calibration.listening = mode == .listen
@@ -663,7 +668,6 @@ final class AppModel {
 
     func selectTab(_ tab: AppTab) {
         selectedTab = tab
-        if preferencesLoaded { preferences?.selectedTab = tab }
         if tab == .trends, trendsStale { refreshTrends() }
     }
 

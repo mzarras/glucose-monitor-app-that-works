@@ -141,7 +141,7 @@ enum AlertText {
                 return "The sensor needs a calibration."
             }
         case .sensorExpired:
-            return "The session has ended. No readings until a new sensor is paired."
+            return "The session has ended. No readings until a new sensor is started."
         case .bluetoothUnavailable:
             if case .bluetoothUnavailable(let issue) = c.lastReportedSensorState {
                 switch issue {

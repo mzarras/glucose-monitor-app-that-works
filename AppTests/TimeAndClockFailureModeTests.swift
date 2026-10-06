@@ -148,6 +148,35 @@ final class TimeAndClockFailureModeTests: XCTestCase {
         XCTAssertEqual(TimeOfDayAxis.date(atHour: 2.5, dayStart: springMidnight, timeZone: zone), jump)
     }
 
+    /// P3 review n1: zones that change the clock at midnight. On Santiago's spring-forward day
+    /// (Sep 6 2026, 00:00 → 01:00) the day starts at 01:00, so readings still sit at their clock
+    /// time; a finger before 01:00 selects the day's start. The fall-back day before (Apr 4, 23:00
+    /// repeated) keeps 23:30 at 23.5 for both passes.
+    func test_overlayInZonesThatChangeTheClockAtMidnight() throws {
+        for (zoneID, y, m, d) in [("America/Santiago", 2026, 9, 6), ("America/Havana", 2026, 3, 8)] {
+            let zone = try XCTUnwrap(TimeZone(identifier: zoneID))
+            let local = calendar(zone)
+            let dayStart = local.startOfDay(for: date(y, m, d, 12, in: zone))
+            XCTAssertEqual(TimeOfDayAxis.clockHours(of: dayStart, timeZone: zone), 1, accuracy: 0.0001, "\(zoneID): the day starts at 01:00")
+            for (h, min) in [(1, 30), (13, 0), (23, 55)] {
+                let instant = date(y, m, d, h, min, in: zone)
+                XCTAssertEqual(TimeOfDayAxis.hourOfDay(instant, dayStart: dayStart, timeZone: zone), Double(h) + Double(min) / 60, accuracy: 0.0001,
+                               "\(zoneID) \(h):\(min)")
+                XCTAssertEqual(TimeOfDayAxis.date(atHour: Double(h) + Double(min) / 60, dayStart: dayStart, timeZone: zone), instant)
+            }
+            XCTAssertEqual(TimeOfDayAxis.date(atHour: 0.5, dayStart: dayStart, timeZone: zone), dayStart, "before the day's first instant")
+            let readings = everyFiveMinutes(from: dayStart, to: dayStart.addingTimeInterval(23 * 3_600))
+            let trace = TrendsMapping.dayTraces(dayCount: 1, readings: readings, now: dayStart.addingTimeInterval(23 * 3_600 - 1), calendar: local)
+            XCTAssertEqual(trace.first?.dayStart, dayStart)
+            XCTAssertEqual(trace.first?.points.first.map { TimeOfDayAxis.hourOfDay($0.date, dayStart: dayStart, timeZone: zone) } ?? 0, 1, accuracy: 0.0001)
+        }
+        let santiago = try XCTUnwrap(TimeZone(identifier: "America/Santiago"))
+        let fallDayStart = calendar(santiago).startOfDay(for: date(2026, 4, 4, 12, in: santiago))
+        let firstPass = date(2026, 4, 4, 23, 30, in: santiago)
+        XCTAssertEqual(TimeOfDayAxis.hourOfDay(firstPass, dayStart: fallDayStart, timeZone: santiago), 23.5, accuracy: 0.0001)
+        XCTAssertEqual(TimeOfDayAxis.hourOfDay(firstPass.addingTimeInterval(3_600), dayStart: fallDayStart, timeZone: santiago), 23.5, accuracy: 0.0001)
+    }
+
     /// Review m17: a line never joins two readings across a clock change (it would cross the
     /// skipped hour or double back over the repeated one); every reading is still drawn.
     func test_overlayLinesSplitAtTheClockChange() {

@@ -459,8 +459,8 @@ struct ConnectionStep: View {
             .accessibilityElement(children: .combine)
         } else if let mode = state.connection?.mode {
             Button("Continue") {
-                // Switching replaces a stored sensor's pairing: ask first (as in Settings › Sensor).
-                if mode != state.currentConnectionMode, state.connectionSwitchNeedsConfirmation {
+                // Leaving listening, or replacing a stored pairing: ask first (as in Settings › Sensor).
+                if state.continueNeedsConfirmation(for: mode) {
                     confirming = true
                 } else {
                     actions.continueConnection()
@@ -495,7 +495,7 @@ struct ListenStep: View {
     /// What stops readings right now, in words for listening (S5).
     private var problem: String? {
         switch state.sensorState {
-        case .failed(let failure): return ListenModeRules.failure(failure, listening: true)?.detail ?? failure.message
+        case .failed(let failure): return ListenModeRules.listeningDetail(failure)
         case .error(_, let description): return description
         case .bluetoothUnavailable(.poweredOff): return "Bluetooth is off, so this app can't hear the sensor. Turn it on in Control Center or Settings."
         case .bluetoothUnavailable(.unauthorized): return "Bluetooth isn't allowed for this app, so it can't hear the sensor. Allow it in iOS Settings."
@@ -594,7 +594,8 @@ struct WarmUpStep: View {
     let finish: @MainActor () -> Void
 
     var body: some View {
-        StepTitle(title: "Warming up", lead: "The sensor needs time before its first reading. You can leave this screen; the app keeps listening in the background.")
+        let text = OnboardingText.lastStep(sensorState: state.sensorState, listening: state.connection?.mode == .listen, now: now)
+        StepTitle(title: text.title, lead: text.lead)
         if case .warmingUp(let endsAt) = state.sensorState, now < endsAt {
             VStack(alignment: .leading, spacing: 4) {
                 Text(verbatim: TimeText.duration(endsAt.timeIntervalSince(now)))
@@ -606,8 +607,8 @@ struct WarmUpStep: View {
                     .foregroundStyle(Theme.muted)
             }
             .accessibilityElement(children: .combine)
-        } else {
-            Text(verbatim: "Waiting for the first reading.").font(Typography.body(size: 15))
+        } else if let waiting = text.waiting {
+            Text(verbatim: waiting).font(Typography.body(size: 15))
         }
         Text(verbatim: "Don't force-quit the app (swiping it away): iOS won't restart it, and readings stop until you open it again.")
             .font(Typography.body(size: 13))

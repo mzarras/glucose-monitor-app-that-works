@@ -52,7 +52,7 @@ final class ExpiryReminderTests: XCTestCase {
              "Plan a sensor change. A 12-hour grace period follows."),
             (.sensorGracePeriod, expiresAt, "Sensor session ended — 12 h grace period",
              "Readings stop at 9:40 AM tomorrow. Replace the sensor before then."),
-            (.sensorExpired, graceEndsAt, "Sensor expired", "The session has ended. No readings until a new sensor is paired."),
+            (.sensorExpired, graceEndsAt, "Sensor expired", "The session has ended. No readings until a new sensor is started."),
         ]
         for (kind, date, title, body) in expected {
             let notices = try XCTUnwrap(actions.scheduledNotices(kind), "\(kind)")

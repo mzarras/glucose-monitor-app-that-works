@@ -232,7 +232,7 @@ final class ReplayLaunchUITests: XCTestCase {
     /// Scrolls until the element is on screen.
     private func reveal(_ app: XCUIApplication, _ element: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: timeout), element.debugDescription)
-        for _ in 0..<8 where !element.isHittable { app.swipeUp(velocity: .slow) }
+        for _ in 0..<16 where !element.isHittable { app.swipeUp() }
     }
 
     private func assertSharingSwitches(_ app: XCUIApplication, enabled: Bool) {

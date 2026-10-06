@@ -191,7 +191,7 @@ Five notifications per sensor session, each on/off on its own (`AlertSettings.se
 | `sensorExpiringIn12Hours` | expiry − 12 h | Sensor expires in 12 hours | The session ends today at 9:40 PM. A 12-hour grace period follows. |
 | `sensorExpiringIn2Hours` | expiry − 2 h | Sensor expires in 2 hours (at 9:40 PM) | Plan a sensor change. A 12-hour grace period follows. |
 | `sensorGracePeriod` | expiry | Sensor session ended — 12 h grace period | Readings stop at 9:40 AM tomorrow. Replace the sensor before then. |
-| `sensorExpired` | grace period's end | Sensor expired | The session has ended. No readings until a new sensor is paired. |
+| `sensorExpired` | grace period's end | Sensor expired | The session has ended. No readings until a new sensor is started. |
 
 No 30-minute reminder and nothing else during the grace period. "today"/"tomorrow" are as seen at
 delivery; the grace sentence is left out until the grace period's end is known.

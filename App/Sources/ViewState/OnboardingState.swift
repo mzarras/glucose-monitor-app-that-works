@@ -121,8 +121,14 @@ struct OnboardingState: Equatable, Sendable {
     /// D45: the mode the facade is in now; Continue on the connection step switches to the choice
     /// when they differ.
     var currentConnectionMode: SensorConnectionMode = .pair
-    /// D45: switching would replace a stored sensor's pairing, so Continue asks first.
+    /// D45: a sensor is stored, so switching would replace its pairing.
     var connectionSwitchNeedsConfirmation: Bool = false
+
+    /// D45 (review m1): Continue asks first when it switches modes and either a sensor is stored or
+    /// the switch leaves listening (pairing takes over the Dexcom app's connection).
+    func continueNeedsConfirmation(for mode: SensorConnectionMode) -> Bool {
+        mode != currentConnectionMode && (connectionSwitchNeedsConfirmation || currentConnectionMode == .listen)
+    }
     /// D45: a switch is on its way, or why it didn't happen (nothing changed).
     var connectionSwitching: Bool = false
     var connectionMessage: String? = nil
@@ -152,6 +158,20 @@ struct OnboardingState: Equatable, Sendable {
 }
 
 enum OnboardingText {
+    /// The last step's words (P3 review n4): "Warming up" only while the sensor is; a sensor already
+    /// in its session (typical when listening on the Dexcom app's sensor mid-session) is "All set".
+    static func lastStep(sensorState: SensorState, listening: Bool, now: Date) -> (title: String, lead: String, waiting: String?) {
+        let background = listening ? "the app keeps listening in the background" : "the app keeps reading the sensor in the background"
+        switch sensorState {
+        case .warmingUp(let endsAt) where now < endsAt:
+            return ("Warming up", "The sensor needs time before its first reading. You can leave this screen; \(background).", nil)
+        case .active, .gracePeriod:
+            return ("All set", "The sensor is in its session; readings arrive about every 5 minutes. You can leave this screen; \(background).", nil)
+        default:
+            return ("Almost done", "You can leave this screen; \(background).", "Waiting for the first reading.")
+        }
+    }
+
     /// A stopped import's message in full (NightscoutKit's `unusableHistory` names the date range
     /// and what to do), followed by what happens to the imported readings unless it says so itself.
     static func importFailure(_ message: String) -> String {

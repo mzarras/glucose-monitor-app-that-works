@@ -18,8 +18,9 @@ final class RelaunchAndCarryOverTests: XCTestCase {
         return preferences
     }
 
-    /// The selected tab, Trends period and appearance come back after the app is killed; an explicit
-    /// `-tab` launch argument wins.
+    /// The Trends period and appearance come back after the app is killed; the tab does not: a cold
+    /// launch opens Now (review m6: a notification or widget tap lands on the current reading); an
+    /// explicit `-tab` launch argument picks another.
     func test_uiStateIsRestoredAfterRelaunch() async {
         let services = PreviewAppServices(readings: series(from: t0.addingTimeInterval(-40 * 86_400), to: t0) { _ in .mgdl(120) }, sensorState: activeSensor)
         let stored = preferences()
@@ -33,13 +34,16 @@ final class RelaunchAndCarryOverTests: XCTestCase {
         let relaunched = launch(services, preferences: stored)
         relaunched.apply(.sensor)
         await relaunched.settle()
-        XCTAssertEqual(relaunched.selectedTab, .trends)
+        XCTAssertEqual(relaunched.selectedTab, .now, "a cold launch opens Now")
         XCTAssertEqual(relaunched.trends.period, .thirtyDays)
         XCTAssertEqual(relaunched.settings.appearance, .dark)
-        XCTAssertNotNil(relaunched.trends.timeInRange, "the restored period's statistics are computed")
+        relaunched.selectTab(.trends)
+        await relaunched.settle()
+        XCTAssertEqual(relaunched.trends.period, .thirtyDays)
+        XCTAssertNotNil(relaunched.trends.timeInRange, "the restored period's statistics are computed when Trends opens")
 
-        let withArgument = launch(services, preferences: stored, arguments: ["-tab", "now"])
-        XCTAssertEqual(withArgument.selectedTab, .now)
+        let withArgument = launch(services, preferences: stored, arguments: ["-tab", "alerts"])
+        XCTAssertEqual(withArgument.selectedTab, .alerts)
     }
 
     /// At launch, before the source's first state, nothing shows a stored value as current:
