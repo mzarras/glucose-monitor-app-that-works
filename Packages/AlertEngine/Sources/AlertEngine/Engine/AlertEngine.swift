@@ -5,6 +5,7 @@
 // Split across files by concern:
 //   AlertEngine.swift                  inputs, the per-alert state machine, glucose alerts
 //   AlertEngine+MissedReadings.swift   the pre-scheduled missed-readings alert (S5)
+//   AlertEngine+UrgentLowSnooze.swift  urgent low re-alarms at snooze end (D44)
 //   AlertEngine+Sensor.swift           sensor state, the warm-up announcement
 //   AlertEngine+ExpiryReminders.swift  the pre-scheduled sensor expiry reminders (D43)
 //   AlertEngine+User.swift             acknowledge / snooze / settings changes / launch
@@ -44,6 +45,11 @@ public struct AlertEngine: Sendable {
         if var plan = s.expiryPlan {
             plan.reminders = plan.reminders.filter { AlertKind(rawValue: $0.key).map(AlertKind.sensorExpiryReminders.contains) == true }
             s.expiryPlan = plan
+        }
+        // Only an accepted reading's session is stored, and the gate accepts only well-formed ones:
+        // anything else came from a damaged or tampered file.
+        if let session = s.knownSession, !session.isWellFormed {
+            s.knownSession = nil
         }
         if s.missedReadingsReference == AlertEngineSnapshot.missingReference {
             s.missedReadingsReference = now
@@ -87,6 +93,7 @@ public struct AlertEngine: Sendable {
         let repair = Self.repairingClockFaults(snapshot, now: now, uptime: uptime)
         snapshot = repair.snapshot
         var actions: [AlertAction] = repair.rolledBack ? replanAfterRollback(now: now) : []
+        actions += rebuildIfTimeZoneChanged(input, now: now)
         switch input {
         case .reading(let reading, let session):
             if let rejection = Self.rejection(of: reading, session: session, now: now, configuration: configuration) {
@@ -117,6 +124,16 @@ public struct AlertEngine: Sendable {
         }
         actions += evaluate(now: now)
         return actions
+    }
+
+    /// The phone's time zone changed (travel; the default calendar follows the phone live): every
+    /// pending notification carries a quiet-hours decision and clock times made in the old zone, so
+    /// rebuild them all, as for a delivery-level change. A launch rebuilds them anyway.
+    private mutating func rebuildIfTimeZoneChanged(_ input: AlertInput, now: Date) -> [AlertAction] {
+        let zone = configuration.calendar.timeZone.identifier
+        defer { snapshot.timeZoneIdentifier = zone }
+        guard let previous = snapshot.timeZoneIdentifier, previous != zone, input != .launched else { return [] }
+        return apply(settings, now: now)
     }
 
     // MARK: Readings
@@ -165,6 +182,7 @@ public struct AlertEngine: Sendable {
         let current = currentReading(at: now)
 
         actions += step(.urgentLow, GlucoseConditions.atOrBelow(current, threshold: settings.urgentLow.thresholdMgdl), now: now)
+        actions += planUrgentLowSnoozeEnd(now: now)
         let urgentLowActive = episode(.urgentLow).isActive
         actions += step(.urgentLowSoon, GlucoseConditions.urgentLowSoon(
             current, urgentLowThreshold: settings.urgentLow.thresholdMgdl, urgentLowActive: urgentLowActive), now: now)
@@ -218,9 +236,13 @@ public struct AlertEngine: Sendable {
             return repeatIfDue(kind, firing, condition: condition, now: now)
 
         case (.snoozed(let snooze), .met):
-            return now >= snooze.until ? fire(kind, now: now) : []
-        case (.snoozed, .holding):
-            return []
+            guard now >= snooze.until else { return [] }
+            return kind == .urgentLow ? endUrgentLowSnooze(snooze, current: true, now: now) : fire(kind, now: now)
+        case (.snoozed(let snooze), .holding):
+            // D44: urgent low re-alarms at snooze end without a new reading, unless the latest
+            // reading was above the threshold. Every other alert waits for a current reading.
+            guard kind == .urgentLow, now >= snooze.until, urgentLowSnoozeEndWanted else { return [] }
+            return endUrgentLowSnooze(snooze, current: false, now: now)
         }
     }
 
@@ -231,7 +253,7 @@ public struct AlertEngine: Sendable {
         return [.cancel(kind)]
     }
 
-    private mutating func fire(_ kind: AlertKind, now: Date) -> [AlertAction] {
+    mutating func fire(_ kind: AlertKind, now: Date) -> [AlertAction] {
         if kind == .sensorExpired { return fireSensorExpired(now: now) }
         setEpisode(kind, .firing(AlertFiring(since: now, lastSoundedAt: now)))
         var actions: [AlertAction] = [.fire(makeNotice(kind, fireDate: nil, now: now))]
@@ -307,7 +329,8 @@ public struct AlertEngine: Sendable {
         kind == .high ? TimeInterval(settings.high.delayMinutes * 60) : 0
     }
 
-    func makeNotice(_ kind: AlertKind, fireDate: Date?, now: Date, isRepeat: Bool = false, slot: Int? = nil) -> AlertNotice {
+    /// - Parameter snoozeEnd: urgent low re-alarming at snooze end without a current reading (D44).
+    func makeNotice(_ kind: AlertKind, fireDate: Date?, now: Date, isRepeat: Bool = false, slot: Int? = nil, snoozeEnd: Bool = false) -> AlertNotice {
         let deliveredAt = fireDate ?? now
         // S7: quiet hours never silence urgent low.
         let silenced = kind != .urgentLow && settings.quietHours.contains(deliveredAt, calendar: configuration.calendar)
@@ -321,6 +344,7 @@ public struct AlertEngine: Sendable {
             storageHealth: snapshot.storageHealth,
             calendar: configuration.calendar,
             locale: configuration.locale,
+            isSnoozeEnd: kind == .urgentLow && (snoozeEnd || (fireDate != nil && urgentLowIsSnoozed)),
             deliveredAt: deliveredAt,
             sessionExpiresAt: snapshot.expiryPlan?.expiresAt,
             graceEndsAt: snapshot.expiryPlan?.graceEndsAt

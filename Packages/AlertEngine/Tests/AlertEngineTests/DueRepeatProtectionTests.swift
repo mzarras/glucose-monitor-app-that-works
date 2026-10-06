@@ -115,7 +115,9 @@ final class DueRepeatProtectionTests: XCTestCase {
 
         alarms.listingFails = true    // e.g. the user revoked alarms in Settings
         await h.service.send(.user(.acknowledge(.urgentLow)))
-        XCTAssertEqual(Array(alarms.scheduled.keys), [legacy.id], "every alarm with a known ID is cancelled regardless")
+        XCTAssertNotNil(alarms.scheduled[legacy.id])
+        XCTAssertTrue(alarms.scheduled.values.filter { $0.id != legacy.id }.allSatisfy { $0.fireDate >= Fixtures.t0.addingTimeInterval(minutes(30)) },
+                      "every alarm with a known ID is cancelled regardless; only the snooze-end ones are new (D44)")
         XCTAssertTrue(h.service.deliveryStatus.problems.contains { if case .urgentLowAlarmFailed = $0 { true } else { false } },
                       "the unreadable list is surfaced")
     }
@@ -190,15 +192,15 @@ final class PartialRollbackTests: XCTestCase {
         h.clock.advance(minutes: 10)
         h.clock.reboot(uptime: 5)            // monotonic clock restarted: not comparable
         h.clock.advance(minutes: -20)        // and the wall clock went back 20 minutes
-        h.tick()
-        XCTAssertEqual(h.phase(.urgentLow), .snoozed(until: h.now), "still detected against the latest now seen")
+        XCTAssertEqual(h.tick().fired, [.urgentLow], "still detected against the latest now seen: the snooze ends, it re-alarms (D44)")
+        XCTAssertEqual(h.phase(.urgentLow), .firing(since: h.now))
         let noUptime = EngineHarness()
         noUptime.clock.reboot(uptime: nil)
         noUptime.mgdl(50)
         noUptime.user(.snooze(.urgentLow, minutes: 30))
         noUptime.clock.advance(minutes: -5)
         noUptime.tick()
-        XCTAssertEqual(noUptime.phase(.urgentLow), .snoozed(until: noUptime.now))
+        XCTAssertEqual(noUptime.phase(.urgentLow), .firing(since: noUptime.now))
     }
 
     func test_systemUptimeIsMonotonicAndNamesItsBoot() throws {
@@ -236,7 +238,7 @@ final class PartialRollbackTests: XCTestCase {
         // A wall clock earlier than the latest seen is still caught.
         let back = Fixtures.t0.addingTimeInterval(-minutes(5))
         _ = engine.handle(.tick, at: back, uptime: Uptime(seconds: 1_000 + minutes(26), boot: nil))
-        XCTAssertEqual(engine.phase(of: .urgentLow), .snoozed(until: back), "fallback detects it; the snooze ends")
+        XCTAssertEqual(engine.phase(of: .urgentLow), .firing(since: back), "fallback detects it; the snooze ends and urgent low re-alarms (D44)")
     }
 
     /// Second delta review, minor: an NTP correction (or a user) setting the clock back while a

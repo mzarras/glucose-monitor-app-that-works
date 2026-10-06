@@ -18,6 +18,9 @@ struct AlertTextContext {
     var storageHealth: StorageHealth = .ok
     let calendar: Calendar
     let locale: Locale
+    /// An urgent-low notification pending for the end of a snooze (D44): it must not present the
+    /// last value as current (S1).
+    var isSnoozeEnd = false
     /// When the notification is delivered: its fire date, or now. Expiry reminders (D43) are
     /// written for that moment ("tomorrow", time left).
     var deliveredAt: Date?
@@ -85,6 +88,10 @@ enum AlertText {
     /// `isRepeat`: a pre-scheduled urgent-low repeat, written for the moment it fires.
     static func body(_ kind: AlertKind, context c: AlertTextContext, isRepeat: Bool) -> String {
         switch kind {
+        case .urgentLow where c.isSnoozeEnd:
+            // D44: written at acknowledge for the snooze end; the value is the last one, with its time.
+            guard c.reading != nil else { return "Snooze ended. No recent reading. Check your glucose." }
+            return "Snooze ended. Last reading \(readingText(c)). Check your glucose."
         case .urgentLow:
             let reading = readingText(c)
             return isRepeat ? "Not acknowledged. Last reading \(reading)." : "\(reading). Treat now."

@@ -20,7 +20,12 @@ public final class AlertDeliveryExecutor {
     public private(set) var soundOwner: AlertKind?
     /// Set when scheduling an urgent-low system alarm failed in the last attempt (S5: shown on the
     /// Settings screen); cleared when a later attempt succeeds in full.
-    public private(set) var urgentLowAlarmFailure: String?
+    public var urgentLowAlarmFailure: String? { alarmScheduleFailure ?? alarmListingFailure }
+    /// The last alarm scheduling error; cleared when a later attempt succeeds in full.
+    private var alarmScheduleFailure: String?
+    /// Cancelling every alarm could not list the system's alarms (stale ones may remain); cleared
+    /// only when a later cancel-all can list them — a successful schedule does not prove that.
+    private var alarmListingFailure: String?
     /// Alerts whose last plan could not schedule every repeat, with how many are missing (S5).
     /// Cleared by the next `.schedule` or cancel for that alert.
     public private(set) var repeatShortfalls: [AlertKind: Int] = [:]
@@ -177,9 +182,10 @@ public final class AlertDeliveryExecutor {
     private func cancelAllAlarms() {
         do {
             try alarms?.cancelAll()
+            alarmListingFailure = nil
         } catch {
             // Every fixed alarm ID was cancelled; only the system's own list could not be read.
-            urgentLowAlarmFailure = "could not list alarms to cancel them: \(error)"
+            alarmListingFailure = "could not list alarms to cancel them: \(error)"
             log("urgent-low alarms: \(urgentLowAlarmFailure ?? "")")
         }
     }
@@ -206,14 +212,14 @@ public final class AlertDeliveryExecutor {
             try await alarms.schedule(SystemAlarmRequest(id: id, fireDate: fireDate, title: notice.title, soundFileName: soundFileName))
             return true
         } catch {
-            urgentLowAlarmFailure = String(describing: error)
+            alarmScheduleFailure = String(describing: error)
             log("urgent-low alarm \(id) FAILED: \(error); notification + in-app sound instead")
             return false
         }
     }
 
     private func recordAlarmOutcome(allSucceeded: Bool) {
-        if allSucceeded { urgentLowAlarmFailure = nil }
+        if allSucceeded { alarmScheduleFailure = nil }
     }
 
     private func playInApp(_ sound: InAppSound, for kind: AlertKind) {
