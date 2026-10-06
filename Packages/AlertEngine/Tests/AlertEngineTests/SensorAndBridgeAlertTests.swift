@@ -162,8 +162,8 @@ final class SensorAlertTests: XCTestCase {
 
     func test_acknowledgingOrSnoozingAnAnnouncementRemovesIt() {
         let h = EngineHarness()
-        XCTAssertEqual(h.user(.acknowledge(.sensorGracePeriod)).first, .cancel(.sensorGracePeriod))
-        XCTAssertEqual(h.user(.snooze(.sensorWarmUpComplete, minutes: 30)).first, .cancel(.sensorWarmUpComplete))
+        XCTAssertEqual(h.user(.acknowledge(.sensorGracePeriod)).first, .dismiss(.sensorGracePeriod))
+        XCTAssertEqual(h.user(.snooze(.sensorWarmUpComplete, minutes: 30)).first, .dismiss(.sensorWarmUpComplete))
     }
 
     func test_silenceStopsOnlyTheSound() {

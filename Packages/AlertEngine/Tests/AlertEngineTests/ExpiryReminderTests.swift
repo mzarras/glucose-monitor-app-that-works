@@ -148,7 +148,11 @@ final class ExpiryReminderTests: XCTestCase {
         }
         let reminderActions = actions.reminderActions
         XCTAssertEqual(reminderActions.fired, [], "every reminder went out as its pending notification")
-        XCTAssertEqual(reminderActions.due, [.sensorExpired], "the end reported: the sensor-expired alert only sounds")
+        XCTAssertEqual(reminderActions.ensured, reminders + [.sensorExpired],
+                       "each checked once at its moment (posted only if missing); the end reported: checked again, with its sound")
+        XCTAssertEqual(actions.ensuredNotice(.sensorExpiringIn12Hours)?.soundIfPresent, false)
+        XCTAssertEqual(reminderActions.last.flatMap { if case .ensurePosted(_, let sound) = $0 { return sound } else { return nil } }, true)
+        XCTAssertEqual(reminderActions.due, [])
         for kind in reminders {
             XCTAssertEqual(reminderActions.filter { if case .schedule(kind, _) = $0 { return true } else { return false } }.count, 1, "\(kind)")
         }
@@ -164,8 +168,35 @@ final class ExpiryReminderTests: XCTestCase {
             XCTAssertEqual(h.send(.sensorState(state)).reminderActions, [], "jitter \(jitter)")
             h.clock.advance(minutes: 5)
         }
-        XCTAssertEqual(h.send(.sensorState(.active(sessionStart: session.start, expiresAt: expiresAt.addingTimeInterval(1800))))
-            .reminderActions, [], "within the hour: the same session")
+        XCTAssertEqual(h.send(.sensorState(.active(sessionStart: session.start, expiresAt: expiresAt.addingTimeInterval(90))))
+            .reminderActions, [], "90 s: still jitter")
+    }
+
+    /// Review m4: a move of more than 2 minutes within the hour is the same session at new dates.
+    func test_aSessionDateThatMovesWithinTheHourRewritesThePendingReminders() {
+        let h = harness()
+        startSession(h)
+        let moved = expiresAt.addingTimeInterval(1800)
+        let actions = h.send(.sensorState(.active(sessionStart: session.start.addingTimeInterval(1800), expiresAt: moved))).reminderActions
+        XCTAssertEqual(actions.scheduled(.sensorExpiringIn24Hours), [moved.addingTimeInterval(-hours(24))])
+        XCTAssertEqual(actions.scheduled(.sensorExpiringIn2Hours), [moved.addingTimeInterval(-hours(2))])
+        XCTAssertEqual(actions.scheduledNotices(.sensorExpiringIn2Hours)?.first?.title, "Sensor expires in 2 hours (at 10:10 PM)")
+        XCTAssertEqual(actions.scheduledNotices(.sensorExpiringIn12Hours)?.first?.body,
+                       "The session ends today at 10:10 PM. An 11 h 30 min grace period follows.")
+        XCTAssertEqual(actions.scheduled(.sensorGracePeriod), [moved])
+        XCTAssertEqual(actions.fired, [])
+        XCTAssertFalse(actions.contains { if case .cancelSlots = $0 { return true } else { return false } }, "replaced, same identifiers")
+        XCTAssertEqual(h.send(.sensorState(.active(sessionStart: session.start.addingTimeInterval(1801), expiresAt: moved.addingTimeInterval(1))))
+            .reminderActions, [], "then jitter around the new date")
+    }
+
+    func test_aDateMovedJustBeforeAReminderIsDueLeavesThatOneAlone() {
+        let h = harness()
+        startSession(h)
+        moveClock(h, to: expiresAt.addingTimeInterval(-hours(2) - 30))   // the 2-hour one is due in 30 s
+        let actions = h.send(.sensorState(.active(sessionStart: session.start, expiresAt: expiresAt.addingTimeInterval(600)))).reminderActions
+        XCTAssertNil(actions.scheduled(.sensorExpiringIn2Hours), "due within a minute: not replaced")
+        XCTAssertEqual(actions.scheduled(.sensorGracePeriod), [expiresAt.addingTimeInterval(600)])
     }
 
     // MARK: Session changes
@@ -244,7 +275,7 @@ final class ExpiryReminderTests: XCTestCase {
         let late = harness(settings: settings)
         startSession(late)
         moveClock(late, to: expiresAt.addingTimeInterval(-hours(11)))
-        XCTAssertEqual(late.tick().reminderActions, [])
+        XCTAssertEqual(late.tick().reminderActions.ensured, [.sensorExpiringIn12Hours], "the 12-hour one came due: checked")
         XCTAssertEqual(late.settings { $0.setEnabled(true, for: .sensorExpiringIn24Hours) }.reminderActions, [])
     }
 
@@ -275,10 +306,9 @@ final class ExpiryReminderTests: XCTestCase {
     func test_openingAnAnnouncementKeepsItsReminderPendingForLater() {
         let h = harness()
         startSession(h)
-        let actions = h.user(.acknowledge(.sensorExpiringIn12Hours))
-        XCTAssertEqual(actions.first, .cancel(.sensorExpiringIn12Hours))
-        XCTAssertEqual(actions.scheduled(.sensorExpiringIn12Hours), [expiresAt.addingTimeInterval(-hours(12))])
-        XCTAssertEqual(h.user(.acknowledge(.sensorWarmUpComplete)).first, .cancel(.sensorWarmUpComplete))
+        let actions = h.user(.acknowledge(.sensorExpiringIn12Hours)).reminderActions
+        XCTAssertEqual(actions, [.dismiss(.sensorExpiringIn12Hours)], "the shown notification only: the pending one stays")
+        XCTAssertEqual(h.user(.acknowledge(.sensorWarmUpComplete)).first, .dismiss(.sensorWarmUpComplete))
     }
 
     // MARK: Learned late
@@ -342,7 +372,7 @@ final class ExpiryReminderTests: XCTestCase {
         startSession(h)
         moveClock(h, to: graceEndsAt.addingTimeInterval(-30))
         let end = h.send(.sensorState(.expired)).reminderActions
-        XCTAssertEqual(end.due, [.sensorExpired], "the pending one goes out in 30 s: not removed, not posted twice")
+        XCTAssertEqual(end.ensuredNotice(.sensorExpired)?.soundIfPresent, true, "the pending one goes out in 30 s: not removed, not posted twice")
         XCTAssertEqual(end.fired, [])
         XCTAssertFalse(end.contains(.cancelSlots(.sensorExpired, [0])))
     }
@@ -351,7 +381,7 @@ final class ExpiryReminderTests: XCTestCase {
         let h = harness()
         startSession(h)
         moveClock(h, to: graceEndsAt.addingTimeInterval(120))
-        XCTAssertEqual(h.send(.sensorState(.expired)).reminderActions.due, [.sensorExpired])
+        XCTAssertEqual(h.send(.sensorState(.expired)).reminderActions.ensured, [.sensorExpired])
         XCTAssertEqual(h.advance(minutes: 119).fired, [])
         XCTAssertEqual(h.advance(minutes: 1).fired, [.sensorExpired], "re-alerts every 120 minutes, as before")
     }
@@ -362,11 +392,11 @@ final class ExpiryReminderTests: XCTestCase {
         let h = harness()
         startSession(h)
         moveClock(h, to: graceEndsAt.addingTimeInterval(120))
-        XCTAssertEqual(h.send(.sensorState(.expired)).reminderActions.due, [.sensorExpired])
+        XCTAssertEqual(h.send(.sensorState(.expired)).reminderActions.ensured, [.sensorExpired])
         XCTAssertEqual(h.send(.sensorState(.gracePeriod(endsAt: graceEndsAt))).reminderActions, [.cancel(.sensorExpired)])
         let again = h.send(.sensorState(.expired)).reminderActions
         XCTAssertEqual(again.fired, [.sensorExpired])
-        XCTAssertEqual(again.due, [])
+        XCTAssertEqual(again.ensured, [])
     }
 
     func test_turningTheSensorExpiredAlertOnAfterAnEarlyEndDoesNotScheduleItAgain() {
@@ -427,13 +457,23 @@ final class ExpiryReminderTests: XCTestCase {
 }
 
 extension Array where Element == AlertAction {
+    /// `.ensurePosted` kinds (D43 review B1), in order.
+    var ensured: [AlertKind] {
+        compactMap { if case .ensurePosted(let n, _) = $0 { return n.kind } else { return nil } }
+    }
+
+    func ensuredNotice(_ kind: AlertKind) -> (notice: AlertNotice, soundIfPresent: Bool)? {
+        for case .ensurePosted(let n, let sound) in self where n.kind == kind { return (n, sound) }
+        return nil
+    }
+
     /// Only the actions about the expiry reminders (D43).
     var reminderActions: [AlertAction] {
         let kinds = AlertKind.sensorExpiryReminders
         return filter { action in
             switch action {
-            case .fire(let n), .playDueAlert(let n): return kinds.contains(n.kind)
-            case .schedule(let k, _), .cancelSlots(let k, _), .cancelScheduled(let k), .cancel(let k), .stopSound(let k):
+            case .fire(let n), .playDueAlert(let n), .ensurePosted(let n, _): return kinds.contains(n.kind)
+            case .schedule(let k, _), .cancelSlots(let k, _), .cancelScheduled(let k), .cancel(let k), .stopSound(let k), .dismiss(let k):
                 return kinds.contains(k)
             default: return false
             }

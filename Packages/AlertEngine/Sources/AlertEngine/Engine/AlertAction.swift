@@ -21,6 +21,7 @@ public struct AlertNotice: Sendable, Equatable {
     public let fireDate: Date?
     /// For a pending repeat: its identifier slot (`ScheduledRepeat.slot`), which names the
     /// notification and, for urgent low, the system alarm. `nil` for the immediate notification.
+    /// A sensor expiry reminder (D43) always has its slot, pending or posted now.
     public let slot: Int?
     /// `false`: a visible notification with no sound at all (an announcement whose sound the user
     /// turned off, D43). Never false for urgent low (S7).
@@ -64,6 +65,15 @@ public enum AlertAction: Sendable, Equatable {
     case cancelScheduled(AlertKind)
     /// Remove pending and delivered notifications for this alert and stop its in-app sound.
     case cancel(AlertKind)
+    /// Remove this alert's delivered notifications and stop its in-app sound; leave its pending ones
+    /// (acknowledging an announcement: an expiry reminder pending for later stays, D43).
+    case dismiss(AlertKind)
+    /// A sensor expiry reminder's moment was reached while the app runs (D43 review B1): its pending
+    /// notification (identifier from `notice.slot`) should be out. If the notification center has
+    /// it, delivered or still pending, post nothing and, with `soundIfPresent`, play the in-app sound
+    /// as `playDueAlert` would; if it is missing (its add failed, or the system removed it), post
+    /// `notice` now, as `fire` would. `notice` is written, and quiet hours decided, for now.
+    case ensurePosted(AlertNotice, soundIfPresent: Bool)
     /// Stop the in-app sound for this alert; leave notifications alone.
     case stopSound(AlertKind)
     /// Fewer pending repeats could be planned than wanted, because every free notification/alarm

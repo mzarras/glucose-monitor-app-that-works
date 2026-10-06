@@ -66,19 +66,32 @@ final class RecordingNotificationCenter: AlertNotificationCenter {
     func requestAuthorization() async -> NotificationPermissionState { permissions }
     func permissionState() async -> NotificationPermissionState { permissions }
 
+    struct NotificationsNotAllowed: Error {}
+
+    /// Like UNUserNotificationCenter, refuses requests while notifications are not allowed.
     func add(_ request: NotificationRequestSpec) async throws {
+        guard permissions.isAuthorized else { throw NotificationsNotAllowed() }
         if request.fireDate == nil {
             posted.append(Posted(spec: request, at: clock.now))
+            delivered.insert(request.identifier)
         } else {
             pending[request.identifier] = request
         }
+    }
+
+    private var delivered: Set<String> = []
+
+    func presentIdentifiers() async -> Set<String> {
+        Set(pending.keys).union(delivered)
     }
 
     func removePending(identifiers: [String]) {
         for id in identifiers { pending[id] = nil }
     }
 
-    func removeDelivered(identifiers: [String]) {}
+    func removeDelivered(identifiers: [String]) {
+        for id in identifiers { delivered.remove(id) }
+    }
 
     func posted(_ kind: String) -> [Posted] {
         posted.filter { $0.kind == kind }

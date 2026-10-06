@@ -51,6 +51,8 @@ final class SilentNotificationCenter: AlertNotificationCenter {
     func registerCategories() async { await adapter.registerCategories() }
     func requestAuthorization() async -> NotificationPermissionState { await adapter.requestAuthorization() }
     func permissionState() async -> NotificationPermissionState { await adapter.permissionState() }
+    /// What iOS really holds: these notifications are posted (without sound) to the real center.
+    func presentIdentifiers() async -> Set<String> { await adapter.presentIdentifiers() }
     func removePending(identifiers: [String]) { adapter.removePending(identifiers: identifiers) }
     func removeDelivered(identifiers: [String]) { adapter.removeDelivered(identifiers: identifiers) }
 
