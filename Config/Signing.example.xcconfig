@@ -7,7 +7,7 @@ DEVELOPMENT_TEAM = ABCDE12345
 // Bundle ID of the app; extensions append a suffix (e.g. .widgets).
 BUNDLE_ID_PREFIX = com.example.sensor
 
-// This app's own App Group (database + widget snapshot).
+// This app's own App Group (widget snapshot; the database stays in the app's container, D25).
 APP_GROUP_ID = group.$(BUNDLE_ID_PREFIX)
 
 // Trio's App Group. Leave as-is unless you changed TRIO_APP_GROUP_ID in your Trio build.
