@@ -148,6 +148,12 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 
 ## Phase log
 
+### 2026-10-06 — Phase 2 reviewed, merged into integration
+- Re-reviews at p2-stage ff11362: reviewer 1 (pipeline, services, D41/D42) **PASS**; reviewer 2 (app model, screens) **PASS**. Merged as integration 3517554.
+- Orchestrator gate run on 3517554 (`.build-logs/orch-p2-merge-check.txt`): gates 1, 3, 4 PASS; gate 2 PASS except NightscoutKit `test_concurrentRunIsRefused` (order-dependent `async let` race under load; passes alone, product guard correct). Sent to WS7 to make deterministic; main merge waits for a clean full run.
+- Follow-ups in flight: n1 phone-clock expiry (WS1 dc428bb, ready), n2 held-reading dedupe + store-open-before-activate note (Integrator A), D43 expiry reminders (WS4 + Integrator B). One combined safety review for these before merge.
+- Carry-overs for Phase 3: AGP "HIGH" marker at chart top (nit); onboarding pairing spinner could stay in progress if no connection step was observed (harden with hasStoredSensor false→true); `currentSession` grace-end check uses the phone clock (D28, readings withheld during clock mismatch anyway).
+
 ### Phase 1 — Parallel build (2026-09-23)
 
 - Seven workstreams in parallel worktrees; every one reviewed by an independent safety reviewer; 16 review rounds in total (initial + deltas), 11 blockers found and fixed before merge. Two API usage-limit interruptions; affected agents resumed from their transcripts.
