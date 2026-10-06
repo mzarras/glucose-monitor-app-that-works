@@ -13,21 +13,23 @@ names only projects actually used; "reference" means studied and cited, with no 
 | [xDrip4iOS](https://github.com/JohanDegraeve/xdripswift) (JohanDegraeve/xdripswift), release 7.1.0 (`0370937`) | GPL-3.0 | Dexcom G7 primary mode (`Packages/G7Kit`): pairing, J-PAKE authentication, bonding, message handling, backfill, calibration, CoreBluetooth connection lifecycle. Dexcom Share upload (`Packages/NightscoutKit/.../DexcomShare`), ported from `DexcomShareUploadManager.swift`, `ConstantsDexcomShare.swift`, `DexcomShareModels.swift`, `BgReading+DexcomShare.swift` and `slopeOrdinal` in `BgReading+CoreDataClass.swift`. Also reference for the alert "override mute" approach and pre-scheduled missed-readings notifications. |
 | [micro-ecc](https://github.com/kmackay/micro-ecc) (Kenneth MacKay), revision `541b3a7`, vendored via xDrip4iOS | BSD-2-Clause | P-256 arithmetic for G7 J-PAKE (`Packages/G7Kit/Sources/G7ECC/micro-ecc`, license alongside) |
 | [GRDB.swift](https://github.com/groue/GRDB.swift) 7.11.1 (Swift package dependency) | MIT | SQLite persistence |
+| [LoopKit CGMBLEKit](https://github.com/LoopKit/CGMBLEKit) (Nathan Racklyeft), reached through xDrip4iOS 7.1.0, compared with loopandlearn/CGMBLEKit @ `98fae79` | MIT | Lineage of eight G7Kit files (each carries a "CGMBLEKit lineage" header line): `G7Opcode` (opcode values), `G7AuthStatusMessage` (`05`), `G7AuthChallengeMessages` (`03`), `G7ChallengeHash` (AES-128-ECB call), `G7CRC16` (CRC-16 CCITT), `G7OwnershipMessages` (`06`/`07`), `G7AuthenticationSlot` (slot enum), `G7CoexistenceMessages` (`0x31`/`0x25` layout, listen mode). License text: `Packages/G7Kit/licenses/CGMBLEKit-LICENSE`. |
 
 ## References (no code included)
 
 | Project | License | Used for |
 |---|---|---|
 | [LoopKit G7SensorKit](https://github.com/LoopKit/G7SensorKit) | MIT | G7 message formats, glucose limits, captured packets used as test vectors |
-| [LoopKit CGMBLEKit](https://github.com/LoopKit/CGMBLEKit) | MIT | One AES challenge-hash test vector |
 | [Juggluco](https://github.com/j-kaltes/Juggluco) | GPL-3.0 | G7 authentication research and client certificate constants, via xDrip4iOS |
 | [xDrip+](https://github.com/NightscoutFoundation/xDrip) (Android) | GPL-3.0 | G7 protocol research |
 | [Mbed TLS](https://github.com/Mbed-TLS/mbedtls) v3.6.2 | Apache-2.0 OR GPL-2.0-or-later | EC J-PAKE self-test vectors used as test data |
 | [Loop](https://github.com/LoopKit/Loop) (LoopKit/Loop, next-dev) | MIT | Alert delivery approach: ringer-off `.playback` fallback, AlarmKit system alarms, stale/backfill guards, recovery margin, persisted alert state |
 | [Nightscout cgm-remote-monitor](https://github.com/nightscout/cgm-remote-monitor) 15.0.8 | AGPL-3.0 | REST API contract, authorization, entry dedupe, LOW/HIGH (39/401) conventions, alarm behaviour |
 | [share2nightscout-bridge](https://github.com/nightscout/share2nightscout-bridge) | GPL-3.0-only | Dexcom trend-code numbering |
+| [LoopFollow](https://github.com/loopandlearn/LoopFollow) v7.1.0 (`4a74b78`) | AGPL-3.0 | Follower alarm behaviour on sgv 39 (`docs/following.md`, D29) |
+| [nightguard](https://github.com/nightscout/nightguard) (`75404bd`) | AGPL-3.0 | How a follower displays 39/401 (`docs/following.md`) |
 | [LoopKit dexcom-share-client-swift](https://github.com/LoopKit/dexcom-share-client-swift) | MIT | Dexcom Share LOW/HIGH reading convention |
-| [Trio](https://github.com/nightscout/Trio) (owner's fork, `main` @ `29350e31a`) | AGPL-3.0 | App Group CGM contract (`docs/trio-bridge.md`), Nightscout upload settings. Integrated with through its documented App Group contract only; any Trio change lives in the owner's Trio fork. |
+| [Trio](https://github.com/nightscout/Trio) (owner's fork, `main` @ `29350e31a`) | AGPL-3.0 | App Group CGM contract (`docs/trio-bridge.md`), Nightscout upload settings. Integrated with through its documented App Group contract only; any Trio change lives in the owner's Trio fork. Its `trio-oref` (oref0 `dev` @ `8282ce7`) is cited for how the dosing algorithm treats 38/39 (`docs/trio-bridge.md`). |
 
 ## Fonts
 
