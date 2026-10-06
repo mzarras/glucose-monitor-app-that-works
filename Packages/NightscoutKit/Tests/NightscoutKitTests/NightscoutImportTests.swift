@@ -292,14 +292,25 @@ final class NightscoutImportTests: XCTestCase {
     }
 
     func test_concurrentRunIsRefused() async throws {
+        // Deterministic: the first run is held inside its first request, so it is provably still
+        // running when the second run starts.
         let server = try makeServer()
+        await server.holdNextRequest()
         let importer = try makeImporter(server: server, repository: InMemoryGlucoseReadingRepository())
-        async let first: NightscoutImportProgress = importer.run()
-        async let second: NightscoutImportProgress = importer.run()
-        var outcomes: [Bool] = []
-        do { _ = try await first; outcomes.append(true) } catch { XCTAssertEqual(error as? NightscoutImportError, .alreadyRunning); outcomes.append(false) }
-        do { _ = try await second; outcomes.append(true) } catch { XCTAssertEqual(error as? NightscoutImportError, .alreadyRunning); outcomes.append(false) }
-        XCTAssertEqual(outcomes.filter { $0 }.count, 1)
+        let first = Task { try await importer.run() }
+        await server.waitUntilHoldingRequest()
+
+        do {
+            _ = try await importer.run()
+            XCTFail("a second run while the first is running must be refused")
+        } catch {
+            XCTAssertEqual(error as? NightscoutImportError, .alreadyRunning)
+        }
+
+        await server.releaseHeldRequest()
+        let result = try await first.value
+        XCTAssertEqual(result.phase, .finished)
+        XCTAssertEqual(result.readingsImported, 10)
     }
 
     func test_userDefaultsCheckpointStoreRoundTrips() throws {
