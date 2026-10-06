@@ -20,18 +20,41 @@
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(BUNDLE_ID_PREFIX)</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- D26: urgent low rings as a system alarm on iOS 26+ (AlarmKit), even when silenced. -->
+	<key>NSAlarmKitUsageDescription</key>
+	<string>Sensor uses alarms so an urgent low glucose alert rings even when your phone is on silent.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Sensor connects to your G7 sensor over Bluetooth to receive glucose readings, including while the phone is locked.</string>
 	<key>TrioAppGroupID</key>
 	<string>$(TRIO_APP_GROUP_ID)</string>
 	<key>UIAppFonts</key>
-	<array/>
+	<array>
+		<string>Newsreader72pt-Light.ttf</string>
+		<string>Newsreader16pt-Regular.ttf</string>
+		<string>Newsreader16pt-Italic.ttf</string>
+		<string>IBMPlexSans-Regular.ttf</string>
+		<string>IBMPlexSans-Medium.ttf</string>
+		<string>IBMPlexSans-SemiBold.ttf</string>
+		<string>IBMPlexMono-Regular.ttf</string>
+		<string>IBMPlexMono-Medium.ttf</string>
+	</array>
 	<key>UIApplicationSupportsMultipleScenes</key>
 	<false/>
 	<key>UIBackgroundModes</key>

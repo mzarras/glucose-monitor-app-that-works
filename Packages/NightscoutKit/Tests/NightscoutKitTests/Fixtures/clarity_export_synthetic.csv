@@ -1,0 +1,25 @@
+﻿Index,Timestamp (YYYY-MM-DDThh:mm:ss),Event Type,Event Subtype,Patient Info,Device Info,Source Device ID,Glucose Value (mg/dL),Insulin Value (u),Carb Value (grams),Duration (hh:mm:ss),Glucose Rate of Change (mg/dL/min),Transmitter Time (Long Integer),Transmitter ID
+1,,FirstName,,Synthetic,,,,,,,,,
+2,,LastName,,Fixture,,,,,,,,,
+3,,DateOfBirth,,1/1/00,,,,,,,,,
+4,,Device,,,Dexcom G7 Mobile App,iOS G7,,,,,,,
+5,,Alert,Fall,,,iOS G7,,,,,3,,
+6,,Alert,High,,,iOS G7,250,,,,,,
+7,,Alert,Low,,,iOS G7,70,,,,,,
+8,,Alert,Urgent Low,,,iOS G7,55,,,,,,
+9,,Alert,Signal Loss,,,iOS G7,,,,00:20:00,,,
+10,2025-11-02T00:50:00,EGV,,,,iOS G7,118,,,,,86100,SYNTH1
+11,2025-11-02T00:55:00,EGV,,,,iOS G7,117,,,,,86400,SYNTH1
+12,2025-11-02T01:25:00,EGV,,,,iOS G7,110,,,,,88200,SYNTH1
+13,2025-11-02T01:30:00,EGV,,,,iOS G7,108,,,,,88500,SYNTH1
+14,2025-11-02T01:55:00,EGV,,,,iOS G7,104,,,,,90000,SYNTH1
+15,2025-11-02T01:00:00,EGV,,,,iOS G7,103,,,,,90300,SYNTH1
+16,2025-11-02T01:30:00,EGV,,,,iOS G7,99,,,,,92100,SYNTH1
+17,2025-11-02T02:00:00,EGV,,,,iOS G7,96,,,,,93900,SYNTH1
+18,2025-11-02T02:03:12,Calibration,,,,iOS G7,95,,,,,,SYNTH1
+19,2025-11-02T06:40:00,EGV,Low,,,iOS G7,Low,,,,,110700,SYNTH1
+20,2025-11-02T06:45:00,EGV,Low,,,iOS G7,Low,,,,,111000,SYNTH1
+21,2025-11-02T07:30:00,Insulin,Fast-Acting,,,iOS G7,,4.00,,,,,
+22,2025-11-02T07:31:00,Carbs,,,,iOS G7,,,30,,,,
+23,2025-11-02T14:10:00,EGV,High,,,iOS G7,High,,,,,137700,SYNTH1
+24,2025-11-02T14:15:00,EGV,,,,iOS G7,398,,,,-1.2,138000,SYNTH1

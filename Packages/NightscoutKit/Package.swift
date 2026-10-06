@@ -14,6 +14,11 @@ let package = Package(
     ],
     targets: [
         .target(name: "NightscoutKit", dependencies: ["GlucoseCore"]),
-        .testTarget(name: "NightscoutKitTests", dependencies: ["NightscoutKit"]),
+        .testTarget(
+            name: "NightscoutKitTests",
+            dependencies: ["NightscoutKit"],
+            // Nightscout entry pages and a synthetic Clarity export (no personal data).
+            resources: [.copy("Fixtures")]
+        ),
     ]
 )

@@ -13,11 +13,75 @@ public enum SensorState: Sendable, Equatable, Hashable, Codable {
     case active(sessionStart: Date, expiresAt: Date)
     case gracePeriod(endsAt: Date)
     case expired
-    case failed(reason: String)
+    /// Changed in Phase 2 (was `failed(reason: String)`): a structured kind for decisions (alerts,
+    /// banners, UI) plus the source's text for the person wearing the sensor.
+    case failed(SensorFailure)
     case error(code: Int, description: String)
+    /// Added in Phase 2: the sensor withholds readings until it is calibrated. `code` is the
+    /// source's raw algorithm state (documented by the source).
+    case calibrationNeeded(code: Int)
+    /// Added in Phase 2: the sensor rejected or could not use a calibration and withholds readings.
+    case calibrationError(code: Int)
     /// Added in Phase 0 (not in HANDOFF §4.3): S5 requires "BLE unavailable/unauthorized" to
     /// surface in the UI and as an alert, and none of the §4.3 cases can express it faithfully.
     case bluetoothUnavailable(BluetoothIssue)
+}
+
+/// Why a CGM source cannot deliver readings (S5). The source supplies `message`, written for the
+/// person wearing the sensor; consumers decide what to do from `kind`, never from the text.
+public struct SensorFailure: Sendable, Equatable, Hashable, Codable {
+    public enum Kind: String, Sendable, Equatable, Hashable, Codable, CaseIterable {
+        // The sensor itself is finished — replace it.
+        case sensorFailed
+        case sessionStopped
+        case unsupportedSensor
+        // This phone is not, or no longer, accepted by the sensor — pair again.
+        case pairingRejected
+        case pairingCodeNeeded
+        case bondRemoved
+        // A pairing in progress did not complete (user action during pairing).
+        case bluetoothPairingIncomplete
+        // Transient or environmental: readings may be withheld for a while.
+        case authenticationFailed
+        case rejectedAfterAuthentication
+        case otherAppRejected
+        case clockMismatch
+        case noGlucoseValue
+        case sessionLengthUnknown
+        case credentialsUnavailable
+        /// Anything a source cannot classify. Fails loud (S5): it raises the sensor alert.
+        case other
+    }
+
+    public let kind: Kind
+    public let message: String
+
+    public init(kind: Kind, message: String) {
+        self.kind = kind
+        self.message = message
+    }
+
+    /// No more readings will come from this sensor.
+    public var requiresSensorReplacement: Bool {
+        switch kind {
+        case .sensorFailed, .sessionStopped, .unsupportedSensor: return true
+        default: return false
+        }
+    }
+
+    /// Readings will not resume until the user pairs again.
+    public var requiresPairing: Bool {
+        switch kind {
+        case .pairingRejected, .pairingCodeNeeded, .bondRemoved: return true
+        default: return false
+        }
+    }
+
+    /// Whether the alert engine raises the sensor alert (S5): an ended sensor, a lost pairing, or a
+    /// failure the source could not classify. Transient kinds surface as banners; if they stop
+    /// readings for long, the missed-readings alert covers them — including after warm-up has
+    /// ended without any reading (the alert engine must not stay in warm-up suppression).
+    public var raisesSensorAlert: Bool { requiresSensorReplacement || requiresPairing || kind == .other }
 }
 
 /// Why Bluetooth cannot be used (maps from `CBManagerState`).
@@ -48,5 +112,11 @@ public struct SensorSession: Sendable, Equatable, Hashable, Codable {
         self.warmUpEndsAt = warmUpEndsAt
         self.expiresAt = expiresAt
         self.gracePeriodEndsAt = gracePeriodEndsAt
+    }
+
+    /// Non-empty serial and `start ≤ warmUpEndsAt ≤ expiresAt ≤ gracePeriodEndsAt`.
+    /// `LiveReadingGate` refuses every reading against a session that is not well formed.
+    public var isWellFormed: Bool {
+        !serial.isEmpty && start <= warmUpEndsAt && warmUpEndsAt <= expiresAt && expiresAt <= gracePeriodEndsAt
     }
 }

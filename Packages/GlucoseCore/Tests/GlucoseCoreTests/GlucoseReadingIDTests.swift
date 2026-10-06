@@ -2,12 +2,13 @@ import XCTest
 @testable import GlucoseCore
 
 final class GlucoseReadingIDTests: XCTestCase {
-    func test_S3_sensorIDDependsOnlyOnSerialAndSensorTimestamp() {
+    // Format only. The S3 proof (a live and a backfilled packet for the same reading yield the same
+    // id and date) belongs to the sources' fixture tests (G7Kit, ReplayKit) and the store's dedupe tests.
+    func test_sensorIDFormat() {
         XCTAssertEqual(GlucoseReading.sensorID(serial: "3M1234", sensorTimestamp: 86_400), "3M1234:86400")
-        XCTAssertEqual(
+        XCTAssertNotEqual(
             GlucoseReading.sensorID(serial: "3M1234", sensorTimestamp: 300),
-            GlucoseReading.sensorID(serial: "3M1234", sensorTimestamp: 300),
-            "live and backfilled copies of one reading must collide"
+            GlucoseReading.sensorID(serial: "3M1235", sensorTimestamp: 300)
         )
     }
 
