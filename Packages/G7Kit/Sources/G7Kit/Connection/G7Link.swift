@@ -19,8 +19,8 @@ protocol G7Link: G7ObservingLink {
 }
 
 /// The read-only view of a link that listen mode (D45) gets: it can subscribe to notifications but
-/// has no way to write to the sensor or to drop the connection, so "never write in listen mode" is
-/// enforced by the type system for `G7ListenCycle`.
+/// has no way to write to the sensor or to drop the connection, so the type system confines
+/// `G7ListenCycle`'s writes to its one `G7SessionLengthQuery` (the fixed `52`, D49).
 protocol G7ObservingLink: AnyObject {
     var peripheralIdentifier: UUID { get }
     /// The name iOS reports for the connected peripheral (may be "Dexcom…" rather than the

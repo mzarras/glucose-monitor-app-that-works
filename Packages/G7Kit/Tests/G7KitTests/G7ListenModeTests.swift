@@ -17,7 +17,7 @@ final class ListenHarness {
     var readings: [GlucoseReading] = []
     var states: [SensorState] = []
     /// Every link this harness handed to the controller (checked for writes).
-    private(set) var links: [FakeLink] = []
+    var links: [FakeLink] = []
     private(set) var controller: G7Controller!
     /// Phone time at which the sensor session started.
     let sessionStart: Date
@@ -90,14 +90,18 @@ final class G7ListenModeTests: XCTestCase {
         return harness
     }
 
-    /// Every listen-mode test also checks the hard constraint: nothing was ever written to the sensor,
-    /// the Dexcom app's link was never dropped, and only Receive_Authentication and Write_Control
-    /// were subscribed.
+    /// Every listen-mode test also checks the hard constraint (D45, D49): the only write ever made is
+    /// the `52` session-length query on Write_Control with response, at most once per connection;
+    /// the Dexcom app's link is never dropped; only Receive_Authentication and Write_Control are
+    /// subscribed. The D49 conditions for that one write are checked by the tests below.
     override func tearDown() {
         for harness in harnesses {
             for link in harness.links {
-                XCTAssertTrue(link.allWrites.isEmpty, "listen mode wrote to the sensor: \(link.allWrites.map(\.data.hexString))")
+                let other = link.writes.filter { !($0.data == Data([0x52]) && $0.characteristic == .writeControl && $0.withResponse) }
+                XCTAssertTrue(other.isEmpty, "listen mode wrote something other than the 52 query: \(other.map(\.data.hexString))")
+                XCTAssertLessThanOrEqual(link.writes.count, 1, "more than one write in one connection")
                 XCTAssertEqual(link.disconnectCount, 0, "listen mode dropped the Dexcom app's link")
+                XCTAssertTrue(Set(link.notifying).isSubset(of: [.receiveAuthentication, .writeControl]))
             }
         }
         harnesses = []
@@ -143,7 +147,7 @@ final class G7ListenModeTests: XCTestCase {
         XCTAssertTrue(harness.readings.isEmpty)
         XCTAssertNil(harness.record?.serial, "no sensor is followed without an observed authentication")
         XCTAssertEqual(harness.states.last, .failed(G7FailureReason.listenNoAuthenticatedConnection))
-        XCTAssertTrue(harness.log.messages.contains { $0.contains("without an observed authenticated status ignored") })
+        XCTAssertTrue(harness.log.messages.contains { $0.contains("without proof of an authenticated link ignored") })
     }
 
     /// The session must come from what the sensor sends: without an observed `52` (only the Dexcom app
@@ -207,11 +211,12 @@ final class G7ListenModeTests: XCTestCase {
         XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(122)], "the next wake is checked again")
     }
 
-    /// The hard constraint, end to end: a whole listen session — attach, observe, readings in both
-    /// formats, a rejection, a calibration attempt, relaunch, recording on — never writes to the
-    /// sensor, never drops the link, subscribes only to Receive_Authentication and Write_Control, and
-    /// refuses calibration.
-    func test_S2_listenModeNeverWritesToTheSensor() throws {
+    /// The hard constraint, end to end, when the session length is observed (another app asked
+    /// `52`): a whole listen session — attach, observe, readings in both formats, the Dexcom app's
+    /// other traffic, a calibration attempt, relaunch, recording on — writes nothing at all, never
+    /// drops the link, subscribes only to Receive_Authentication and Write_Control, and refuses
+    /// calibration.
+    func test_S2_listenModeWritesNothingWhenTheSessionLengthIsObserved() throws {
         let store = G7InMemoryCredentialStore()
         let harness = makeHarness(store: store, recordsRaw: true)
         try harness.controller.start(pairingCode: nil)
@@ -250,7 +255,165 @@ final class G7ListenModeTests: XCTestCase {
         }
     }
 
+    // MARK: - D49: proof of an authenticated link
+
+    /// The `05` arriving after this app subscribed (the normal order) proves the link.
+    func test_S2_statusArrivingAfterOurSubscriptionIsHandled() throws {
+        let harness = makeHarness()
+        try harness.controller.start(pairingCode: nil)
+        harness.central.connected = [G7ConnectedSensor(name: "DXCM4F", identifier: harness.identifier)]
+        harness.controller.didDiscover(name: "DXCM4F", identifier: harness.identifier)
+        let link = FakeLink(identifier: harness.identifier)
+        harness.links.append(link)
+        harness.controller.didConnect(link: link, availableCharacteristics: Set(G7Characteristic.allCases))
+        XCTAssertEqual(link.notifyRequests.map { $0.0 }, [.receiveAuthentication], "not followed yet: Write_Control waits for proof")
+        link.notifying.insert(.receiveAuthentication)
+        harness.controller.notificationStateChanged(for: .receiveAuthentication, isNotifying: true, error: nil)
+        harness.controller.valueUpdated(for: .receiveAuthentication, value: Data([0x05, 0x01, 0x01]))
+        XCTAssertEqual(link.notifyRequests.last?.0, .writeControl)
+        link.notifying.insert(.writeControl)
+        harness.controller.valueUpdated(for: .writeControl, value: Fixture.tenDayExtendedVersion)
+        harness.controller.valueUpdated(for: .writeControl, value: harness.dexcomGlucose(118))
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(118)])
+        XCTAssertTrue(harness.log.messages.contains { $0.contains("proven by authenticated and bonded 05") })
+    }
+
+    /// D49: the followed sensor's Write_Control is subscribed at once, so if the `05` was missed, a
+    /// valid status-0 `0x4E` (encrypted link, sent only to an authenticated client) proves the link
+    /// and the wake is not lost.
+    func test_S2_missedStatusButValidGlucoseIsProof() throws {
+        let harness = makeHarness()
+        try harness.controller.start(pairingCode: nil)
+        harness.wake(frames: [Fixture.tenDayExtendedVersion, harness.dexcomGlucose(120)])
+        harness.clock.advance(300)
+        let link = harness.wake(auth: nil, frames: [harness.dexcomGlucose(121)])
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(121)])
+        XCTAssertTrue(link.notifying.contains(.writeControl))
+        XCTAssertTrue(harness.log.messages.contains { $0.contains("proven by status-0 0x4E on Write_Control") })
+        XCTAssertNotEqual(harness.states.last, .failed(G7FailureReason.listenNoAuthenticatedConnection))
+    }
+
+    /// D49: a non-zero-status `0x4E` (a status reply that may be cached) or a `0x31`/`0x25` pair is not
+    /// proof; nor is a status-0 `0x4E` from a sensor that is not followed yet. Nothing is published or
+    /// written.
+    func test_S2_nonZeroStatusGlucoseAloneIsNotProof() throws {
+        let harness = makeHarness()
+        try harness.controller.start(pairingCode: nil)
+        harness.wake(frames: [Fixture.tenDayExtendedVersion, harness.dexcomGlucose(120)])
+        let base: UInt32 = 9_000_000
+        for _ in 0..<2 {
+            harness.clock.advance(300)
+            harness.wake(auth: nil, frames: [harness.dexcomGlucose(130, status: 0x80),
+                                             Fixture.coexistenceGlucose(readingTransmitterTime: base + harness.sensorClock - 5, glucose: 131),
+                                             Fixture.transmitterTime(current: base + harness.sensorClock, sessionStart: base)])
+        }
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120)])
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.listenNoAuthenticatedConnection))
+        XCTAssertTrue(harness.links.allSatisfy { $0.writes.isEmpty })
+
+        let unfollowed = makeHarness()
+        try unfollowed.controller.start(pairingCode: nil)
+        unfollowed.wake(auth: nil, frames: [Fixture.tenDayExtendedVersion, unfollowed.dexcomGlucose(140)])
+        XCTAssertTrue(unfollowed.readings.isEmpty)
+        XCTAssertNil(unfollowed.record?.serial)
+    }
+
+    // MARK: - D49: the one 52 query
+
+    /// No `52` observed: none is sent at the first wake with proof (other apps may still ask); from
+    /// the second, exactly one per connection, after a glucose report; its answer establishes the
+    /// session; then no more queries.
+    func test_S2_sessionLengthQueriedOnceFromTheSecondProvenWake() throws {
+        let harness = makeHarness()
+        try harness.controller.start(pairingCode: nil)
+        let first = harness.wake(frames: [harness.dexcomGlucose(120)])
+        XCTAssertTrue(first.writes.isEmpty, "first wake with proof: only observe")
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.listenSessionLengthUnknown))
+
+        harness.clock.advance(300)
+        let base: UInt32 = 3_000_000
+        let second = harness.wake(frames: [harness.dexcomGlucose(121),
+                                           Fixture.coexistenceGlucose(readingTransmitterTime: base + harness.sensorClock - 4, glucose: 121),
+                                           Fixture.transmitterTime(current: base + harness.sensorClock, sessionStart: base),
+                                           harness.dexcomGlucose(121, age: 4)], disconnect: false)
+        XCTAssertEqual(second.writes.map(\.data), [Data([0x52])], "one query in this connection")
+        XCTAssertEqual(second.writes.first?.characteristic, .writeControl)
+        XCTAssertEqual(second.writes.first?.withResponse, true)
+        harness.controller.valueUpdated(for: .writeControl, value: Fixture.tenDayExtendedVersion) // its answer
+        harness.controller.didDisconnect(peripheralIdentifier: harness.identifier)
+        XCTAssertEqual(harness.record?.reportedSessionLength, 907_200)
+        XCTAssertNil(harness.controller.currentSession, "the start comes from the next status-0 reading")
+
+        harness.clock.advance(300)
+        let third = harness.wake(frames: [harness.dexcomGlucose(122)])
+        XCTAssertTrue(third.writes.isEmpty, "the session length is known")
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(122)])
+        XCTAssertNotNil(harness.controller.currentSession)
+        XCTAssertTrue(harness.log.messages.contains { $0.contains("one 52 query sent (D49)") })
+    }
+
+    /// A `52` answer another app asked for (Trio's G7SensorKit, the Dexcom app) is used and nothing is
+    /// written; without proof nothing is written either, at any wake.
+    func test_S2_observedSessionLengthOrNoProofMeansNoWrite() throws {
+        let harness = makeHarness()
+        try harness.controller.start(pairingCode: nil)
+        harness.wake(frames: [harness.dexcomGlucose(120)])
+        harness.clock.advance(300)
+        harness.wake(frames: [Fixture.tenDayExtendedVersion, harness.dexcomGlucose(121)])
+        harness.clock.advance(300)
+        harness.wake(frames: [harness.dexcomGlucose(122)])
+        XCTAssertTrue(harness.links.allSatisfy { $0.writes.isEmpty })
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(121), .mgdl(122)])
+
+        let unproven = makeHarness()
+        try unproven.controller.start(pairingCode: nil)
+        unproven.wake(frames: [unproven.dexcomGlucose(120)]) // followed, session length unknown
+        for _ in 0..<3 {
+            unproven.clock.advance(300)
+            unproven.wake(auth: nil, frames: [unproven.dexcomGlucose(121, status: 0x80)])
+            unproven.wake(auth: Data([0x05, 0x00, 0x02]), frames: [])
+        }
+        XCTAssertTrue(unproven.links.allSatisfy { $0.writes.isEmpty }, "no proof, no write")
+    }
+
+    /// A malformed answer establishes no session (the next connection may ask once more); a 15-day
+    /// answer refuses the sensor and stops the queries.
+    func test_S2_malformedSessionLengthResponseEstablishesNoSession() throws {
+        let harness = makeHarness()
+        try harness.controller.start(pairingCode: nil)
+        harness.wake(frames: [harness.dexcomGlucose(120)])
+        harness.clock.advance(300)
+        harness.wake(frames: [harness.dexcomGlucose(121), Data([0x52, 0x00])])
+        XCTAssertNil(harness.record?.reportedSessionLength)
+        XCTAssertNil(harness.controller.currentSession)
+        XCTAssertTrue(harness.log.messages.contains { $0.contains("malformed 0x52") })
+        harness.clock.advance(300)
+        let third = harness.wake(frames: [harness.dexcomGlucose(122), Fixture.fifteenDayExtendedVersion])
+        XCTAssertEqual(third.writes.count, 1, "one more query in a new connection")
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.unsupportedSensor))
+        harness.clock.advance(300)
+        let fourth = harness.wake(frames: [harness.dexcomGlucose(123)])
+        XCTAssertTrue(fourth.writes.isEmpty, "an unsupported sensor is not asked again")
+        XCTAssertTrue(harness.readings.isEmpty)
+        XCTAssertEqual(harness.links.map(\.writes.count), [0, 1, 1, 0])
+    }
+
     // MARK: - S3
+
+    /// D49 item 3: if the `0x31`/`0x25` time base disagrees with `0x4E`'s, it shows as a clock
+    /// mismatch, never as silently wrong dates.
+    func test_S3_timeBaseDisagreementShowsAsClockMismatch() throws {
+        let harness = makeHarness()
+        try harness.controller.start(pairingCode: nil)
+        harness.wake(frames: [Fixture.tenDayExtendedVersion, harness.dexcomGlucose(120)])
+        harness.clock.advance(300)
+        let base: UInt32 = 5_000_000
+        // The pair's session time is 3 600 s more than 0x4E's sensor clock for the same moment.
+        harness.wake(frames: [Fixture.coexistenceGlucose(readingTransmitterTime: base + harness.sensorClock + 3_600 - 5, glucose: 121),
+                              Fixture.transmitterTime(current: base + harness.sensorClock + 3_600, sessionStart: base)])
+        XCTAssertEqual(harness.readings.count, 1)
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.sensorClockMismatch))
+    }
 
     /// The captured G7 coexistence pair (xDrip Tests/DexcomG7CalibrationTests.swift:344-357): the
     /// reading is put in session time (transmitter time − session start = 233 027 s), dated from the

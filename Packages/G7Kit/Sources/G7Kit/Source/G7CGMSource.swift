@@ -11,8 +11,9 @@ import GlucoseCore
 /// created once with unbounded buffering, never finished, one consumer each.
 ///
 /// Two modes (D45, `G7ConnectionMode`): primary (above) and listen, where the Dexcom app on the
-/// same phone owns the connection and this source only observes it — no pairing code, no writes to
-/// the sensor; start it with `start(pairingCode: nil)` after choosing `.listen`.
+/// same phone owns the connection and this source only observes it — no pairing code, and no write
+/// to the sensor except one read-only `52` session-length query per connection when the session
+/// length was not observed (D49); start it with `start(pairingCode: nil)` after choosing `.listen`.
 ///
 /// Settings support: `pair(code:)` (a new sensor), `pairAgain(code:)` (the same sensor, after it
 /// refused this phone), `forgetSensor()`. There is no "stop session": xDrip4iOS
@@ -144,7 +145,7 @@ public final class G7CGMSource: CalibratingCGMSource, @unchecked Sendable {
         try result.get()
     }
 
-    /// Calibration needs primary mode (listen mode never writes to the sensor; `submitCalibration`
+    /// Calibration needs primary mode (listen mode never sends calibrations; `submitCalibration`
     /// refuses with `.notAuthenticated` there).
     public var supportsCalibration: Bool {
         get async { await onQueue { self.controller.mode != .listen } }
