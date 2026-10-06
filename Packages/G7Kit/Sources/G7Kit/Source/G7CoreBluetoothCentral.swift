@@ -51,6 +51,14 @@ final class G7CoreBluetoothCentral: NSObject, G7CentralDriving, CBCentralManager
         manager.stopScan()
     }
 
+    /// No `isScanning` guard: it need not turn false synchronously after `stopScan()`, which would
+    /// make a stop-then-scan pair skip the new scan (review of c9bf0a9).
+    func restartScan() {
+        guard let manager, manager.state == .poweredOn else { return }
+        manager.stopScan()
+        manager.scanForPeripherals(withServices: [CBUUID(string: G7GATT.advertisementServiceUUID)], options: nil)
+    }
+
     func connect(peripheralIdentifier: UUID) -> Bool {
         guard let manager, manager.state == .poweredOn else { return false }
         let peripheral = peripherals[peripheralIdentifier]

@@ -8,6 +8,9 @@ protocol G7CentralDriving: AnyObject {
     /// Scans for the G7 advertisement service (FEBC), which also works in the background.
     func scanForSensors()
     func stopScanning()
+    /// Stops and starts the FEBC scan unconditionally, so the next advertisement of an already
+    /// reported peripheral is a new discovery (iOS coalesces repeats within one scan session).
+    func restartScan()
     /// Requests a connection to a peripheral iOS already knows. The request never times out, so
     /// iOS connects whenever the sensor next advertises, even with the app suspended — the design
     /// for the G7's ~5-minute advertise/connect cycle (HANDOFF §4.6). Returns false if iOS does not

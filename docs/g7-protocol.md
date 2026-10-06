@@ -929,10 +929,14 @@ xDrip4iOS 7.1.1 coexistence fix 00c144e8 relies on the same request); iOS shares
 link with the Dexcom app. Only the followed sensor is retried after a failed connect (review m3).
 When a connect or attach to it fails before a cycle could start (e.g. service discovery failed):
 - if the Dexcom app still holds the link (the sensor is system-connected), the retry waits 30 s,
-  doubling to 5 min, never at once on that link (review m6); meanwhile the scan is restarted, so the
-  sensor's next advertisement — it advertises again once that link drops — is a new discovery, which
-  also wakes a suspended app; that discovery ends the backoff and arms the pending connection
-  (review N1);
+  doubling to 5 min, never at once on that link (review m6); meanwhile the scan is restarted
+  (`restartScan`: stop and scan unconditionally, not relying on `isScanning` turning false at once),
+  so the sensor's next advertisement — it advertises again once that link drops — is a new
+  discovery, which also wakes a suspended app (a timer would not run). That discovery is a new
+  sensor wake: it ends the backoff and attaches once — also when the Dexcom app's own pending
+  connection has already reconnected the sensor by the time this app handles it (review N1b). A
+  repeated discovery in the same wake does not attach again; if the attach fails, the backoff grows
+  and the scan is restarted again. One attach per advertisement cannot loop;
 - otherwise the pending connection is armed at once (it completes only at the next advertisement,
   so it cannot loop) — a suspended app runs no timers, and a pending connection is what lets iOS
   wake it (review N1);
