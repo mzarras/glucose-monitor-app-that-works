@@ -47,6 +47,27 @@ actor MockNightscoutServer: MockBackend {
         self.entries = entries
     }
 
+    // Hold gate: makes "a request is in flight" a state a test can wait for and end, so tests of
+    // concurrent calls do not depend on scheduling (no sleeps).
+    private var holdNext = false
+    private var heldRequest: CheckedContinuation<Void, Never>?
+    private var holdWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// The next request waits inside the server until `releaseHeldRequest()`.
+    func holdNextRequest() { holdNext = true }
+
+    /// Returns once a request is being held.
+    func waitUntilHoldingRequest() async {
+        if heldRequest != nil { return }
+        await withCheckedContinuation { holdWaiters.append($0) }
+    }
+
+    /// Lets the held request continue.
+    func releaseHeldRequest() {
+        heldRequest?.resume()
+        heldRequest = nil
+    }
+
     func setReadableWithoutToken(_ value: Bool) { readableWithoutToken = value }
     func setIgnoresTypeFilter(_ value: Bool) { ignoresTypeFilter = value }
     func script(_ replies: [MockReply]) { scripted = replies }
@@ -56,6 +77,14 @@ actor MockNightscoutServer: MockBackend {
 
     func handle(_ request: MockHTTPRequest) async -> MockReply {
         requests.append(request)
+        if holdNext {
+            holdNext = false
+            await withCheckedContinuation { continuation in
+                heldRequest = continuation
+                holdWaiters.forEach { $0.resume() }
+                holdWaiters.removeAll()
+            }
+        }
         if let limit = offlineAfterRequests, requests.count > limit { return .transportFailure("offline") }
         if !scripted.isEmpty { return scripted.removeFirst() }
         guard request.path == "/api/v1/entries.json" || request.path == "/api/v1/entries" else {
