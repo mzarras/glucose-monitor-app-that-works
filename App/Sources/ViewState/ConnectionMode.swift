@@ -147,6 +147,14 @@ struct ListenFailureText: Equatable, Sendable {
 
 /// D45 rules the screens apply while listening. Pure; unit-tested.
 enum ListenModeRules {
+    /// "Stop following this sensor" is offered only while a sensor is followed (its serial is known,
+    /// from the session or G7Kit's followed sensor). After it the services look for the next sensor at
+    /// once (`LiveAppServices.forgetSensor`), so the state goes back to searching rather than staying
+    /// "not paired": the state cannot tell whether there is anything left to stop following.
+    static func offersStopFollowing(_ sensor: SensorSettings) -> Bool {
+        sensor.serial != nil
+    }
+
     /// G7Kit's three transient listen-mode failures (`G7FailureReason.listen…`), recognised by kind
     /// while listening (D36: decisions from the kind). Nil for anything else, which keeps its usual
     /// wording.

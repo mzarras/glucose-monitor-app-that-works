@@ -301,16 +301,12 @@ final class ReplayLaunchUITests: XCTestCase {
         XCTAssertTrue(element(app, "settings.sensor.listeningNotes").exists, "calibrate and pair explained, not offered")
         XCTAssertFalse(app.buttons["Calibrate with a fingerstick…"].exists)
         XCTAssertFalse(element(app, "settings.sensor.forget").exists, "no Forget while listening…")
-        let stopFollowing = element(app, "settings.sensor.stopFollowing")
-        reveal(app, stopFollowing)
-        XCTAssertTrue(stopFollowing.isHittable, "…but Stop following this sensor (G7Kit §14)")
+        // …and Stop following this sensor (G7Kit §14) only while a sensor is followed, which never
+        // happens on a simulator (ListenModeRules.offersStopFollowing; that the services then look for
+        // the next sensor at once is ListenModeServicesTests.test_stopFollowingInListenModeFollowsTheNextSensor).
+        XCTAssertFalse(element(app, "settings.sensor.stopFollowing").exists, "nothing is followed: nothing to stop following")
         try saveScreenshot("listen-sensor-page")
-        // Stop following (confirmed): the sensor is forgotten; the page no longer offers it.
-        stopFollowing.tap()
-        confirm(app, "Stop following this sensor")
         let gone = NSPredicate(format: "exists == false")
-        expectation(for: gone, evaluatedWith: stopFollowing)
-        waitForExpectations(timeout: timeout)
         XCTAssertTrue(element(app, "connection.listeningStatus").exists, "still listening")
         app.navigationBars.buttons.firstMatch.tap()
         element(app, "settings.nightscout").tap()

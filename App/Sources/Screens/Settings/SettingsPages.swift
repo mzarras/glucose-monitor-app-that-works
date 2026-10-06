@@ -94,7 +94,7 @@ struct SensorSettingsView: View {
             ExplanationNote(text: ConnectionModeText.pairingWhileListening)
         }
         .accessibilityIdentifier("settings.sensor.listeningNotes")
-        if sensor.state != .notPaired {
+        if ListenModeRules.offersStopFollowing(sensor) {
             // G7Kit §14: forgetting the followed sensor is how listen mode follows the next one.
             VStack(alignment: .leading, spacing: 6) {
                 Button(ConnectionModeText.stopFollowingButton) { confirmingStopFollowing = true }

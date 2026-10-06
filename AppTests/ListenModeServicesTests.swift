@@ -201,6 +201,13 @@ final class ListenModeServicesTests: XCTestCase {
 
     // MARK: - Forgetting ("Stop following this sensor" in listen mode)
 
+    /// Settings › Sensor's state from the facade, as AppModel maps it.
+    private func settings(_ harness: LiveServicesHarness) -> SensorSettings {
+        SettingsMapping.sensor(state: harness.services.sensorState, session: harness.services.sensorSession,
+                               storedSerial: harness.services.storedSensorSerial, canStopSession: false, bluetooth: .allowed,
+                               failureSince: nil, pairingInProgress: false)
+    }
+
     /// Listen mode: forgetting stops following this sensor and looks for the Dexcom app's connection
     /// to the next one at once (no code, no relaunch); the next sensor is followed, and the stored
     /// sensor state and G7Kit's backfill floor follow it.
@@ -217,6 +224,7 @@ final class ListenModeServicesTests: XCTestCase {
                 && harness.sensor.latestStoredReadingCalls.last?.reading?.id == old.id
         }
         XCTAssertFalse(harness.services.hasStoredSensor, "nothing is paired in listen mode")
+        XCTAssertTrue(ListenModeRules.offersStopFollowing(settings(harness)), "a sensor is followed: Stop following is offered")
         let starts = harness.sensor.startCount
         let floorCalls = harness.sensor.latestStoredReadingCalls.count
 
@@ -228,6 +236,7 @@ final class ListenModeServicesTests: XCTestCase {
         XCTAssertFalse(harness.services.hasStoredSensor)
         XCTAssertEqual(harness.sensor.latestStoredReadingCalls.count, floorCalls, "no floor without a followed sensor")
         XCTAssertEqual(harness.services.connectionMode, .listen, "still listening")
+        XCTAssertFalse(ListenModeRules.offersStopFollowing(settings(harness)), "nothing followed: nothing to stop following")
 
         // The Dexcom app connects to a new sensor; it is followed.
         let nextSerial = "DXCM99-0A0B0C0D"
@@ -239,6 +248,7 @@ final class ListenModeServicesTests: XCTestCase {
         persistence.clock.advance(by: 5 * 60)
         await harness.deliver(state: .active(sessionStart: nextSession.start, expiresAt: nextSession.expiresAt))
         await waitUntil("next sensor followed") { harness.services.storedSensorSerial == nextSerial }
+        XCTAssertTrue(ListenModeRules.offersStopFollowing(settings(harness)))
         await waitUntil("floor for the next sensor") { harness.sensor.latestStoredReadingCalls.last?.serial == nextSerial }
         XCTAssertNil(harness.sensor.latestStoredReadingCalls.last?.reading, "none of the next sensor's readings is stored yet")
 
