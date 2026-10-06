@@ -97,7 +97,7 @@ let designs: [Design] = [
 ]
 
 /// The design that becomes AppIcon.png (and its dark and tinted variants).
-let chosenName = "B"
+let chosenName = "A"
 
 // MARK: - Font
 
