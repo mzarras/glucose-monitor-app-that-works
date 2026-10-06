@@ -398,12 +398,51 @@ final class ScriptedSensorDevice: SensorDevice, @unchecked Sendable {
         if fails { throw G7StartError.credentialStoreFailed("Keychain unavailable before the first unlock") }
     }
     func stop() async {}
-    func pair(code: String) async throws {}
-    func pairAgain(code: String) async throws {}
+    func pair(code: String) async throws {
+        if lock.withLock({ currentMode == .listen }) { throw G7StartError.notAvailableInListenMode }
+    }
+    func pairAgain(code: String) async throws {
+        if lock.withLock({ currentMode == .listen }) { throw G7StartError.notAvailableInListenMode }
+    }
     func forgetSensor() async {}
     var heartbeatTarget: G7HeartbeatTarget? { get async { nil } }
     var hasStoredSensor: Bool { get async { true } }
     var storedSensorSerial: String? { get async { PipelineFixtures.serial } }
+
+    // D45 / D47 / audit m1, recorded.
+    private var currentMode: G7ConnectionMode = .primary(slot: .recommendedDefault)
+    private var modeChanges: [G7ConnectionMode] = []
+    private var failsToSetMode = false
+    private var recording: [Bool] = []
+    private var floors: [(reading: GlucoseReading?, serial: String)] = []
+
+    /// Starts in `mode` (what `G7Configuration.mode` would say).
+    func configure(mode: G7ConnectionMode) { lock.withLock { currentMode = mode } }
+    var mode: G7ConnectionMode { get async { lock.withLock { currentMode } } }
+    /// Every successful `setMode`, in order.
+    var modeHistory: [G7ConnectionMode] { lock.withLock { modeChanges } }
+    /// True: `setMode` fails as G7Kit's does when the stored pairing cannot be deleted.
+    var setModeFails: Bool {
+        get { lock.withLock { failsToSetMode } }
+        set { lock.withLock { failsToSetMode = newValue } }
+    }
+    func setMode(_ mode: G7ConnectionMode) async throws {
+        let fails = lock.withLock { failsToSetMode }
+        if fails { throw G7StartError.credentialStoreFailed("Keychain unavailable") }
+        lock.withLock {
+            currentMode = mode
+            modeChanges.append(mode)
+        }
+        deliver(state: mode == .listen ? .searching : .notPaired)
+    }
+    var supportsCalibration: Bool { get async { lock.withLock { currentMode != .listen } } }
+    var recordingChanges: [Bool] { lock.withLock { recording } }
+    func setRecordsRawGlucosePackets(_ enabled: Bool) async { lock.withLock { recording.append(enabled) } }
+    /// Every `setLatestStoredReading` call, in order.
+    var latestStoredReadingCalls: [(reading: GlucoseReading?, serial: String)] { lock.withLock { floors } }
+    func setLatestStoredReading(_ reading: GlucoseReading?, forSerial serial: String) async {
+        lock.withLock { floors.append((reading, serial)) }
+    }
     var acceptedCalibrationRange: ClosedRange<Int> { 40...400 }
     func submitCalibration(_ request: CalibrationRequest) async throws(CalibrationRefusal) {}
 

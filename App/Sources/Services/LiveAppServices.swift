@@ -61,6 +61,12 @@ final class LiveAppServices: AppServices {
         /// The foreground ticker's period (drain attempt, Trio retry, heartbeat, clock check); tests
         /// shorten it.
         var foregroundTickInterval: Duration = .seconds(60)
+        /// D45/D47: the sensor connection settings file the G7 source was created with
+        /// (`SensorConnectionSettings`; production: Application Support/SensorConnection.json).
+        /// The default, a file in a fresh temporary directory, is for tests.
+        var connectionSettings = SensorConnectionSettingsStore(
+            fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("SensorConnection-\(UUID().uuidString).json")
+        )
     }
 
     struct LaunchReplay: Equatable {
@@ -88,6 +94,7 @@ final class LiveAppServices: AppServices {
     private let openStore: @Sendable (URL, any DiagnosticLog) async throws -> GlucoseStore
     private let protectedDataAvailable: @MainActor () -> Bool
     private let foregroundTickInterval: Duration
+    let connectionSettingsStore: SensorConnectionSettingsStore
     let historyImports: HistoryImportCoordinator
 
     /// The G7 pipeline, for the whole process.
@@ -133,6 +140,10 @@ final class LiveAppServices: AppServices {
     /// baseline for "a sensor is stored now that was not before").
     private(set) var storedSensorKnown = false
     private(set) var storedSensorSerial: String?
+    /// D45/D47, as saved (and as the G7 source was created with at launch).
+    var connectionSettings = SensorConnectionSettings.defaults
+    /// False in listen mode (calibrate in the Dexcom app); read from the source.
+    var supportsCalibration = true
     var nightscoutHasToken = false
     var shareAccountName: String?
     var shareHasPassword = false
@@ -154,6 +165,10 @@ final class LiveAppServices: AppServices {
         openStore = dependencies.openStore
         protectedDataAvailable = dependencies.isProtectedDataAvailable
         foregroundTickInterval = dependencies.foregroundTickInterval
+        connectionSettingsStore = dependencies.connectionSettings
+        let loaded = dependencies.connectionSettings.load()
+        connectionSettings = loaded.settings
+        supportsCalibration = loaded.settings.mode != .listen
         historyImports = HistoryImportCoordinator(diagnostics: dependencies.diagnostics)
         sensorPipeline = ReadingPipeline(name: "sensor", source: dependencies.g7, diagnostics: dependencies.diagnostics, now: dependencies.clock)
         // B1: no widget snapshot until the store is open — before that the latest reading is
@@ -168,6 +183,10 @@ final class LiveAppServices: AppServices {
             }
         }
         sensorPipeline.onBatchProcessed = { [weak self] in self?.sensorBatchProcessed() }
+        // Audit m1: G7Kit's publication floor follows every successful store write.
+        sensorPipeline.outputs.readingsStored = { [weak self] _ in
+            Task { await self?.updateG7StoredFloor() }
+        }
         sensorPipeline.outputs.sensorStateProcessed = { [weak self] _ in
             Task {
                 await self?.refreshStoredSensor()
@@ -196,7 +215,9 @@ final class LiveAppServices: AppServices {
                 self?.protectedDataDidBecomeAvailable()
             }
         }
-        log(.app, "launch: G7 source created (restore id \(G7Configuration.defaultRestoreIdentifier))")
+        log(.app, "launch: G7 source created (restore id \(G7Configuration.defaultRestoreIdentifier)), \(connectionSettings.g7Mode.summary)"
+            + (connectionSettings.recordsRawGlucosePackets ? ", raw glucose packet recording on (D47)" : ""))
+        if let problem = loaded.problem { log(.sensor, problem) }
         logMonotonicClock()
         Task { await self.startG7() }
     }
@@ -342,6 +363,7 @@ final class LiveAppServices: AppServices {
         case .invalidPairingCode: return .invalidCode
         case .credentialStoreFailed(let message): return .credentialStoreFailed(message)
         case .noSensorToPairAgain: return .noSensorToPairAgain
+        case .notAvailableInListenMode: return .notAvailableInListenMode
         }
     }
 
@@ -360,10 +382,12 @@ final class LiveAppServices: AppServices {
         // Before bootstrap the pairing record may be unreadable (first unlock): not yet known.
         let known = storedSensorKnown || isBootstrapped
         guard has != hasStoredSensor || serial != storedSensorSerial || known != storedSensorKnown else { return }
+        let serialChanged = serial != storedSensorSerial
         hasStoredSensor = has
         storedSensorSerial = serial
         storedSensorKnown = known
         send(.sensor)
+        if serialChanged { await updateG7StoredFloor() }
     }
 
     func startG7() async {
@@ -509,7 +533,7 @@ final class LiveAppServices: AppServices {
         alertDelivery = AlertDeliveryReport(of: alerts)
         send(.alertDelivery)
 
-        trioCoordinator.configure(enabled: preferences.trioBridgeEnabled, liveOutputsAllowed: liveOutputsAllowed)
+        configureTrio()
         trioCoordinator.start()
         await applyUploadConfiguration()
         sensorPipeline.outputs.widget = widget
@@ -524,6 +548,7 @@ final class LiveAppServices: AppServices {
         sensorPipeline.activate()
         let storeOpening = Task { await self.openStoreIfNeeded() }
         await startG7()
+        await refreshConnectionFromSource()
         await refreshStoredSensor()
         await updateTrioHeartbeat()
         updateClockMismatchLatch(now: now())
@@ -597,6 +622,7 @@ final class LiveAppServices: AppServices {
             await sensorPipeline.publishWidget()
             updateClockMismatchLatch(now: now())
             await reseedTrio()
+            await updateG7StoredFloor()
             await purgeIfDue()
             await refreshStorageSummary()
         } catch {
@@ -755,5 +781,14 @@ extension StoreAvailability {
             return .failed(message: "\(heldReadings) reading(s) are held in memory: \(insertProblem)")
         }
         return .open
+    }
+}
+
+extension LiveAppServices.Dependencies {
+    /// The same dependencies with the sensor connection settings file the G7 source was created with.
+    func with(connectionSettings: SensorConnectionSettingsStore) -> Self {
+        var copy = self
+        copy.connectionSettings = connectionSettings
+        return copy
     }
 }

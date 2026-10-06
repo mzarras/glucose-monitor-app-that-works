@@ -65,11 +65,18 @@ final class TrioCoordinator {
         }
     }
 
-    /// The user's switch and the D20 DEBUG switch (always true in Release).
-    func configure(enabled: Bool, liveOutputsAllowed: Bool) {
+    /// The user's switch, the D20 DEBUG switch (always true in Release) and D45 listen mode, which
+    /// turns the handoff off whatever the switch says: nothing is written to Trio's App Group while
+    /// listening (readings, heartbeat keys, removals), Trio keeps its own CGM path.
+    func configure(enabled: Bool, liveOutputsAllowed: Bool, listening: Bool = false) {
         summary.isEnabled = enabled
         summary.liveOutputsAllowed = liveOutputsAllowed
-        if enabled, liveOutputsAllowed, bridge == nil {
+        if listening != summary.offWhileListening {
+            log(listening ? "off while the sensor is in listen mode (D45)" : "listen mode ended")
+        }
+        summary.offWhileListening = listening
+        summary.refreshStarvation(now: clock())
+        if enabled, liveOutputsAllowed, !listening, bridge == nil {
             // Turned on, but this build cannot reach Trio at all: fail loud (S5, review minor 4).
             summary.unavailableReason = "This build has no Trio App Group (Info.plist TrioAppGroupID is missing), so nothing reaches Trio. Rebuild with the team ID set (docs/trio-bridge.md, Setup)."
             summary.problemSince = summary.problemSince ?? clock()
@@ -81,9 +88,10 @@ final class TrioCoordinator {
         onChange?(summary)
     }
 
-    /// The bridge the pipeline should write to: nil while off, not allowed, or unavailable.
+    /// The bridge the pipeline should write to: nil while off, not allowed, listening (D45), or
+    /// unavailable.
     var activeBridge: TrioBridge? {
-        summary.isEnabled && summary.liveOutputsAllowed ? bridge : nil
+        summary.isEnabled && summary.liveOutputsAllowed && !summary.offWhileListening ? bridge : nil
     }
 
     /// The pipeline's path to Trio: gate-passed readings (the bridge gates them again). Returns nil
@@ -181,7 +189,7 @@ final class TrioCoordinator {
     /// The user turned the bridge off: remove this app's readings and the heartbeat keys from
     /// Trio's App Group (docs/trio-bridge.md "Heartbeat wiring").
     func removeEverythingFromTrio() async {
-        guard let bridge else { return }
+        guard let bridge, !summary.offWhileListening else { return }
         do throws(TrioBridgeError) {
             try await bridge.clear()
         } catch {

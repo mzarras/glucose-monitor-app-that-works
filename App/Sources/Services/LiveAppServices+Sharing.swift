@@ -11,10 +11,15 @@ extension LiveAppServices {
 
     var trio: TrioBridgeSummary { trioCoordinator.summary }
 
+    /// The user's switch, the D20 DEBUG switch and D45 listen mode (off while listening).
+    func configureTrio() {
+        trioCoordinator.configure(enabled: preferences.trioBridgeEnabled, liveOutputsAllowed: liveOutputsAllowed, listening: isListening)
+    }
+
     func setTrioBridgeEnabled(_ enabled: Bool) async {
         let wasActive = trioCoordinator.activeBridge != nil
         preferences.trioBridgeEnabled = enabled
-        trioCoordinator.configure(enabled: enabled, liveOutputsAllowed: liveOutputsAllowed)
+        configureTrio()
         attachOutputs()
         if enabled {
             await reseedTrio()
@@ -100,7 +105,8 @@ extension LiveAppServices {
             shareRegion: preferences.dexcomShareRegion,
             shareReceiverSerial: preferences.dexcomShareReceiverSerial,
             shareHasCredentials: shareAccountName != nil && shareHasPassword,
-            liveOutputsAllowed: liveOutputsAllowed
+            liveOutputsAllowed: liveOutputsAllowed,
+            listening: isListening
         ))
         attachOutputs()
     }

@@ -32,6 +32,10 @@ final class LiveServicesHarness {
         let session: SensorSession
 
         var databaseURL: URL { directory.appendingPathComponent("GlucoseStore/readings.sqlite") }
+        /// D45/D47: what AppEnvironment reads before creating the G7 source.
+        var connectionSettings: SensorConnectionSettingsStore {
+            SensorConnectionSettingsStore(fileURL: directory.appendingPathComponent("SensorConnection.json"))
+        }
 
         init(now: Date, trioStore: (any TrioSharedStore & TrioPayloadReading)? = nil, alarms: Bool = false, uptime: Uptime? = nil) {
             clock = PipelineTestClock(now)
@@ -99,6 +103,8 @@ final class LiveServicesHarness {
         preferences.trioBridgeEnabled = trioEnabled
         preferences.developerLiveOutputs = true // D20: these DEBUG tests need the Trio path
         sensor = ScriptedSensorDevice(session: persistence.session)
+        // As AppEnvironment does: the source starts in the saved mode.
+        sensor.configure(mode: persistence.connectionSettings.load().settings.g7Mode)
         // Before the first unlock G7Kit cannot read its pairing record and `start` fails.
         sensor.startFails = !protectedData
         audio = RecordingAudioPlayer(clock: persistence.clock)
@@ -116,6 +122,7 @@ final class LiveServicesHarness {
         )
         dependencies.clock = clock.closure
         if let foregroundTickInterval { dependencies.foregroundTickInterval = foregroundTickInterval }
+        dependencies.connectionSettings = persistence.connectionSettings
         let uptime = persistence.uptime
         dependencies.uptime = { uptime.value }
         let protected = self.protectedData

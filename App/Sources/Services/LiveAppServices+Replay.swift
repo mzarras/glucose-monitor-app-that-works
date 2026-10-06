@@ -99,7 +99,7 @@ extension LiveAppServices {
     func setDeveloperLiveOutputsEnabled(_ enabled: Bool) async {
         preferences.developerLiveOutputs = enabled
         log(.app, "developer switch for live outputs (D20) turned \(enabled ? "on" : "off")")
-        trioCoordinator.configure(enabled: preferences.trioBridgeEnabled, liveOutputsAllowed: liveOutputsAllowed)
+        configureTrio()
         await applyUploadConfiguration()
         if enabled {
             await reseedTrio()

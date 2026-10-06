@@ -116,8 +116,12 @@ struct TrioBridgeSummary: Sendable, Equatable {
     var heldBackSince: Date?
     /// The bridge's own starvation signal (`isStarving` adds held-back readings to it).
     var bridgeIsStarving = false
+    /// D45: the sensor is in listen mode, so the Trio handoff is off in the services (nothing is
+    /// written to Trio's App Group, whatever `isEnabled` says; Trio keeps its own CGM path). Settings
+    /// shows "off while listening"; no Trio alert.
+    var offWhileListening = false
 
-    var isFailing: Bool { consecutiveFailures > 0 || unavailableReason != nil }
+    var isFailing: Bool { !offWhileListening && (consecutiveFailures > 0 || unavailableReason != nil) }
 
     static let off = TrioBridgeSummary(
         isEnabled: false, liveOutputsAllowed: false, appGroupID: nil, lastSuccessfulWriteAt: nil, readingsInLastWrite: 0,
@@ -151,10 +155,13 @@ struct UploaderSummary: Sendable, Equatable {
     var setupError: String?
     /// When the current run of failures began; nil while healthy.
     var problemSince: Date?
+    /// D45: the sensor is in listen mode, so this uploader is off in the services (none exists,
+    /// nothing is queued; the Dexcom app keeps its own uploads). Settings shows "off while listening".
+    var offWhileListening = false
 
     /// S5: uploads are not getting through (NightscoutKit's `isFailing`, or setup failed while on).
     var isFailing: Bool {
-        (isEnabled && setupError != nil) || (status?.isFailing ?? false)
+        !offWhileListening && ((isEnabled && setupError != nil) || (status?.isFailing ?? false))
     }
 
     static let off = UploaderSummary(isEnabled: false, isConfigured: false, liveOutputsAllowed: false, status: nil, setupError: nil, problemSince: nil)
@@ -250,6 +257,20 @@ enum PairingError: Error, Sendable, Equatable {
     case noSensorToPairAgain
     /// DEBUG: a replay run is active; stop it before pairing.
     case replayActive
+    /// D45: pairing does not exist in listen mode (the Dexcom app owns the sensor); switch to
+    /// pairing mode first (`setConnectionMode(.pair)`).
+    case notAvailableInListenMode
+}
+
+/// Why `setConnectionMode(_:)` did not switch (D45). Nothing changed in every case.
+enum ConnectionModeError: Error, Sendable, Equatable {
+    /// DEBUG: a replay run is active; stop it first.
+    case replayActive
+    /// The mode could not be saved for the next launch (`SensorConnectionSettingsStore`).
+    case couldNotSave(String)
+    /// G7Kit could not delete the stored pairing of the old mode (Keychain unavailable, e.g. before
+    /// the first unlock).
+    case credentialStoreFailed(String)
 }
 
 /// One submitted calibration and what the sensor did with it (PROGRESS D16). Never a reading (S1).

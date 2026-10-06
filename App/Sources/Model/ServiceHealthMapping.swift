@@ -27,7 +27,7 @@ enum ServiceHealthMapping {
             forceQuitGap: forceQuitGap.map { ForceQuitGap(from: $0.from, to: $0.to) }
         )
         health.deliveryIssues = deliveryIssues(delivery.problems)
-        health.trioHeartbeatError = trio.isEnabled && trio.liveOutputsAllowed ? trio.heartbeatError : nil
+        health.trioHeartbeatError = trio.isEnabled && trio.liveOutputsAllowed && !trio.offWhileListening ? trio.heartbeatError : nil
         health.storage = storage.availability
         health.bluetoothAuthorization = bluetooth
         return health
@@ -39,6 +39,8 @@ enum ServiceHealthMapping {
         // DEBUG builds keep the bridge off unless the developer switch is on (D20): it writes nothing,
         // so it reads as off here and Settings says why.
         guard trio.isEnabled, trio.liveOutputsAllowed else { return .off }
+        // D45: off in the services while listening (Integrator A; B shows "off while listening").
+        guard !trio.offWhileListening else { return .off }
         // Review m4: switched on, but the bridge can't run in this build (no Trio App Group): the
         // facade says why (`unavailableReason`). The App Group check is defence in depth.
         if let reason = trio.unavailableReason {
@@ -73,6 +75,8 @@ enum ServiceHealthMapping {
 
     static func uploadStatus(_ upload: UploaderSummary, notSetUp: String, now: Date) -> UploadStatus {
         guard upload.isEnabled, upload.liveOutputsAllowed else { return .off }
+        // D45: off in the services while listening (Integrator A; B shows "off while listening").
+        guard !upload.offWhileListening else { return .off }
         if upload.isFailing {
             let status = upload.status
             let failures = max(status?.consecutiveFailures ?? 0, status?.refusalsSinceLastSuccess ?? 0, 1)

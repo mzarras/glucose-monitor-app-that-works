@@ -446,4 +446,8 @@ settings and unaffected.
   state, bridge on/off, on foreground and by the 60 s foreground ticker; rules in [When Trio reads](#when-trio-reads)).
   Whether Trio's heartbeat connection keeps it looping with the phone locked is not verified yet (§11 step 4).
 - One `TrioBridge` per process; it assumes it is the only writer of `latestReadings`.
+- **Listen mode (D45):** while the app listens alongside the Dexcom app, the handoff is off in the services
+  (`TrioCoordinator.activeBridge` is nil): nothing is written to Trio's App Group — no readings, no heartbeat
+  keys, no removals — whatever the switch says. Trio keeps its own CGM path (its G7 plugin alongside the Dexcom
+  app), so nothing is duplicated; what the App Group held before the switch is left as it was.
 - Behaviour documented against Trio `main` @ 29350e31a; re-check `AppGroupSource.swift` on every Trio update.

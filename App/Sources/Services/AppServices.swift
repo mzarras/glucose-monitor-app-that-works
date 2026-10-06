@@ -83,6 +83,29 @@ protocol AppServices: AnyObject {
     /// exact "stored sensor before pairing" baseline.
     var storedSensorKnown: Bool { get }
 
+    // MARK: Sensor connection (D45 listen mode, D47 raw packet recording)
+
+    /// How this app reaches the sensor: `.pair` (primary: this app pairs with the code and owns the
+    /// connection) or `.listen` (it observes the Dexcom app's authenticated connection; no pairing,
+    /// no writes to the sensor, no calibration). Saved for the next launch; a change sends
+    /// `.sensor`, `.calibration`, `.trio` and `.uploads`.
+    var connectionMode: SensorConnectionMode { get }
+    /// Switches the mode: G7Kit stops, drops the old mode's stored pairing and session and reports
+    /// `.notPaired` (pair: pair next) or `.searching` (listen: started at once). The Trio handoff and
+    /// the Nightscout/Dexcom Share uploaders follow at once: off while listening, back on (as the
+    /// switches say) when pairing. Nothing changes when it throws.
+    func setConnectionMode(_ mode: SensorConnectionMode) async throws(ConnectionModeError)
+    /// D45: true while listening — the Trio handoff and both uploaders are off in the services
+    /// (also `trio.offWhileListening`, `nightscout.upload.offWhileListening`,
+    /// `dexcomShare.upload.offWhileListening`); alerts are unchanged.
+    var sharingOffWhileListening: Bool { get }
+    /// False in listen mode: the source refuses calibrations there (calibrate in the Dexcom app).
+    var supportsCalibration: Bool { get }
+    /// D47 (Settings › Diagnostics): the hex of every received glucose packet goes to the diagnostic
+    /// log. Off by default; saved for the next launch. A change sends `.sensor`.
+    var recordsRawGlucosePackets: Bool { get }
+    func setRecordsRawGlucosePackets(_ enabled: Bool) async
+
     // MARK: Calibration (PROGRESS D16; never a reading, S1)
 
     /// Fingerstick range the sensor accepts (mg/dL); nil if the source cannot calibrate.
@@ -196,4 +219,11 @@ protocol AppServices: AnyObject {
 extension AppServices {
     /// Default for stand-ins that always know (additive requirement).
     var storedSensorKnown: Bool { true }
+    /// Defaults for stand-ins without a sensor connection choice (additive requirements, D45/D47).
+    var connectionMode: SensorConnectionMode { .pair }
+    func setConnectionMode(_ mode: SensorConnectionMode) async throws(ConnectionModeError) {}
+    var sharingOffWhileListening: Bool { connectionMode == .listen }
+    var supportsCalibration: Bool { connectionMode != .listen }
+    var recordsRawGlucosePackets: Bool { false }
+    func setRecordsRawGlucosePackets(_ enabled: Bool) async {}
 }

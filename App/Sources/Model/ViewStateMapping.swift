@@ -276,6 +276,9 @@ enum OnboardingMapping {
         case .noSensorToPairAgain:
             // Surfaced, never retried as a new pairing behind the person's back (review N2).
             return "No sensor is stored on this phone to pair again. Pair it as a new sensor with the code on its applicator."
+        case .notAvailableInListenMode:
+            // D45 (Integrator A, for the build; B to word): pairing does not exist while listening.
+            return "This app is listening alongside the Dexcom app, so there is nothing to pair. To pair this app instead, choose pairing under Connection in Settings › Sensor."
         }
     }
 
