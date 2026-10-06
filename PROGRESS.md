@@ -9,7 +9,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | 0 — Bootstrap | done (2026-09-23) |
 | 1 — Parallel build | done (2026-09-23): all 7 workstreams merged into `integration`; gates 1–3 PASS |
 | 2 — Integration | **done (2026-10-06)**: Phase 2 + follow-ups (D43) merged into `integration`; all reviews PASS; all six §10 gates pass; **`main` = 4cce67f** (first merge since bootstrap) |
-| 3 — Hardening | not started |
+| 3 — Hardening | in progress (2026-10-06): full safety audit (`p3-audit`), failure-mode pass split across services (`p3-services`), screens (`p3-app`) and AlertEngine (`p3-alerts`), setup guide + README (`p3-docs`) |
 | 4 — Device build | not started |
 
 ### Workstreams (Phase 1)
