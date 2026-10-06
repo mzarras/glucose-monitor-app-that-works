@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Upload health for Settings and the S5 banner (HANDOFF §8A step 1: "Settings shows last upload
 // and failure count; failures raise the S5 banner").
 
@@ -35,7 +36,8 @@ public struct UploadStatus: Sendable, Equatable {
     /// nothing has gone through since (S5 banner); the next upload success clears it.
     public var refusalsSinceLastSuccess = 0
     /// Queued readings dropped without upload: older than the destination accepts, over capacity,
-    /// or not `.sensor` (a corrupted queue). Each drop is logged to diagnostics.
+    /// not `.sensor`, or dated in the future / before 1970 (a corrupted queue or a clock moved
+    /// back). Each drop is logged to diagnostics.
     public var discarded = 0
     /// The queue file was unreadable at launch and was moved aside; readings in it were not sent.
     /// Stays set until relaunch.

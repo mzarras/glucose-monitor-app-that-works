@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Credentials for Nightscout and Dexcom Share (PROGRESS D6, D7): entered in the app only, stored in
 // the Keychain (`KeychainCredentialStore`), never in files, UserDefaults, logs, or URLs.
 

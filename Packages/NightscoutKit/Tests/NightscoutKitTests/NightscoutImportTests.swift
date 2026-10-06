@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 import XCTest
 import GlucoseCore
 @testable import NightscoutKit
@@ -361,6 +362,87 @@ final class NightscoutImportTests: XCTestCase {
             XCTFail("the fake must enforce D33")
         } catch {
             XCTAssertEqual(error as? GlucoseReadingRepositoryError, .futureDated(future.date))
+        }
+    }
+
+    // MARK: - Malformed pages (audit m6): fail closed, never trap
+
+    private static func ms(_ iso: String) -> Int64 { GlucoseReading.epochMilliseconds(Fixtures.date(iso)) }
+
+    func test_malformedPageDatesAreSkippedNotFatal() async throws {
+        // The first page of window 1 is full (page size 9) and holds every malformed shape the
+        // audit listed. Before the fix, a full page with date 1e300 trapped in Int64(...).
+        let page = """
+        [{"_id":"bad1","type":"sgv","sgv":120,"date":"NaN"},
+         {"_id":"bad2","type":"sgv","sgv":120,"date":"Infinity"},
+         {"_id":"bad3","type":"sgv","sgv":120,"date":"-Infinity"},
+         {"_id":"bad4","type":"sgv","sgv":120,"date":1e300},
+         {"_id":"bad5","type":"sgv","sgv":120,"date":-5},
+         {"_id":"bad6","type":"sgv","sgv":120,"date":"not a number"},
+         {"_id":"bad7","type":"sgv","sgv":"NaN","date":\(Self.ms("2026-09-19T11:05:00Z"))},
+         {"_id":"bad8","type":"sgv","sgv":1e300,"date":\(Self.ms("2026-09-19T11:10:00Z"))},
+         {"_id":"good","type":"sgv","sgv":130,"date":\(Self.ms("2026-09-19T11:00:00Z"))}]
+        """
+        let server = try makeServer()
+        await server.script([.http(HTTPResponse(statusCode: 200, body: Data(page.utf8)))])
+        let repository = InMemoryGlucoseReadingRepository()
+        let result = try await makeImporter(server: server, repository: repository, pageSize: 9).run()
+
+        XCTAssertEqual(result.phase, .finished, "malformed rows are skipped; the import goes on")
+        XCTAssertEqual(result.skipped[.missingDate], 5, "NaN, ±Infinity, negative, text")
+        XCTAssertEqual(result.skipped[.futureDated], 1, "1e300")
+        XCTAssertEqual(result.skipped[.missingValue], 2, "sgv NaN and sgv 1e300 (not stored as HIGH)")
+        await assertStored(repository, (expected90Days + [("2026-09-19T11:00:00Z", .mgdl(130))]).sorted { $0.0 < $1.0 })
+        // Paging continued below the one in-window date of the full page.
+        let second = try await XCTUnwrapAsync(await server.requests.dropFirst().first)
+        XCTAssertEqual(second.query("find[date][$lt]"), String(Self.ms("2026-09-19T11:00:00Z") + 1))
+    }
+
+    func test_fullPageWithoutUsableDatesFailsLoudly() async throws {
+        let server = try makeServer()
+        await server.script([.http(HTTPResponse(statusCode: 200, body: Data(#"[{"type":"sgv","sgv":120,"date":1e300},{"type":"sgv","sgv":120,"date":"NaN"}]"#.utf8)))])
+        let checkpoints = InMemoryNightscoutImportCheckpointStore()
+        let importer = try makeImporter(server: server, repository: InMemoryGlucoseReadingRepository(), checkpoints: checkpoints, pageSize: 2)
+        do {
+            try await importer.run()
+            XCTFail("a full page with no usable date cannot be paged")
+        } catch let error as NightscoutImportError {
+            guard case .nightscout(.malformedResponse) = error else { return XCTFail("unexpected \(error)") }
+        }
+        await XCTAssertEqualAsync(await checkpoints.checkpoint?.completedDownTo, Self.now, "nothing marked done")
+    }
+
+    func test_everythingProbeWithMalformedAnswerFailsLoudly() async throws {
+        // Window 1 is empty, so the next request is the probe; each answer breaks its contract.
+        for probe in [#"[{"type":"sgv","sgv":100,"date":1e300}]"#, #"[{"type":"sgv","sgv":100,"date":"abc"}]"#,
+                      #"[{"type":"sgv","sgv":100,"date":"NaN"}]"#, "[{\"type\":\"sgv\",\"sgv\":100,\"date\":\(Self.ms("2026-09-20T11:00:00Z"))}]"] {
+            let server = MockNightscoutServer(token: Self.token)
+            await server.script([.http(HTTPResponse(statusCode: 200, body: Data("[]".utf8))), .http(HTTPResponse(statusCode: 200, body: Data(probe.utf8)))])
+            let importer = try makeImporter(server: server, repository: InMemoryGlucoseReadingRepository())
+            do {
+                try await importer.run(scope: .everything)
+                XCTFail("probe answer \(probe) accepted")
+            } catch let error as NightscoutImportError {
+                guard case .nightscout(.malformedResponse) = error else { return XCTFail("unexpected \(error)") }
+            }
+        }
+    }
+
+    func test_corruptCheckpointDatesStartANewPlan() async throws {
+        let site = try NightscoutSite("https://nightscout.invalid")
+        for (end, downTo, start) in [
+            (Date(timeIntervalSince1970: 1e15), Date(timeIntervalSince1970: 1e15), Optional(Self.now)),
+            (Self.now, Self.now, Optional(Date(timeIntervalSince1970: -1e20))),
+            (Self.now, Self.now.addingTimeInterval(3_600), Optional(Self.now.addingTimeInterval(-86_400))),
+        ] {
+            let checkpoints = InMemoryNightscoutImportCheckpointStore(NightscoutImportCheckpoint(
+                site: site, scope: .default, planEnd: end, planStart: start, completedDownTo: downTo,
+                readingsImported: 0, readingsSkippedByStore: 0, skipped: [:], isFinished: false
+            ))
+            let repository = InMemoryGlucoseReadingRepository()
+            let result = try await makeImporter(server: try makeServer(), repository: repository, checkpoints: checkpoints).run()
+            XCTAssertEqual(result.coveredTo, Self.now, "a new plan ending now")
+            await assertStored(repository, expected90Days)
         }
     }
 }

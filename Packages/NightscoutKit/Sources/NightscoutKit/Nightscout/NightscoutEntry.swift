@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // A Nightscout `entries` document as returned by GET /api/v1/entries.json, and its mapping to an
 // imported `GlucoseReading` (HANDOFF §4.5 steps 1 and 3).
 //
@@ -55,9 +56,9 @@ struct NightscoutEntry: Decodable, Sendable, Equatable {
 public enum NightscoutEntrySkipReason: String, Sendable, Equatable, Hashable, CaseIterable, Codable {
     /// `type` is not "sgv" (e.g. "mbg" fingersticks, "cal" calibrations) — ignored by design.
     case notSGV
-    /// No usable `date` (missing, not a number, or not after 1970).
+    /// No usable `date` (missing, not a number, not finite, or not after 1970).
     case missingDate
-    /// No usable `sgv`.
+    /// No usable `sgv` (missing, not a number, not finite, or above 1000 mg/dL).
     case missingValue
     /// `sgv` below 39: a Dexcom error code, not glucose (lib/plugins/errorcodes.js:13-22).
     case errorCode
@@ -90,6 +91,8 @@ enum NightscoutEntryMapper {
         case .invalid: return .skipped(.missingValue)
         }
         let date = Date(timeIntervalSince1970: milliseconds.rounded() / 1000)
+        // Also bounds the value before `importedID` converts it to Int64 milliseconds (no trap on
+        // e.g. 1e300).
         guard date <= now.addingTimeInterval(LiveReadingGate.futureTolerance) else { return .skipped(.futureDated) }
         return .reading(GlucoseReading(
             id: GlucoseReading.importedID(origin: .nightscout, date: date),

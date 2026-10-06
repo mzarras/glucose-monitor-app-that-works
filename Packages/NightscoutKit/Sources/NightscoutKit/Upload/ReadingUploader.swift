@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Uploads live sensor readings to one destination (Nightscout or Dexcom Share) with a persistent
 // queue, retry with backoff, and a status for Settings and the S5 banner (HANDOFF §8A).
 //
@@ -237,19 +238,25 @@ public actor ReadingUploader {
     }
 
     /// Drops queued readings that must not or cannot be sent, each counted and logged:
-    /// not `.sensor` (only possible if the queue file was altered; S6 defence in depth), not
-    /// representable by this destination (S4), or older than the destination accepts.
+    /// not `.sensor` (only possible if the queue file was altered; S6 defence in depth), dated
+    /// before 1970 or after now + `LiveReadingGate.futureTolerance` (the gate refused such dates at
+    /// submit, so the clock moved back or the file was altered; S2 — this also keeps the epoch-ms
+    /// conversion in the payload encoders in range), not representable by this destination (S4),
+    /// or older than the destination accepts.
     private func discardUnsendable(now: Date) {
+        let latest = now.addingTimeInterval(LiveReadingGate.futureTolerance)
+        let implausible = queue.removeAll { $0.reading.date < Date(timeIntervalSince1970: 0) || $0.reading.date > latest }
         let notLive = queue.removeAll { !$0.reading.source.isLiveSensor }
         let unrepresentable = queue.removeAll { !destination.canRepresent($0.reading.value) }
         var expired: [PersistentReadingQueue.Item] = []
         if let maxAge = destination.maxReadingAge {
             expired = queue.removeAll { now.timeIntervalSince($0.reading.date) > maxAge }
         }
+        if !implausible.isEmpty { record("discarded \(implausible.count) queued readings dated in the future or before 1970 (S2)") }
         if !notLive.isEmpty { record("discarded \(notLive.count) queued non-sensor readings (S6)") }
         if !unrepresentable.isEmpty { record("discarded \(unrepresentable.count) queued readings with no faithful representation (S4)") }
         if !expired.isEmpty { record("discarded \(expired.count) queued readings older than this destination accepts") }
-        let count = notLive.count + unrepresentable.count + expired.count
+        let count = implausible.count + notLive.count + unrepresentable.count + expired.count
         guard count > 0 else { return }
         currentStatus.discarded += count
         persist()

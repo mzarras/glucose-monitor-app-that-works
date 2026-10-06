@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // A mock of the Dexcom Share publisher endpoints as xDrip4iOS 7.1.0 uses them
 // (DexcomShareUploadManager.swift): two-step login, StartRemoteMonitoringSession, and
 // PostReceiverEgvRecords with its error codes. Duplicate handling is deliberately pessimistic: a

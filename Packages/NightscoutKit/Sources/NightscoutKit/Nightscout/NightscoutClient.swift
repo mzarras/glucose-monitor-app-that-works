@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Minimal Nightscout REST API v1 client: list sgv entries (import) and post entries (upload).
 // Line numbers refer to cgm-remote-monitor 15.0.8 (92d08342).
 //

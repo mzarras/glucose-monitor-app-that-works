@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 import XCTest
 import GlucoseCore
 @testable import NightscoutKit
@@ -16,6 +17,9 @@ final class NightscoutEncodingTests: XCTestCase {
         XCTAssertEqual(NightscoutGlucoseEncoding.decode(sgv: 400.2), .value(.aboveRange))
         XCTAssertEqual(NightscoutGlucoseEncoding.decode(sgv: 401), .value(.aboveRange))
         XCTAssertEqual(NightscoutGlucoseEncoding.decode(sgv: 450), .value(.aboveRange))
+        XCTAssertEqual(NightscoutGlucoseEncoding.decode(sgv: 1_000), .value(.aboveRange))
+        XCTAssertEqual(NightscoutGlucoseEncoding.decode(sgv: 1_000.5), .invalid, "not a CGM value: skipped, not HIGH")
+        XCTAssertEqual(NightscoutGlucoseEncoding.decode(sgv: 1e300), .invalid)
         XCTAssertEqual(NightscoutGlucoseEncoding.decode(sgv: .nan), .invalid)
         XCTAssertEqual(NightscoutGlucoseEncoding.decode(sgv: .infinity), .invalid)
     }

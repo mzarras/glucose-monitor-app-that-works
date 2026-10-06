@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // Live upload to the owner's Nightscout (HANDOFF §8A step 1). PROGRESS D6: this app uploads CGM
 // entries and Trio's CGM upload is off — docs/trio-bridge.md#nightscout-uploads.
 //

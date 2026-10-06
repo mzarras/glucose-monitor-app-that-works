@@ -1,3 +1,4 @@
+// Original to Sensor (no ported code).
 // First-run history import from the owner's Nightscout (HANDOFF §4.5 step 1, steps 3–4).
 //
 // Walks backwards from the moment the plan started in 7-day windows, newest first, so the most
@@ -136,10 +137,12 @@ public actor NightscoutHistoryImporter {
             record("Nightscout import checkpoint unreadable, starting over: \(error)")
             saved = nil
         }
+        let now = clock.now()
         if let saved, saved.site == site, saved.scope == scope {
-            return saved
+            if Self.isPlausible(saved, now: now) { return saved }
+            record("Nightscout import checkpoint has implausible dates, starting over")
         }
-        let planEnd = clock.now()
+        let planEnd = now
         let planStart: Date?
         switch scope {
         case .lastDays(let days): planStart = planEnd.addingTimeInterval(-Double(max(0, days)) * 86_400)
@@ -153,11 +156,26 @@ public actor NightscoutHistoryImporter {
         return fresh
     }
 
+    /// A stored checkpoint's dates must lie between 1970 and a year from now, in order — anything
+    /// else is a corrupted or hand-edited value, and converting it to epoch milliseconds could
+    /// trap. A year of slack keeps a plan that started while the phone's clock was wrong (hours or
+    /// days ahead) resumable (D33).
+    static func isPlausible(_ checkpoint: NightscoutImportCheckpoint, now: Date) -> Bool {
+        let latest = now.addingTimeInterval(365 * 86_400)
+        let range = earliestPossibleDate...latest
+        guard range.contains(checkpoint.planEnd), range.contains(checkpoint.completedDownTo),
+              checkpoint.completedDownTo <= checkpoint.planEnd else { return false }
+        if let planStart = checkpoint.planStart {
+            return range.contains(planStart) && planStart <= checkpoint.planEnd
+        }
+        return true
+    }
+
     // MARK: - One window
 
     private func importNextWindow(_ checkpoint: inout NightscoutImportCheckpoint) async throws {
         let upper = checkpoint.completedDownTo
-        let floor = checkpoint.planStart ?? Self.earliestPossibleDate
+        let floor = max(checkpoint.planStart ?? Self.earliestPossibleDate, Self.earliestPossibleDate)
         guard upper > floor else {
             checkpoint.isFinished = true
             return
@@ -204,13 +222,13 @@ public actor NightscoutHistoryImporter {
                 checkpoint.isFinished = true
                 return
             }
-            guard let newestMs = newest.date, newestMs.isFinite, newestMs > 0 else {
-                record("Nightscout import: newest older entry has no usable date; stopping at \(lower)")
-                checkpoint.isFinished = true
-                return
+            // The probe asked for `date < lower`; an answer without such a numeric date breaks
+            // that contract. Stop loudly (the checkpoint keeps what finished) rather than guess.
+            let lowerMs = Double(milliseconds(lower))
+            guard let newestMs = newest.date, newestMs.isFinite, newestMs > 0, newestMs < lowerMs else {
+                throw NightscoutImportError.nightscout(.malformedResponse("the newest older entry has no usable date below the requested bound"))
             }
-            let resumeAt = Date(timeIntervalSince1970: (newestMs.rounded(.down) + 1) / 1000)
-            if resumeAt < lower { checkpoint.completedDownTo = resumeAt }
+            checkpoint.completedDownTo = Date(timeIntervalSince1970: (newestMs.rounded(.down) + 1) / 1000)
         }
     }
 
@@ -236,8 +254,12 @@ public actor NightscoutHistoryImporter {
                 entries.append(entry)
             }
             guard page.count >= pageSize else { return entries }
-            guard let oldest = page.compactMap(\.date).filter(\.isFinite).min() else {
-                throw NightscoutImportError.nightscout(.malformedResponse("a full page without dates"))
+            // Paging only trusts dates inside the window it asked for: a malformed `date` (NaN,
+            // ±inf, 1e300, negative, text) is skipped by the mapper and never reaches the Int64
+            // conversion below, which is therefore always in range (fail closed, never trap).
+            let inWindow = page.compactMap(\.date).filter { $0.isFinite && $0 >= Double(lowerMs) && $0 < Double(pageUpperMs) }
+            guard let oldest = inWindow.min() else {
+                throw NightscoutImportError.nightscout(.malformedResponse("a full page without a date inside the requested range"))
             }
             let nextUpperMs = Int64(oldest.rounded(.down)) + 1
             guard nextUpperMs < pageUpperMs else { throw NightscoutImportError.pageTooDense(atMilliseconds: nextUpperMs - 1) }

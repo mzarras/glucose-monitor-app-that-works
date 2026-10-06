@@ -59,7 +59,7 @@ below 1970.
 | `type` ≠ `sgv` (`mbg` fingersticks, `cal` calibrations, …) | ignored, counted `notSGV` | brief; the server filter makes this rare |
 | no numeric `date` > 0 | skipped, `missingDate` | |
 | `date` later than now + 60 s (`LiveReadingGate.futureTolerance`) | skipped, `futureDated` | PROGRESS D33: stores reject a batch holding one, so skipping keeps one bad entry from stalling the import |
-| `sgv` missing or not finite | skipped, `missingValue` | |
+| `sgv` missing, not a number, not finite, or above 1000 mg/dL | skipped, `missingValue` — no CGM reports above ~600; a larger value is malformed, not a HIGH | |
 | `sgv` < 39 | skipped, `errorCode` — Dexcom error codes, not glucose | `lib/plugins/errorcodes.js:13-22`, `lib/plugins/bgnow.js:95-101` |
 | 39 ≤ `sgv` < 40 | `.belowRange` (LOW) | `lib/client/index.js:544-545`, `lib/sandbox.js:249-250` |
 | 40 ≤ `sgv` ≤ 400 | `.mgdl(round(sgv))` | `lib/client/index.js:548-549` |
@@ -75,6 +75,14 @@ flags cannot be recovered. Only entries uploaded as 39/401 (e.g. by this app)
 import as LOW/HIGH. `trendRate` is always `nil`: Nightscout has no rate field (`direction` and
 `trend` are arrow buckets, `delta` is a difference between readings). The timestamp is the entry's
 `date`, unchanged (S3).
+
+**Malformed pages fail closed, never trap** (audit m6). A `date` that is text, NaN, ±infinity,
+negative, or absurdly large (e.g. 1e300) is skipped and counted (`missingDate` / `futureDated`)
+and the import continues. Paging inside a window uses only dates inside the requested range, so a
+full page with no such date stops the import with `malformedResponse` instead of guessing; so does
+an "everything" probe whose answer is not a numeric date below the requested bound. A stored
+checkpoint whose dates are outside 1970 … now + 1 year (or out of order) is discarded and the plan
+starts over.
 
 ## Dexcom Clarity CSV
 
