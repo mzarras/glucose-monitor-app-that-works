@@ -536,6 +536,39 @@ final class G7ListenModeTests: XCTestCase {
         XCTAssertEqual(Array(harness.central.connectRequests.dropFirst(connects)), [harness.identifier])
     }
 
+    /// Review P15, before the first follow: the search attaches to the Dexcom app's link, the link
+    /// drops before this app's connect completes (it becomes pending), the next search tick withdraws
+    /// it, and the late connection is refused. Nothing stays "in flight": the next search attaches.
+    func test_S5_lateConnectBeforeTheFirstFollowDoesNotBlockLaterAttaches() throws {
+        let harness = makeHarness()
+        harness.allowsCancelOfFollowedSensor = true // its cancels here happen before it is followed
+        try harness.controller.start(pairingCode: nil)
+        harness.controller.didDiscover(name: "DXCM4F", identifier: harness.identifier)
+        harness.central.connected = [G7ConnectedSensor(name: "Dexcom4F", identifier: harness.identifier)]
+        harness.central.fireScheduled() // search tick: attach
+        XCTAssertEqual(harness.central.connectRequests.last, harness.identifier)
+        harness.central.connected = [] // the Dexcom app's link dropped before this app's connect completed
+        harness.central.fireScheduled() // next tick: the stale attach is withdrawn
+        XCTAssertEqual(harness.central.cancelRequests.last, harness.identifier, "the pending connect is cancelled")
+
+        let late = FakeLink(identifier: harness.identifier)
+        harness.links.append(late)
+        harness.controller.didConnect(link: late, availableCharacteristics: Set(G7Characteristic.allCases)) // refused
+        harness.controller.didDisconnect(peripheralIdentifier: harness.identifier)
+
+        harness.central.connected = [G7ConnectedSensor(name: "Dexcom4F", identifier: harness.identifier)] // next wake
+        let connects = harness.central.connectRequests.count
+        harness.central.fireScheduled()
+        XCTAssertEqual(Array(harness.central.connectRequests.dropFirst(connects)), [harness.identifier], "the next search attaches")
+        harness.wake(frames: [Fixture.tenDayExtendedVersion, harness.dexcomGlucose(120)], connectedName: "Dexcom4F")
+        XCTAssertEqual(harness.record?.serial, "DXCM4F-1A2B3C4D")
+        XCTAssertEqual(harness.readings.count, 1)
+        let cancelsWhileFollowed = harness.central.cancelRequests.count
+        harness.clock.advance(300)
+        harness.wake(frames: [harness.dexcomGlucose(121)], connectedName: "Dexcom4F")
+        XCTAssertEqual(harness.central.cancelRequests.count, cancelsWhileFollowed, "never cancelled once followed")
+    }
+
     /// m7: values and notification changes from a peripheral that is not the current connection are
     /// dropped (an observed `05` or a reading from another sensor cannot reach the cycle).
     func test_S2_valuesFromAnotherPeripheralAreDropped() throws {
