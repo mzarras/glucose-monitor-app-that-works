@@ -32,9 +32,12 @@ final class LiveServicesHarness {
         let session: SensorSession
 
         var databaseURL: URL { directory.appendingPathComponent("GlucoseStore/readings.sqlite") }
-        /// D45/D47: what AppEnvironment reads before creating the G7 source.
+        /// D45/D47: what AppEnvironment reads before creating the G7 source. `settingsWrite` replaces
+        /// the file write (tests make it fail).
+        var settingsWrite: (@Sendable (Data, URL) throws -> Void)?
         var connectionSettings: SensorConnectionSettingsStore {
-            SensorConnectionSettingsStore(fileURL: directory.appendingPathComponent("SensorConnection.json"))
+            SensorConnectionSettingsStore(fileURL: directory.appendingPathComponent("SensorConnection.json"),
+                                          write: settingsWrite ?? SensorConnectionSettingsStore.writeAtomically)
         }
 
         init(now: Date, trioStore: (any TrioSharedStore & TrioPayloadReading)? = nil, alarms: Bool = false, uptime: Uptime? = nil) {
@@ -95,7 +98,7 @@ final class LiveServicesHarness {
     ///   - foregroundTickInterval: the foreground ticker's period (default: production's 60 s).
     init(_ persistence: Persistence, trioEnabled: Bool = true, protectedData: Bool = true, storeOpens: Bool = true,
          launchedByBluetoothRestoration: Bool = false, uploadTransport: (any HTTPTransport)? = nil,
-         foregroundTickInterval: Duration? = nil) {
+         foregroundTickInterval: Duration? = nil, credentialGuard: GuardedG7CredentialStore? = nil) {
         self.persistence = persistence
         self.protectedData = Flag(protectedData)
         self.storeOpens = Flag(storeOpens)
@@ -103,8 +106,9 @@ final class LiveServicesHarness {
         preferences.trioBridgeEnabled = trioEnabled
         preferences.developerLiveOutputs = true // D20: these DEBUG tests need the Trio path
         sensor = ScriptedSensorDevice(session: persistence.session)
-        // As AppEnvironment does: the source starts in the saved mode.
-        sensor.configure(mode: persistence.connectionSettings.load().settings.g7Mode)
+        // As AppEnvironment does: the file is read once (review m5); the source starts in its mode.
+        let connectionLaunch = persistence.connectionSettings.load()
+        sensor.configure(mode: connectionLaunch.settings.g7Mode)
         // Before the first unlock G7Kit cannot read its pairing record and `start` fails.
         sensor.startFails = !protectedData
         audio = RecordingAudioPlayer(clock: persistence.clock)
@@ -123,6 +127,8 @@ final class LiveServicesHarness {
         dependencies.clock = clock.closure
         if let foregroundTickInterval { dependencies.foregroundTickInterval = foregroundTickInterval }
         dependencies.connectionSettings = persistence.connectionSettings
+        dependencies.connectionLaunch = connectionLaunch
+        dependencies.credentialGuard = credentialGuard
         let uptime = persistence.uptime
         dependencies.uptime = { uptime.value }
         let protected = self.protectedData

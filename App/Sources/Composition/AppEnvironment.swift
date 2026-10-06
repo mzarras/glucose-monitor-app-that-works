@@ -8,7 +8,8 @@
 //                 StopUrgentLowAlarmIntent (D26); the intent bridge is connected at bootstrap
 //   TrioBridge    Trio's App Group from Info.plist TrioAppGroupID, LOW/HIGH per D21 (TrioCoordinator)
 //   ReadingUploader ×2  Nightscout and Dexcom Share, queues in Application Support/Uploads (UploadCoordinator)
-//   KeychainCredentialStore (NightscoutKit) and G7KeychainCredentialStore (G7Kit's default)
+//   KeychainCredentialStore (NightscoutKit) and G7KeychainCredentialStore (G7Kit's default), the
+//                latter wrapped in GuardedG7CredentialStore (G7Kit deletes a pairing only when asked)
 //   WidgetSnapshotPublisher (App Group group.com.mzarras.sensor)
 //   History importers + UserDefaultsNightscoutImportCheckpointStore (on demand)
 //   RingBufferDiagnosticLog, saved to Application Support/Diagnostics
@@ -60,14 +61,21 @@ final class AppEnvironment {
         // saved mode (D45; the settings file is readable before the first unlock, see
         // SensorConnectionSettings.swift) with the saved raw-packet recording (D47).
         let connectionSettings = makeConnectionSettingsStore(support: support)
+        let keychain = G7KeychainCredentialStore()
         #if DEBUG
         // UI tests: `-resetConnectionMode` starts this launch from the defaults (pairing mode,
-        // recording off), so one test's mode switch never carries into the next launch.
+        // recording off, no stored sensor connection), so one test's mode switch never carries into
+        // the next launch.
         if arguments.contains("-resetConnectionMode") {
             try? FileManager.default.removeItem(at: connectionSettings.fileURL)
+            try? keychain.delete()
         }
         #endif
-        let g7 = G7CGMSource(configuration: connectionSettings.load().settings.g7Configuration, diagnostics: diagnostics)
+        // Review m5: read once; the source and the services get the same result. Review m2/m3: G7Kit
+        // may delete the pairing only when the person asks (GuardedG7CredentialStore).
+        let connectionLaunch = connectionSettings.load()
+        let credentialGuard = GuardedG7CredentialStore(wrapping: keychain)
+        let g7 = G7CGMSource(configuration: connectionLaunch.settings.g7Configuration, credentialStore: credentialGuard, diagnostics: diagnostics)
 
         let credentials = KeychainCredentialStore()
         let trioGroupID = (Bundle.main.object(forInfoDictionaryKey: "TrioAppGroupID") as? String).flatMap { $0.isEmpty ? nil : $0 }
@@ -89,7 +97,7 @@ final class AppEnvironment {
             g7: g7, diagnostics: diagnostics, preferences: AppPreferences(), credentials: credentials, trio: trio, uploads: uploads,
             alertPorts: ports, widget: widget, databaseURL: support.appendingPathComponent("GlucoseStore/readings.sqlite"),
             httpTransport: URLSessionTransport(), launchReplay: launchReplay(arguments)
-        ).with(connectionSettings: connectionSettings))
+        ).with(connectionSettings: connectionSettings, launch: connectionLaunch, credentialGuard: credentialGuard))
     }
 
     /// D45/D47: `Application Support/SensorConnection.json` (not UserDefaults; see the file comment of

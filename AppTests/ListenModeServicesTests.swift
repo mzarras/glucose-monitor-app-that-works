@@ -169,6 +169,7 @@ final class ListenModeServicesTests: XCTestCase {
         let harness = LiveServicesHarness(persistence, trioEnabled: true)
         await harness.services.bootstrap()
         harness.sensor.setModeFails = true
+        let starts = harness.sensor.startCount
         do {
             try await harness.services.setConnectionMode(.listen)
             XCTFail("the switch must report the failure")
@@ -176,9 +177,11 @@ final class ListenModeServicesTests: XCTestCase {
             guard case .credentialStoreFailed = error else { return XCTFail("\(error)") }
         }
         XCTAssertEqual(harness.services.connectionMode, .pair)
-        XCTAssertEqual(persistence.connectionSettings.load().settings.mode, .pair, "the saved mode is put back")
+        XCTAssertEqual(persistence.connectionSettings.load(), .loaded(.defaults), "the saved mode is put back")
         XCTAssertTrue(harness.sensor.modeHistory.isEmpty)
         XCTAssertNotNil(harness.services.trioCoordinator.activeBridge)
+        XCTAssertNil(harness.services.connectionSettingProblem)
+        XCTAssertEqual(harness.sensor.startCount, starts + 1, "G7Kit stopped the source in the failed switch: it is resumed in its mode")
     }
 
     /// The mode chosen in one process is the mode the next creates the source in — also when it is

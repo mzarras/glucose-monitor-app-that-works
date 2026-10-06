@@ -181,11 +181,23 @@ writes to the sensor, no calibration, no backfill). The mode and the D47 recordi
 UserDefaults: CoreBluetooth often relaunches the app before the first unlock after a reboot, when the
 preferences read as their defaults, and G7Kit deletes a stored pairing that belongs to the other mode.
 The file has no file protection (`.noFileProtection`; it holds a mode and a flag), so the G7 source
-is always created in the mode it was left in.
+is always created in the mode it was left in. It is read once at launch (`AppEnvironment`, review m5)
+and the result goes to both the source and the services.
+
+**A setting that cannot be trusted never switches modes** (review m2/m3). If the file exists but cannot
+be read or names an unknown mode, or a failed switch could not be rolled back on disk, or G7Kit was
+kept from deleting a pairing of the other mode, the services set `connectionSettingProblem`: the source
+(created in the defaults) is not started, the banner "Connection setting couldn't be read" asks the
+person to choose Listen or Pair again, and that choice rewrites the file — even for the mode shown —
+and starts the source. G7Kit's Keychain store is wrapped in `GuardedG7CredentialStore`, which refuses
+`delete()` except during the person's own actions (switching, Forget / Stop following, choosing
+again), because G7Kit drops a pairing of the other mode as soon as it loads one.
 
 `setConnectionMode(_:)` saves the new mode first, then calls `G7CGMSource.setMode` (stop, drop the old
 mode's pairing and session, report `.notPaired`/`.searching`); if G7Kit refuses, the saved mode is put
-back and nothing changed. Listen mode is then started with `start(pairingCode: nil)`; pairing mode
+back (tried 3 times) and the source resumes in its mode; if it cannot be put back, see above. Entering
+listen mode from pairing mode turns the Trio handoff off and then removes this app's readings and
+heartbeat keys from Trio's App Group (review m1). Listen mode is then started with `start(pairingCode: nil)`; pairing mode
 waits for `pair(code:)`. In listen mode `pair`/`pairAgain` throw `.notAvailableInListenMode`.
 `forgetSensor()` ("Stop following this sensor" while listening) restarts the source with no code, so
 the next sensor the Dexcom app connects to is followed without a relaunch; in pairing mode it stays
