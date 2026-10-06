@@ -2,8 +2,8 @@
 // state transitions, reading decisions, bridge writes, uploads, imports and alert decisions here.
 // A bounded in-memory ring, saved to a file in Application Support when the app goes to the
 // background and every 100 events, and read back at launch, so the events before an iOS relaunch
-// survive. No secrets are ever recorded (modules log no tokens, passwords or pairing codes); the
-// only personal data is readings.
+// survive. No secrets are ever recorded (modules log no tokens, passwords or pairing codes). Personal
+// data in it: glucose values and times, the sensor's name and serial, the Nightscout host name.
 
 import Foundation
 import GlucoseCore

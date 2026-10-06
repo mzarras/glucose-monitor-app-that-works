@@ -179,4 +179,47 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertEqual(store.readOrNil(), sampleSnapshot())
         XCTAssertNil(WidgetSnapshotStore.snapshotForWidget(bundle: Bundle(for: WidgetSnapshotTests.self)), "no App Group → nil")
     }
+
+    // MARK: DEBUG replay marker (audit m9)
+
+    /// A replayed (or mock) latest reading marks the snapshot and every timeline entry showing it;
+    /// a live sensor reading never does. These tests run in DEBUG, where the marker exists.
+    func test_m9_replayedLatestReadingIsMarked() {
+        for (source, marked) in [(ReadingSource.replay, true), (.mock, true), (.sensor, false)] {
+            let latest = Fixture.reading(.mgdl(48), minutesAgo: 1, source: source)
+            let snapshot = WidgetSnapshot.make(latestLive: latest, previousLive: nil, recent: [latest],
+                                               sensorState: Fixture.activeSensor, accent: .navy, now: Fixture.now)
+            XCTAssertEqual(snapshot.isReplay, marked, "\(source)")
+            let entries = WidgetTimeline.entries(snapshot: snapshot, now: Fixture.now)
+            XCTAssertEqual(entries.first?.showsReplayMarker, marked, "\(source)")
+            XCTAssertTrue(entries.allSatisfy { $0.isReplay == marked })
+        }
+        let none = WidgetSnapshot.make(latestLive: nil, previousLive: nil, recent: [], sensorState: .notPaired, accent: .navy, now: Fixture.now)
+        XCTAssertFalse(none.isReplay)
+    }
+
+    /// The marker labels a displayed reading only; a message state ("No data") has no number to mark.
+    func test_m9_replayMarkerOnlyWithAReading() {
+        let reading = Fixture.latest(.mgdl(48), minutesAgo: 1)
+        let current = WidgetEntryContent(date: Fixture.now, display: .current(reading), recent: [], accent: .navy, snapshotWrittenAt: Fixture.now, isReplay: true)
+        let noData = WidgetEntryContent(date: Fixture.now, display: .noData(last: reading), recent: [], accent: .navy, snapshotWrittenAt: Fixture.now, isReplay: true)
+        XCTAssertTrue(current.showsReplayMarker)
+        XCTAssertFalse(noData.showsReplayMarker)
+        XCTAssertEqual(WidgetStyle.replayLabel, "REPLAY")
+    }
+
+    /// The field is additive: a snapshot written before it existed decodes (as not replay), and a
+    /// marked one round-trips.
+    func test_m9_replayFieldIsBackwardCompatible() throws {
+        let marked = WidgetSnapshot(writtenAt: Fixture.now, latest: Fixture.latest(.mgdl(48), minutesAgo: 1), sensorState: Fixture.activeSensor,
+                                    recent: [], accent: .navy, isReplay: true)
+        let data = try WidgetSnapshotStore.encoder().encode(marked)
+        XCTAssertEqual(try WidgetSnapshotStore.decode(data), marked)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "isReplay")
+        let old = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try WidgetSnapshotStore.decode(old)
+        XCTAssertFalse(decoded.isReplay)
+        XCTAssertEqual(decoded.latest, marked.latest)
+    }
 }

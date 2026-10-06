@@ -190,7 +190,9 @@ enum AlertsText {
     }
 
     /// Explanation under the urgent low row (S7).
-    static let urgentLowNote = "Always on and always sounds, even on silent. It can't be turned off; you can snooze it for up to 30 minutes."
+    /// D44: a snooze ends with the alarm again, reading or not, unless a reading above the limit
+    /// arrived during it.
+    static let urgentLowNote = "Always on and always sounds, even on silent. It can't be turned off; you can snooze it for up to 30 minutes. When the snooze ends it rings again, even if no new reading has come in, unless a reading above the limit arrived first."
 
     /// D27 wording (HANDOFF §5): nothing but urgent low sounds during quiet hours.
     static let quietHoursNote = "Silences all alerts except Urgent low."

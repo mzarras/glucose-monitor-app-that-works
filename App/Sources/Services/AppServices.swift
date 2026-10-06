@@ -155,8 +155,9 @@ protocol AppServices: AnyObject {
     func refreshStorageSummary() async
     /// Writes every stored reading as CSV (docs/storage.md format) to a temporary file.
     func exportAllReadingsCSV() async throws -> URL
-    /// Writes the diagnostic log (BLE transitions, bridge writes, uploads, alert decisions; no
-    /// personal data beyond readings) to a temporary text file.
+    /// Writes the diagnostic log (BLE and sensor events with the sensor's name and serial, reading
+    /// and alert decisions with glucose values, bridge writes, uploads with the Nightscout host name;
+    /// no passwords, tokens or pairing codes) to a temporary text file.
     func exportDiagnostics() async throws -> URL
 
     // MARK: Appearance shared with the widget
@@ -185,6 +186,10 @@ protocol AppServices: AnyObject {
     /// D20 developer switch: let the Trio bridge and uploaders run in this DEBUG build. They still
     /// refuse every non-sensor reading (S6).
     func setDeveloperLiveOutputsEnabled(_ enabled: Bool) async
+    /// The running replay's clock (scenario time; ahead of the phone clock above 1×), nil when no
+    /// replay runs. The UI classifies against it so an accelerated replay's readings are current
+    /// rather than "dated ahead of the phone clock" (Phase 2 carry-over).
+    var replayClockNow: Date? { get }
     #endif
 }
 

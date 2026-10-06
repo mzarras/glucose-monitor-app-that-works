@@ -48,6 +48,9 @@ enum CalibrationRules {
     static let relativeLimitDivisor = 5
 
     static func availability(_ state: CalibrationViewState, now: Date) -> CalibrationAvailability {
+        if state.listening {
+            return .unavailable(reason: ConnectionModeText.calibrationWhileListening)
+        }
         guard state.acceptedRange != nil else {
             return .unavailable(reason: "This sensor doesn't accept calibrations.")
         }
@@ -208,6 +211,14 @@ enum CalibrationRules {
         guard let latest = state.latestLiveReading else { return false }
         if state.clockMismatchLatchedFor == latest.date { return true }
         return ClockMismatchLatch.update(latchedFor: nil, latest: latest, now: now) != nil
+    }
+
+    /// Settings › Sensor: "Last calibration 112 mg/dL at 12:34 PM: accepted." — the fingerstick's
+    /// time in the phone's current time zone (it follows a time zone change).
+    static func lastCalibrationText(_ submission: CalibrationSubmission, state: CalibrationViewState, now: Date,
+                                    context: DisplayContext = .current) -> String {
+        let outcome = outcomeText(submission.outcome, state: state, now: now)
+        return "Last calibration \(submission.request.mgdl) mg/dL at \(TimeText.time(submission.request.takenAt, context)): \(outcome.title.lowercased())."
     }
 
     static func refusalText(_ refusal: CalibrationRefusal) -> String {

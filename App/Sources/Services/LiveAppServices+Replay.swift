@@ -20,6 +20,8 @@ enum ReplayScenarioNames {
 }
 
 extension LiveAppServices {
+    var replayClockNow: Date? { replayRun?.now() }
+
     func startReplay(scenario: String, speed: Double) async {
         await startReplay(scenario: scenario, speed: speed, startingAtMinute: 0)
     }

@@ -25,6 +25,11 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
     public let recent: [ChartPoint]
     /// The accent the user picked, so the widget matches the app.
     public let accent: AccentChoice
+    /// DEBUG (audit m9): `latest` came from a replay or mock source, so the widget labels it
+    /// "REPLAY" (`WidgetEntryContent.showsReplayMarker`). Those sources are compiled only in DEBUG
+    /// (S6) and `make` sets this only in DEBUG, so a Release snapshot always has false. Snapshots
+    /// written before this field existed decode as false (additive; same schema version).
+    public let isReplay: Bool
 
     public init(
         writtenAt: Date,
@@ -32,6 +37,7 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
         sensorState: SensorState,
         recent: [ChartPoint],
         accent: AccentChoice,
+        isReplay: Bool = false,
         schemaVersion: Int = WidgetSnapshot.currentSchemaVersion
     ) {
         self.schemaVersion = schemaVersion
@@ -40,6 +46,22 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
         self.sensorState = sensorState
         self.recent = recent
         self.accent = accent
+        self.isReplay = isReplay
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, writtenAt, latest, sensorState, recent, accent, isReplay
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        writtenAt = try container.decode(Date.self, forKey: .writtenAt)
+        latest = try container.decodeIfPresent(LatestReading.self, forKey: .latest)
+        sensorState = try container.decode(SensorState.self, forKey: .sensorState)
+        recent = try container.decode([ChartPoint].self, forKey: .recent)
+        accent = try container.decode(AccentChoice.self, forKey: .accent)
+        isReplay = try container.decodeIfPresent(Bool.self, forKey: .isReplay) ?? false
     }
 
     /// Builds a snapshot from stored readings. Selection only; no value is created (S1).
@@ -73,8 +95,22 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
             latest: latest.map { LatestReading(reading: $0, previous: previous) },
             sensorState: sensorState,
             recent: points,
-            accent: accent
+            accent: accent,
+            isReplay: latest.map { isReplaySource($0.source) } ?? false
         )
+    }
+
+    /// DEBUG (audit m9): a replay or mock reading. Always false in Release, where those sources
+    /// don't exist (S6).
+    static func isReplaySource(_ source: ReadingSource) -> Bool {
+        #if DEBUG
+        switch source {
+        case .replay, .mock: return true
+        case .sensor, .imported: return false
+        }
+        #else
+        return false
+        #endif
     }
 }
 
