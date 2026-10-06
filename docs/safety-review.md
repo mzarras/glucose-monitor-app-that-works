@@ -541,3 +541,32 @@ device build; m1 and m2 need a decision from Michael.
   Trio dedupes by timestamp, low impact). Still open: `AlertEngine.sanitized` does not check
   `knownSession.isWellFormed` (`AlertEngine.swift:40-52`, reminder dates only); the latch compound
   case (`ClockMismatchMonitor.swift:53-75`); held-back count not shown in Settings.
+
+## 8. Resolution of the findings (Phase 3 follow-up)
+
+Orchestrator's record of what happened to each finding above. Each fix was reviewed again before it
+was merged (PROGRESS.md phase log); commit hashes are on the Phase 3 branches merged in `p3-stage`.
+
+| Finding | Resolution |
+|---|---|
+| m1 held readings lost on termination | G7Kit publication floor from the latest stored reading (`G7CGMSource.setLatestStoredReading`, 07853e6), wired from the production store (0640500). The G7 has no backfill request; recovery covers records the sensor resends (device check). |
+| m2 acknowledged urgent low silent after snooze | D44: the snooze-end alarm and its repeats are pre-scheduled (fb3863c); D51: a 56–60 reading at snooze end hands over to Low (638db66). |
+| m3 Release-only S6 test never ran | `check.sh` gate 3 runs the S2/S6 suites in Release and requires `test_S6_releaseBuildRefusesReplayReadings` (23efa63); `check-selftest.sh` plants a Release-only failure (59c0266). |
+| m4 Trio write failure not proven end to end | Hosted test with a failing App Group (ea5c2b9). |
+| m5 D21 wiring untested | `test_S4_lowAndHighReachTrioAs39And401` through `TrioCoordinator` (ea5c2b9). |
+| m6 importer `Int64` trap | Fail closed on malformed pages; upload-queue date guard (9eb1ec8); future-dated queued readings held, not discarded (01b58b8). |
+| m7 NOTICE gaps | CGMBLEKit lineage headers + `licenses/CGMBLEKit-LICENSE` (07853e6); NOTICE.md rows (ee81c64, c2922c8). |
+| m8 replay UI clock | DEBUG replay clock for the UI (fbb1433). |
+| m9 widget replay marker | DEBUG-only `WidgetSnapshot.isReplay` + "REPLAY" (22d866b). |
+| m10 queue location undocumented | D48. |
+| m11 Share-port attribution untested | `NightscoutAttributionTests` (9eb1ec8). |
+| m12 VACUUM warning | `StoreSchema` comment (ea5c2b9). |
+| m13 config comments vs D25 | Fixed (23efa63). |
+| m14 hygiene nits | `assumeIsolated` justification, injected clock in `TrioCoordinator` (ea5c2b9); `G7ECCMath` comments (07853e6); diagnostics privacy text (23efa63, 22d866b). |
+| m15 ordering comment overclaims | Comment matches the code (07853e6). |
+| m16 AGP LOW/HIGH unlabeled | HIGH/LOW markers (fbb1433). |
+| m17 DST overlay offset | Wall-clock overlay, lines split at the change (22d866b). |
+| m18 untested wiring | Trio retry, flush after credentials, `deviceName`, future-dated import count tests (ea5c2b9, 22d866b). Found and fixed on the way: no Nightscout uploader existed after a launch until a setting changed (`test_S5_savedNightscoutSettingsUploadAfterALaunch`). |
+
+New in Phase 3 after this audit: listen mode (D45, D49, D50) and raw packet recording (D47), each with
+its own independent review; see `docs/g7-protocol.md` §14 and the device checks in §13.
