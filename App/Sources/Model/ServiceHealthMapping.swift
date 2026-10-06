@@ -94,7 +94,26 @@ enum ServiceHealthMapping {
         if let problem = status.queueSaveProblem { return "The upload queue couldn't be saved: \(problem)" }
         if status.consecutiveFailures > 0, let error = status.lastError { return error.message }
         if status.refusalsSinceLastSuccess > 0, let refusal = status.lastRefusal { return refusalText(refusal) }
+        // NightscoutKit review m3: readings held or dropped for their dates (S5: each says which).
+        if status.heldInFuture > 0 { return heldInFutureText(status.heldInFuture) }
+        if status.discardedSinceLastSuccess > 0 { return discardedText(status.discardedSinceLastSuccess, lastReason: status.lastDiscardReason) }
         return status.lastError?.message ?? "Uploads are not getting through."
+    }
+
+    /// Readings waiting in the queue because they are dated ahead of the phone's clock (the clock
+    /// was set back after they were queued); they go out once the clock passes their dates.
+    static func heldInFutureText(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "reading is" : "readings are") waiting because \(count == 1 ? "it's" : "they're") dated ahead of the phone's clock; \(count == 1 ? "it" : "they")'ll upload when the clock catches up."
+    }
+
+    /// Readings dropped from the queue since the last successful upload; they will never reach
+    /// followers. `lastReason` is NightscoutKit's "N readings <why>" for the latest drop (its
+    /// safety-rule tags removed).
+    static func discardedText(_ count: Int, lastReason: String?) -> String {
+        let base = "\(count) \(count == 1 ? "reading wasn't" : "readings weren't") uploaded and won't be"
+        guard let reason = lastReason?.replacingOccurrences(of: #"\s*\(S\d\)"#, with: "", options: .regularExpression),
+              !reason.isEmpty else { return base + "." }
+        return "\(base) (latest: \(reason))."
     }
 
     static func refusalText(_ refusal: UploadRefusal) -> String {

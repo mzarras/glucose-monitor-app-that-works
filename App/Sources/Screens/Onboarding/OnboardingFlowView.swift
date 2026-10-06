@@ -264,7 +264,7 @@ struct ImportProgressView: View {
                 FieldMessage(text: note)
             }
             if let error = progress.errorMessage {
-                FieldMessage(text: "\(error) Already-imported readings are kept; running the import again continues where it stopped.")
+                FieldMessage(text: OnboardingText.importFailure(error))
             }
         }
         .padding(12)
