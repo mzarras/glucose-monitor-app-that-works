@@ -45,6 +45,11 @@ public struct AlertEngine: Sendable {
             plan.reminders = plan.reminders.filter { AlertKind(rawValue: $0.key).map(AlertKind.sensorExpiryReminders.contains) == true }
             s.expiryPlan = plan
         }
+        // Only an accepted reading's session is stored, and the gate accepts only well-formed ones:
+        // anything else came from a damaged or tampered file.
+        if let session = s.knownSession, !session.isWellFormed {
+            s.knownSession = nil
+        }
         if s.missedReadingsReference == AlertEngineSnapshot.missingReference {
             s.missedReadingsReference = now
         }
@@ -87,6 +92,7 @@ public struct AlertEngine: Sendable {
         let repair = Self.repairingClockFaults(snapshot, now: now, uptime: uptime)
         snapshot = repair.snapshot
         var actions: [AlertAction] = repair.rolledBack ? replanAfterRollback(now: now) : []
+        actions += rebuildIfTimeZoneChanged(input, now: now)
         switch input {
         case .reading(let reading, let session):
             if let rejection = Self.rejection(of: reading, session: session, now: now, configuration: configuration) {
@@ -117,6 +123,16 @@ public struct AlertEngine: Sendable {
         }
         actions += evaluate(now: now)
         return actions
+    }
+
+    /// The phone's time zone changed (travel; the default calendar follows the phone live): every
+    /// pending notification carries a quiet-hours decision and clock times made in the old zone, so
+    /// rebuild them all, as for a delivery-level change. A launch rebuilds them anyway.
+    private mutating func rebuildIfTimeZoneChanged(_ input: AlertInput, now: Date) -> [AlertAction] {
+        let zone = configuration.calendar.timeZone.identifier
+        defer { snapshot.timeZoneIdentifier = zone }
+        guard let previous = snapshot.timeZoneIdentifier, previous != zone, input != .launched else { return [] }
+        return apply(settings, now: now)
     }
 
     // MARK: Readings
