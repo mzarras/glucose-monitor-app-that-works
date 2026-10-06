@@ -163,7 +163,8 @@ final class G7CoreBluetoothCentral: NSObject, G7CentralDriving, CBCentralManager
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         guard let g7 = G7Characteristic(rawValue: characteristic.uuid.uuidString) else { return }
-        controller.notificationStateChanged(for: g7, isNotifying: characteristic.isNotifying, error: error.map(Self.linkError))
+        controller.notificationStateChanged(for: g7, isNotifying: characteristic.isNotifying, error: error.map(Self.linkError),
+                                            from: peripheral.identifier)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -173,12 +174,12 @@ final class G7CoreBluetoothCentral: NSObject, G7CentralDriving, CBCentralManager
             return
         }
         guard let value = characteristic.value else { return }
-        controller.valueUpdated(for: g7, value: value)
+        controller.valueUpdated(for: g7, value: value, from: peripheral.identifier)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let error, let g7 = G7Characteristic(rawValue: characteristic.uuid.uuidString) else { return }
-        controller.writeFailed(for: g7, error: Self.linkError(error))
+        controller.writeFailed(for: g7, error: Self.linkError(error), from: peripheral.identifier)
     }
 
     // MARK: - Mapping
