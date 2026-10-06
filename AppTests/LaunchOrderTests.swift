@@ -391,11 +391,13 @@ final class ScriptedSensorDevice: SensorDevice, @unchecked Sendable {
     }
 
     func start(pairingCode: String?) async throws {
-        let fails = lock.withLock { () -> Bool in
+        let (fails, listening) = lock.withLock { () -> (Bool, Bool) in
             starts += 1
-            return failsToStart
+            return (failsToStart, currentMode == .listen)
         }
         if fails { throw G7StartError.credentialStoreFailed("Keychain unavailable before the first unlock") }
+        // As G7Kit: listen mode starts by looking for the Dexcom app's connection.
+        if listening { deliver(state: .searching) }
     }
     func stop() async {}
     func pair(code: String) async throws {
@@ -404,10 +406,30 @@ final class ScriptedSensorDevice: SensorDevice, @unchecked Sendable {
     func pairAgain(code: String) async throws {
         if lock.withLock({ currentMode == .listen }) { throw G7StartError.notAvailableInListenMode }
     }
-    func forgetSensor() async {}
+    /// As G7Kit's forget: stops, drops the stored or followed sensor and its session, `.notPaired`.
+    func forgetSensor() async {
+        lock.withLock {
+            forgets += 1
+            storedSerial = nil
+            session = nil
+        }
+        deliver(state: .notPaired)
+    }
     var heartbeatTarget: G7HeartbeatTarget? { get async { nil } }
-    var hasStoredSensor: Bool { get async { true } }
-    var storedSensorSerial: String? { get async { PipelineFixtures.serial } }
+    /// Always false in listen mode (no pairing there), as G7Kit.
+    var hasStoredSensor: Bool { get async { lock.withLock { storedSerial != nil && currentMode != .listen } } }
+    var storedSensorSerial: String? { get async { lock.withLock { storedSerial } } }
+
+    private var storedSerial: String? = PipelineFixtures.serial
+    private var forgets = 0
+    var forgetCount: Int { lock.withLock { forgets } }
+    /// Listen mode found and authenticated-observed another sensor: it becomes the followed one.
+    func follow(_ newSession: SensorSession) {
+        lock.withLock {
+            storedSerial = newSession.serial
+            session = newSession
+        }
+    }
 
     // D45 / D47 / audit m1, recorded.
     private var currentMode: G7ConnectionMode = .primary(slot: .recommendedDefault)

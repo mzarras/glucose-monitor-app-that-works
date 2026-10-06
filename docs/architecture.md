@@ -187,6 +187,9 @@ is always created in the mode it was left in.
 mode's pairing and session, report `.notPaired`/`.searching`); if G7Kit refuses, the saved mode is put
 back and nothing changed. Listen mode is then started with `start(pairingCode: nil)`; pairing mode
 waits for `pair(code:)`. In listen mode `pair`/`pairAgain` throw `.notAvailableInListenMode`.
+`forgetSensor()` ("Stop following this sensor" while listening) restarts the source with no code, so
+the next sensor the Dexcom app connects to is followed without a relaunch; in pairing mode it stays
+stopped (`.notPaired`) until `pair(code:)`.
 
 **While listening, the Trio handoff and both uploaders are off in the services**, whatever their
 switches say: `TrioCoordinator.activeBridge` is nil, so nothing is written to Trio's App Group (no

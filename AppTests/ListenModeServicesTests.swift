@@ -199,6 +199,84 @@ final class ListenModeServicesTests: XCTestCase {
         XCTAssertTrue(relaunched.sensor.modeHistory.isEmpty, "never switched")
     }
 
+    // MARK: - Forgetting ("Stop following this sensor" in listen mode)
+
+    /// Listen mode: forgetting stops following this sensor and looks for the Dexcom app's connection
+    /// to the next one at once (no code, no relaunch); the next sensor is followed, and the stored
+    /// sensor state and G7Kit's backfill floor follow it.
+    func test_stopFollowingInListenModeFollowsTheNextSensor() async throws {
+        let now = Date()
+        let persistence = try listeningPersistence(now: now)
+        let harness = LiveServicesHarness(persistence)
+        await harness.services.bootstrap()
+        await harness.deliver(state: harness.activeState)
+        let old = persistence.reading(.mgdl(120), at: now.addingTimeInterval(-10))
+        await harness.deliver(old)
+        await waitUntil("old sensor followed, floor set") {
+            harness.services.storedSensorSerial == PipelineFixtures.serial
+                && harness.sensor.latestStoredReadingCalls.last?.reading?.id == old.id
+        }
+        XCTAssertFalse(harness.services.hasStoredSensor, "nothing is paired in listen mode")
+        let starts = harness.sensor.startCount
+        let floorCalls = harness.sensor.latestStoredReadingCalls.count
+
+        await harness.services.forgetSensor()
+        XCTAssertEqual(harness.sensor.forgetCount, 1)
+        XCTAssertEqual(harness.sensor.startCount, starts + 1, "listening again at once, with no code")
+        await waitUntil("searching again") { harness.services.sensorState == .searching && harness.services.sensorPipeline.isIdle }
+        XCTAssertNil(harness.services.storedSensorSerial)
+        XCTAssertFalse(harness.services.hasStoredSensor)
+        XCTAssertEqual(harness.sensor.latestStoredReadingCalls.count, floorCalls, "no floor without a followed sensor")
+        XCTAssertEqual(harness.services.connectionMode, .listen, "still listening")
+
+        // The Dexcom app connects to a new sensor; it is followed.
+        let nextSerial = "DXCM99-0A0B0C0D"
+        let nextSession = SensorSession(
+            serial: nextSerial, start: now.addingTimeInterval(-86_400), warmUpEndsAt: now.addingTimeInterval(-86_400 + 27 * 60),
+            expiresAt: now.addingTimeInterval(9 * 86_400), gracePeriodEndsAt: now.addingTimeInterval(9 * 86_400 + 12 * 3_600)
+        )
+        harness.sensor.follow(nextSession)
+        persistence.clock.advance(by: 5 * 60)
+        await harness.deliver(state: .active(sessionStart: nextSession.start, expiresAt: nextSession.expiresAt))
+        await waitUntil("next sensor followed") { harness.services.storedSensorSerial == nextSerial }
+        await waitUntil("floor for the next sensor") { harness.sensor.latestStoredReadingCalls.last?.serial == nextSerial }
+        XCTAssertNil(harness.sensor.latestStoredReadingCalls.last?.reading, "none of the next sensor's readings is stored yet")
+
+        let date = persistence.clock.now.addingTimeInterval(-10)
+        let first = GlucoseReading(
+            id: GlucoseReading.sensorID(serial: nextSerial, sensorTimestamp: UInt32(date.timeIntervalSince(nextSession.start))),
+            date: date, value: .mgdl(110), trendRate: 0, isBackfill: false, source: .sensor, sensorSerial: nextSerial
+        )
+        await harness.deliver(first)
+        XCTAssertEqual(harness.services.latestLiveReading?.id, first.id, "the next sensor's readings are stored and shown")
+        await waitUntil("floor follows the next sensor's readings") {
+            harness.sensor.latestStoredReadingCalls.last.map { $0.serial == nextSerial && $0.reading?.id == first.id } ?? false
+        }
+    }
+
+    /// Pairing mode: forgetting stops the source and reports `.notPaired`; nothing is started until
+    /// a new pairing code is entered (unchanged).
+    func test_forgetInPairingModeStaysNotPaired() async throws {
+        let now = Date()
+        let persistence = LiveServicesHarness.Persistence(now: now)
+        let harness = LiveServicesHarness(persistence)
+        await harness.services.bootstrap()
+        await harness.deliver(state: harness.activeState)
+        await waitUntil("stored sensor known") { harness.services.hasStoredSensor }
+        let starts = harness.sensor.startCount
+
+        await harness.services.forgetSensor()
+        XCTAssertEqual(harness.sensor.forgetCount, 1)
+        XCTAssertEqual(harness.sensor.startCount, starts, "no restart without a pairing code")
+        await waitUntil("not paired") { harness.services.sensorState == .notPaired && harness.services.sensorPipeline.isIdle }
+        XCTAssertFalse(harness.services.hasStoredSensor)
+        XCTAssertNil(harness.services.storedSensorSerial)
+        await harness.services.handleForeground()
+        harness.services.handleBackground()
+        XCTAssertEqual(harness.sensor.startCount, starts, "a foreground does not start it either")
+        XCTAssertEqual(harness.services.sensorState, .notPaired)
+    }
+
     // MARK: - D47 raw packet recording
 
     func test_rawPacketRecordingIsPassedToTheSourceAndSaved() async throws {
