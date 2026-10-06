@@ -575,8 +575,13 @@ final class LiveAppServices: AppServices {
         guard isBootstrapped, productionStore == nil, !isOpeningStore else { return }
         isOpeningStore = true
         defer { isOpeningStore = false }
-        storage.availability = .opening
-        send(.storage)
+        // The first attempt shows "opening". A retry after a failed open (every wake retries) keeps
+        // the failure showing until it succeeds: "opening" has no banner, so a slow retry must not
+        // hide the storage problem (S5), nor make the banner flicker on every wake.
+        if storeOpenError == nil {
+            storage.availability = .opening
+            send(.storage)
+        }
         do {
             let store = try await openStore(databaseURL, diagnostics)
             productionStore = store

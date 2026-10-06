@@ -134,6 +134,33 @@ final class LaunchOrderTests: XCTestCase {
 
     // MARK: - A failed open is surfaced
 
+    /// A wake after a failed open retries it. While the retry runs the failure stays visible
+    /// ("opening" has no banner, S5); it clears when the retry succeeds.
+    func test_S5_aRetriedOpenKeepsTheFailureVisibleUntilItSucceeds() async throws {
+        let now = Date()
+        let attempts = CallCounter()
+        let gate = OpenGate()
+        let launch = try await makeLaunch(now: now) { url, diagnostics in
+            if attempts.next() == 1 { throw FlakyRepository.DiskFull() }
+            await gate.wait()
+            return try await GlucoseStore.production(at: url, diagnostics: diagnostics)
+        }
+        let services = launch.services
+        await services.bootstrap()
+        guard case .failed = services.storage.availability else {
+            return XCTFail("the failed open must be surfaced: \(services.storage.availability)")
+        }
+
+        launch.sensor.deliver(state: .active(sessionStart: launch.session.start, expiresAt: launch.session.expiresAt))
+        await waitUntil("the wake retries the open") { attempts.value >= 2 }
+        guard case .failed = services.storage.availability else {
+            return XCTFail("the failure stays visible while the retry runs: \(services.storage.availability)")
+        }
+        await gate.open()
+        await waitUntil("open") { services.productionStore != nil }
+        XCTAssertEqual(services.storage.availability, .open)
+    }
+
     func test_S5_failedStoreOpenRaisesTheStorageAlertAndKeepsThePersistedLatch() async throws {
         let now = Date()
         let latched = now.addingTimeInterval(-600)
@@ -292,6 +319,16 @@ private extension Date {
 }
 
 /// Holds the production database's opening until the test opens the gate.
+/// Counts calls from any thread.
+final class CallCounter: @unchecked Sendable {
+    // @unchecked Sendable: `count` is only read and written while holding `lock`.
+    private let lock = NSLock()
+    private var count = 0
+    /// Counts this call and returns its number (1 for the first).
+    func next() -> Int { lock.withLock { count += 1; return count } }
+    var value: Int { lock.withLock { count } }
+}
+
 actor OpenGate {
     private var isOpen = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
