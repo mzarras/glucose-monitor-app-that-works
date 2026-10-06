@@ -62,6 +62,9 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     /// Sensor policy (listen mode): while no sensor is followed yet, look for the Dexcom app's
     /// connection this often (foreground; CoreBluetooth coalesces repeated discoveries).
     static let listenSearchInterval: TimeInterval = 10
+    /// D49: the session length is first awaited from observed `52` answers; this app asks itself only
+    /// from this wake with proof on.
+    static let listenWakesBeforeSessionLengthQuery = 2
 
     private let store: G7CredentialStore
     private let diagnostics: DiagnosticLog
@@ -122,6 +125,9 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     private var listenCandidate: G7ConnectedSensor?
     private var listenConnectionsWithoutAuthentication = 0
     private var listenSearchScheduled = false
+    /// D49: connections of the followed sensor with proof of an authenticated link; from the second
+    /// one on, one `52` query per connection is allowed while the session length is unknown.
+    private var listenWakesWithProof = 0
 
     init(
         store: G7CredentialStore,
@@ -303,6 +309,7 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         pairingGeneration += 1
         listenCandidate = nil
         listenConnectionsWithoutAuthentication = 0
+        listenWakesWithProof = 0
     }
 
     /// The common tail of `start` and `pairAgain`: run with the current record.
@@ -393,7 +400,7 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
 
     func submitCalibration(_ request: CalibrationRequest) throws(CalibrationRefusal) {
         guard !isListening else {
-            // Listen mode never writes to the sensor (D45): this app is not authenticated with it.
+            // Listen mode never sends calibrations (D45, D49): this app is not authenticated with it.
             log(.sensor, "calibration refused: listen mode does not write to the sensor")
             throw .notAuthenticated
         }
@@ -496,7 +503,8 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         cycle?.valueUpdated(for: characteristic, value: value)
     }
 
-    /// Listen mode never writes, so a write failure can only belong to a primary cycle.
+    /// A write failure belongs to a primary cycle, or to listen mode's one `52` query, which is not
+    /// retried in that connection (D49).
     func writeFailed(for characteristic: G7Characteristic, error: G7LinkError) {
         cycle?.writeFailed(for: characteristic, error: error)
     }
@@ -783,14 +791,15 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         log(.sensor, "raw \(isListening ? "listen" : "primary") packet \(value.hexString)")
     }
 
-    // MARK: - Listen mode (D45)
+    // MARK: - Listen mode (D45, D49)
     //
     // Ported policy: CGMG7Transmitter.swift coexistence — attach to the connection the Dexcom app made
-    // (retrieveConnectedPeripherals, :553-571, :2082-2087), observe only. Deviation: once the sensor
-    // is followed, a pending connection request to it keeps this app awake at every sensor wake, as
+    // (retrieveConnectedPeripherals, :553-571, :2082-2087), observe. Deviation: once the sensor is
+    // followed, a pending connection request to it keeps this app awake at every sensor wake, as
     // primary mode does (BluetoothTransmitter.swift:313-317) and as the 7.1.1 coexistence fix 00c144e8
-    // relies on; iOS shares the one physical link with the Dexcom app. Nothing here writes to the
-    // sensor: the listen cycle's link has no write method, and calibration is refused above.
+    // relies on; iOS shares the one physical link with the Dexcom app. The only write is the one `52`
+    // session-length query per connection under the D49 conditions (`G7SessionLengthQuery`); the
+    // listen cycle's link has no other write, and calibration is refused above.
 
     /// Start (or resume) listening: no pairing code; an empty listen record is created if needed.
     private func startListening() throws(G7StartError) {
@@ -879,7 +888,12 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         log(.ble, "listen: attached; waiting to observe the Dexcom app's authentication")
         emitTransient(.authenticating)
         pipeline?.beginConnection()
-        let newCycle = G7ListenCycle(link: link, now: now)
+        let newCycle = G7ListenCycle(
+            link: link,
+            followsSensor: record.peripheralIdentifier == link.peripheralIdentifier,
+            sessionLengthQuery: G7SessionLengthQuery(link: link),
+            now: now
+        )
         newCycle.delegate = self
         listenCycle = newCycle
         newCycle.start(availableCharacteristics: availableCharacteristics)
@@ -916,6 +930,7 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         guard var current = record, let link = listenCycle?.link else { return }
         listenConnectionsWithoutAuthentication = 0
         if current.serial == nil {
+            listenWakesWithProof = 0
             // First observed authenticated connection: follow this sensor from now on.
             let name = Self.advertisedName(listenCandidate?.name ?? link.peripheralName)
             current.sensorName = name
@@ -925,6 +940,7 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
             log(.sensor, "listen mode: following \(name), serial \(current.serial ?? "?")")
         }
         listenCandidate = nil
+        listenWakesWithProof += 1
         if let serial = current.serial, pipeline?.serial != serial {
             pipeline = G7ReadingPipeline(
                 serial: serial,
@@ -938,7 +954,16 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
             }
             pipeline?.beginConnection()
         }
-        log(.ble, "listen: the Dexcom app's authenticated, bonded connection observed")
+        log(.ble, "listen: the Dexcom app's authenticated connection observed (wake \(listenWakesWithProof) with proof)")
+    }
+
+    /// D49: the session length must come from the sensor. Observed `52` answers (Trio's G7SensorKit
+    /// or the Dexcom app asking) come first; only if none was seen by the second wake with proof may
+    /// this app ask once per connection.
+    func listenCycleShouldQuerySessionLength() -> Bool {
+        guard isListening, let record, record.serial != nil, record.reportedSessionLength == nil,
+              !record.isUnsupportedSensor, pipeline?.isUnsupportedSensor != true, !record.sessionEnded else { return false }
+        return listenWakesWithProof >= Self.listenWakesBeforeSessionLengthQuery
     }
 
     /// As primary mode's N2: nothing more from this connection; this app does not disconnect the

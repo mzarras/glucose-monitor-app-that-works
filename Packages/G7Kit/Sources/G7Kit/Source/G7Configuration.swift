@@ -6,8 +6,9 @@ public enum G7ConnectionMode: Sendable, Equatable, Hashable {
     /// requests readings and backfill, and can calibrate.
     case primary(slot: G7AuthenticationSlot)
     /// Listen mode: the Dexcom app on this phone owns the connection. This app only observes it —
-    /// it never writes to the sensor, never pairs and never uses a slot — and publishes a reading
-    /// only after it observed that the connection is authenticated and bonded (S2). No backfill, no
+    /// it never pairs, never uses a slot, and writes nothing to the sensor except, when the session
+    /// length was not observed, one read-only `52` query per connection (D49) — and publishes a
+    /// reading only after proof that the connection is authenticated (S2). No backfill, no
     /// calibration. docs/g7-protocol.md §14.
     case listen
 
