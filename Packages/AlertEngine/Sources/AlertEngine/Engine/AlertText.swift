@@ -18,6 +18,12 @@ struct AlertTextContext {
     var storageHealth: StorageHealth = .ok
     let calendar: Calendar
     let locale: Locale
+    /// When the notification is delivered: its fire date, or now. Expiry reminders (D43) are
+    /// written for that moment ("tomorrow", time left).
+    var deliveredAt: Date?
+    /// The current session's expiry and grace end, as the expiry reminders know them (D43).
+    var sessionExpiresAt: Date?
+    var graceEndsAt: Date?
 }
 
 enum AlertText {
@@ -32,6 +38,7 @@ enum AlertText {
         case .missedReadings: return "No readings"
         case .sensorWarmUpComplete: return "Sensor ready"
         case .sensorExpiringIn24Hours: return "Sensor expires within 24 hours"
+        case .sensorExpiringIn12Hours: return "Sensor expires within 12 hours"
         case .sensorExpiringIn2Hours: return "Sensor expires within 2 hours"
         case .sensorGracePeriod: return "Sensor grace period"
         case .sensorFailed: return "Sensor failed"
@@ -44,13 +51,33 @@ enum AlertText {
         }
     }
 
-    /// The title for a notification: the sensor alert says what to do about this failure (D36).
+    /// The title for a notification: the sensor alert says what to do about this failure (D36); the
+    /// expiry reminders state the time left and the clock time (D43).
     static func title(_ kind: AlertKind, context c: AlertTextContext) -> String {
-        if kind == .sensorFailed, case .failed(let failure) = c.settledSensorState {
-            if failure.requiresPairing { return "Pair the sensor again" }
-            if failure.requiresSensorReplacement { return "Replace the sensor" }
-            // `.other` (D37): a failure the source could not classify; its message says what it is.
-            return "Sensor problem"
+        switch kind {
+        case .sensorFailed:
+            if case .failed(let failure) = c.settledSensorState {
+                if failure.requiresPairing { return "Pair the sensor again" }
+                if failure.requiresSensorReplacement { return "Replace the sensor" }
+                // `.other` (D37): a failure the source could not classify; its message says what it is.
+                return "Sensor problem"
+            }
+        case .sensorExpiringIn24Hours, .sensorExpiringIn12Hours:
+            if let expiry = c.sessionExpiresAt, let at = c.deliveredAt {
+                return "Sensor expires in \(duration(expiry.timeIntervalSince(at)))"
+            }
+        case .sensorExpiringIn2Hours:
+            if let expiry = c.sessionExpiresAt, let at = c.deliveredAt {
+                return "Sensor expires in \(duration(expiry.timeIntervalSince(at))) (at \(time(expiry, c)))"
+            }
+        case .sensorGracePeriod:
+            guard let graceEnd = c.graceEndsAt, let at = c.deliveredAt else { return "Sensor session ended — grace period" }
+            if let expiry = c.sessionExpiresAt, abs(at.timeIntervalSince(expiry)) < 60 {
+                return "Sensor session ended — \(shortDuration(graceEnd.timeIntervalSince(expiry))) grace period"
+            }
+            return "Sensor session ended — \(shortDuration(graceEnd.timeIntervalSince(at))) of grace period left"
+        default:
+            break
         }
         return title(kind)
     }
@@ -76,16 +103,16 @@ enum AlertText {
             return "No valid reading in the last \(c.settings.missedReadings.windowMinutes) min."
         case .sensorWarmUpComplete:
             return "Warm-up is complete. Readings are starting."
-        case .sensorExpiringIn24Hours, .sensorExpiringIn2Hours:
-            if case .active(_, let expiresAt) = c.settledSensorState {
-                return "The session ends \(dateTime(expiresAt, c)). Plan a sensor change."
-            }
-            return "Plan a sensor change."
+        case .sensorExpiringIn24Hours, .sensorExpiringIn12Hours:
+            guard let expiry = c.sessionExpiresAt else { return "Plan a sensor change." }
+            let at = c.deliveredAt ?? expiry
+            return "The session ends \(day(expiry, from: at, c)) at \(time(expiry, c)).\(gracePeriodFollows(c))"
+        case .sensorExpiringIn2Hours:
+            return "Plan a sensor change.\(gracePeriodFollows(c))"
         case .sensorGracePeriod:
-            if case .gracePeriod(let endsAt) = c.settledSensorState {
-                return "Readings stop \(dateTime(endsAt, c)). Change the sensor soon."
-            }
-            return "Change the sensor soon."
+            guard let graceEnd = c.graceEndsAt else { return "Replace the sensor soon." }
+            let at = c.deliveredAt ?? graceEnd
+            return "Readings stop at \(time(graceEnd, c)) \(day(graceEnd, from: at, c)). Replace the sensor before then."
         case .sensorFailed:
             if case .failed(let failure) = c.settledSensorState {
                 // The source's text, written for the person wearing the sensor (D36).
@@ -158,6 +185,47 @@ enum AlertText {
         if rate < 0 { return "falling \(magnitude) mg/dL/min" }
         if rate > 0 { return "rising \(magnitude) mg/dL/min" }
         return "steady"
+    }
+
+    /// " A 12-hour grace period follows." when the session's grace period is known, else "".
+    private static func gracePeriodFollows(_ c: AlertTextContext) -> String {
+        guard let expiry = c.sessionExpiresAt, let graceEnd = c.graceEndsAt, graceEnd > expiry else { return "" }
+        let minutes = Int((graceEnd.timeIntervalSince(expiry) / 60).rounded())
+        let length = minutes % 60 == 0 ? "\(minutes / 60)-hour" : shortDuration(graceEnd.timeIntervalSince(expiry))
+        return " A \(length) grace period follows."
+    }
+
+    /// "today", "tomorrow" or "on Sep 25, 2026": `date`'s day as seen from `reference`.
+    static func day(_ date: Date, from reference: Date, _ c: AlertTextContext) -> String {
+        let calendar = c.calendar
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: reference), to: calendar.startOfDay(for: date)).day
+        switch days {
+        case 0: return "today"
+        case 1: return "tomorrow"
+        default:
+            return "on " + plainSpaces(date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, locale: c.locale,
+                                                                       calendar: calendar, timeZone: calendar.timeZone)))
+        }
+    }
+
+    /// Time left, to the minute: "24 hours", "1 hour", "45 minutes", "20 h 15 min".
+    static func duration(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int((seconds / 60).rounded()))
+        let hours = total / 60
+        let minutes = total % 60
+        if total == 0 { return "less than a minute" }
+        if minutes == 0 { return hours == 1 ? "1 hour" : "\(hours) hours" }
+        if hours == 0 { return minutes == 1 ? "1 minute" : "\(minutes) minutes" }
+        return "\(hours) h \(minutes) min"
+    }
+
+    /// Time left, short, to the minute: "12 h", "9 h 20 min", "45 min".
+    static func shortDuration(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int((seconds / 60).rounded()))
+        let hours = total / 60
+        let minutes = total % 60
+        if hours == 0 { return "\(minutes) min" }
+        return minutes == 0 ? "\(hours) h" : "\(hours) h \(minutes) min"
     }
 
     static func time(_ date: Date, _ c: AlertTextContext) -> String {

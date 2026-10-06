@@ -227,6 +227,7 @@ public final class AlertDeliveryExecutor {
         let level: String
         switch decision.interruption {
         case .passive: level = "passive (quiet hours)"
+        case .active: level = "active, no sound"
         case .timeSensitive: level = "time-sensitive"
         case .critical: level = "critical"
         }
