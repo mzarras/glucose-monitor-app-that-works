@@ -6,28 +6,26 @@ extension AlertEngine {
     mutating func apply(_ action: AlertUserAction, now: Date) -> [AlertAction] {
         switch action {
         case .acknowledge(let kind):
-            if kind.isEventAlert { return acknowledgeAnnouncement(kind, now: now) }
+            noteReminderSeen(kind, now: now)
+            if kind.isEventAlert { return [.dismiss(kind)] }
             guard episode(kind).isActive, let minutes = settings.snoozeMinutes(kind) else {
                 return [.userActionIgnored(action)]
             }
             return snooze(kind, minutes: minutes, now: now)
 
         case .snooze(let kind, let minutes):
-            if kind.isEventAlert { return acknowledgeAnnouncement(kind, now: now) }
+            noteReminderSeen(kind, now: now)
+            if kind.isEventAlert { return [.dismiss(kind)] }
             // No pre-emptive snooze: every new episode sounds. In particular urgent low cannot be
             // silenced before it fires (S7).
             guard episode(kind).isActive else { return [.userActionIgnored(action)] }
             return snooze(kind, minutes: minutes, now: now)
 
         case .silence(let kind):
+            // Swiped away: a reminder that just came due is out (no check needed, D43).
+            noteReminderSeen(kind, now: now)
             return [.stopSound(kind)]
         }
-    }
-
-    /// Removes the announcement's notification. `.cancel` also removes the kind's pending one, so an
-    /// expiry reminder still pending for later in the session is written again (D43).
-    private mutating func acknowledgeAnnouncement(_ kind: AlertKind, now: Date) -> [AlertAction] {
-        [.cancel(kind)] + rebuildPendingExpiryReminders(now: now, kinds: [kind])
     }
 
     /// Snoozes an active alert. S7: urgent low is clamped to at most 30 minutes here, whatever

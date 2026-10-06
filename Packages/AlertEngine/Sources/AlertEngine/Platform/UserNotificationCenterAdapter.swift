@@ -80,6 +80,12 @@ public final class UserNotificationCenterAdapter: AlertNotificationCenter {
         try await center.add(UNNotificationRequest(identifier: spec.identifier, content: content, trigger: trigger))
     }
 
+    public func presentIdentifiers() async -> Set<String> {
+        let pending = await center.pendingNotificationRequests().map(\.identifier)
+        let delivered = await center.deliveredNotifications().map(\.request.identifier)
+        return Set(pending).union(delivered)
+    }
+
     public func removePending(identifiers: [String]) {
         center.removePendingNotificationRequests(withIdentifiers: identifiers)
     }

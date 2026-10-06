@@ -104,6 +104,10 @@ public struct AlertEngine: Sendable {
             snapshot.storageHealth = health
         case .tick:
             break
+        case .foreground:
+            actions += rebuildPendingExpiryReminders(now: now)
+        case .notificationsNotScheduled(let notices):
+            noteNotScheduled(notices)
         case .launched:
             actions += reconcileAfterLaunch(now: now)
         case .user(let action):

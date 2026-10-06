@@ -192,7 +192,10 @@ enum AlertText {
         guard let expiry = c.sessionExpiresAt, let graceEnd = c.graceEndsAt, graceEnd > expiry else { return "" }
         let minutes = Int((graceEnd.timeIntervalSince(expiry) / 60).rounded())
         let length = minutes % 60 == 0 ? "\(minutes / 60)-hour" : shortDuration(graceEnd.timeIntervalSince(expiry))
-        return " A \(length) grace period follows."
+        // "An 8-hour", "An 11 h 30 min", "A 12-hour".
+        let spoken = length.prefix { $0.isNumber }
+        let article = spoken.hasPrefix("8") || spoken == "11" || spoken == "18" ? "An" : "A"
+        return " \(article) \(length) grace period follows."
     }
 
     /// "today", "tomorrow" or "on Sep 25, 2026": `date`'s day as seen from `reference`.

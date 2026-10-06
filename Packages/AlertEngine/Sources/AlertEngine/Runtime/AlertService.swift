@@ -19,9 +19,10 @@ public final class AlertService {
     private var lastBatch: Task<Void, Never>?
     private var permissions = NotificationPermissionState.unknown
     private var lastOutputVolume: Float?
-    /// The delivery level pending notifications/alarms were last built for. When it changes they
-    /// are rebuilt.
-    private var builtFor: (critical: Bool, alarms: Bool) = (false, false)
+    /// The delivery level pending notifications/alarms were last built for, and whether
+    /// notifications were allowed (`nil` until first read). When either changes they are rebuilt:
+    /// adds made while notifications were not allowed failed (D43 review B1).
+    private var builtFor: (critical: Bool, alarms: Bool, authorized: Bool?) = (false, false, nil)
 
     /// - Parameters:
     ///   - snapshot: what `onSnapshot` last delivered, or `nil` on first launch.
@@ -124,10 +125,14 @@ public final class AlertService {
 
     private func rebuildIfDeliveryLevelChanged() async {
         executor.criticalAlertsEnabled = permissions.criticalAlertsEnabled
-        let now = (critical: permissions.criticalAlertsEnabled, alarms: executor.systemAlarmsAvailable)
-        guard now != builtFor else { return }
-        builtFor = now
-        // Pending notifications (and alarms) were built for the old delivery level; rebuild them.
+        let level = (critical: permissions.criticalAlertsEnabled, alarms: executor.systemAlarmsAvailable)
+        let authorized = permissions.isAuthorized
+        let authorizationChanged = builtFor.authorized.map { $0 != authorized } ?? false
+        let levelChanged = level.critical != builtFor.critical || level.alarms != builtFor.alarms
+        builtFor = (level.critical, level.alarms, authorized)
+        guard levelChanged || authorizationChanged else { return }
+        // Pending notifications (and alarms) were built for the old delivery level, or could not be
+        // added at all; rebuild them.
         await apply(.settings(engine.settings))
     }
 
@@ -135,6 +140,12 @@ public final class AlertService {
         let actions = engine.handle(input, at: clock.now, uptime: clock.uptime)
         onSnapshot(engine.snapshot)
         await perform(actions)
+        // Report refused pending reminders back, so none counts as out (D43 review B1). One round:
+        // the engine never re-adds a refused one by itself, so this cannot loop.
+        let refused = executor.takeRefusedReminders()
+        guard !refused.isEmpty else { return }
+        if case .notificationsNotScheduled = input { return }
+        await apply(.notificationsNotScheduled(refused))
     }
 
     private func perform(_ actions: [AlertAction]) async {
