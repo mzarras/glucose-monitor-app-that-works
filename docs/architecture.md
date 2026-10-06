@@ -113,10 +113,27 @@ is called. `didFinishLaunching` records whether iOS relaunched the app for Bluet
 engine snapshot are read; the force-quit gap is checked against the persisted pipeline heartbeat;
 the production `AlertService` is created and `start()`ed (reconciles what an earlier process left
 pending), the intent bridge is connected, queued notification responses are delivered; Trio, uploads
-and the widget are attached; the pipeline is activated (held states flow, in order); the store is
-opened and attached (held readings flow, in order); the G7 source is started again if it could not
-read its pairing before; Trio is re-seeded with the last 5 h of stored sensor readings; the retention
-purge runs if due.
+and the widget are attached; the pipeline is activated first (held events flow, in order) and the
+store is opened alongside, so a slow open (a long migration) cannot delay alerts or Trio: readings that
+arrive before it is open go to Trio and the alert engine at once and are stored when it opens (the D42
+path; the storage-failure alert only fires if that takes longer than `AlertLimits.storageFailingMinutes`);
+the G7 source is started again if it could not read its pairing before. **While the store is opening the
+latest reading is unknown** (review B1): no widget snapshot is written and the clock-mismatch latch is
+neither judged nor persisted, so neither can be cleared by a relaunch. If the open fails, the last
+widget snapshot is kept (the widget's own timeline turns it stale and "No data" on time), and the
+latch check runs again against the readings waiting for the store, which are then shown as the
+latest — a clock change still latches them (review m4); an older reading never clears a latch. Once the store is open: the latest reading is read, the widget is published, the latch is
+checked, Trio is re-seeded with the last 5 h of stored sensor readings, retention runs if due.
+
+**Trio at launch** (review m1): the bridge's window is empty in a new process, and G7Kit may deliver
+backfill the App Group already holds. So until the re-seed, readings not newer than the newest reading
+the App Group held when this process started are kept back (`TrioCoordinator`), and written with the
+first newer reading or by the re-seed — the first write never moves Trio's newest reading backwards.
+Nothing is written that did not pass the gate in this process. The hold is bounded (review m5): an App
+Group newest dated in the future is ignored; held readings go out when the store open fails, and at
+the latest after 2 minutes (`TrioCoordinator.maximumHoldTime`, on the next publish or retry); while
+held they are shown in the summary (`heldBackReadings`) and, held for 15 minutes, count as starving
+Trio (the Trio bridge alert).
 
 **Before the first unlock after a reboot**: preferences, the Keychain and the database are unreadable
 by design. Nothing is read or written; the G7 source reports `.failed(credentialsUnavailable)`; any
@@ -128,10 +145,13 @@ processes the batch; then the alert service gets the storage health and `.tick`,
 the pipeline heartbeat is saved. Uploads flush under a background-time assertion.
 
 **Foreground**: a pipeline drain attempt (waiting readings, storage health, `.tick`), permissions and
-media volume re-read, Trio retry (`publish([], session:)`) and heartbeat-key check (not during a DEBUG
-replay run), upload `flushIfDue`, retention if a day has passed, clock check; a 60-second ticker
-repeats the drain attempt, Trio retry, heartbeat-key check and clock check while in the foreground. **Background**: the ticker stops, the heartbeat and
-the diagnostic log are saved.
+media volume re-read (which also rebuilds pending reminders if notifications were just allowed in iOS
+Settings), `.foreground` to the alert service (D43: expiry reminders refused or dropped are added
+again; during a DEBUG replay run the replay service gets it, and production gets one when the run
+ends), Trio retry (`publish([], session:)`) and heartbeat-key check (not during a DEBUG replay run),
+upload `flushIfDue`, retention if a day has passed, clock check; a 60-second ticker repeats the drain
+attempt, Trio retry, heartbeat-key check and clock check while in the foreground. **Background**: the
+ticker stops, the heartbeat and the diagnostic log are saved.
 
 **Force-quit gap** (HANDOFF §4.6): at bootstrap, if the last heartbeat is ≥ 15 min old, the sensor
 was active then, the boot is the same, and this is not a Bluetooth relaunch, `forceQuitGap` is set
@@ -139,7 +159,10 @@ was active then, the boot is the same, and this is not a Bluetooth relaunch, `fo
 
 **Clock mismatch** (review N1): after every batch, at bootstrap, on foreground and on the UI's tick,
 `ClockMismatchMonitor` applies WidgetCore's latch rule and a memoryless check (wall-clock delta vs the
-monotonic clock since the last check, same boot, > 60 s apart → latch). The latch is persisted.
+monotonic clock since the last check, same boot, > 60 s apart → latch). The latch is persisted. It is
+checked once the store's open has succeeded or failed (not while it is opening), an unknown latest
+reading leaves it (and the last clock record) untouched — nil means "not known yet", not "no reading"
+(review B1) — and only a newer reading clears it (review m4).
 
 ## DEBUG replay (D11, D19, D20)
 
@@ -159,7 +182,7 @@ exists in Release.
 
 | Rule | Where | Proven by |
 |---|---|---|
-| S1 never fabricate | The pipeline only moves readings the source delivered; the facade returns stored readings only; the clock-mismatch latch keeps a future-dated latest reading from looking current; missed readings counts from a clock rollback | `ReadingPipelineTests.test_S1_futureDatedNewestReadingIsNotCurrent`, `test_S1_clockChangeBetweenWakesLatchesTheLatestReading` |
+| S1 never fabricate | The pipeline only moves readings the source delivered; the facade returns stored readings only; the clock-mismatch latch keeps a future-dated latest reading from looking current, and survives relaunches (never judged against an unknown latest reading); missed readings counts from a clock rollback | `ReadingPipelineTests.test_S1_futureDatedNewestReadingIsNotCurrent`, `test_S1_clockChangeBetweenWakesLatchesTheLatestReading`, `BootstrapRegressionTests.test_S1_clockMismatchLatchSurvivesBootstrap`, `LaunchOrderTests.test_S1_clockLatchAndWidgetSurviveTheLaunch` |
 | S2 only valid readings | `ReadingPipeline` gates every delivered reading with the source's current session **before it is stored** (D38) and so before any consumer (the source gates first; each consumer gates again); a refused reading is never stored; one refusal in a batch (gate or store) keeps the valid readings | `test_S2_pipelineGatesEveryNewReadingBeforeConsumers`, `test_S2_gateRefusedReadingIsNeverStored`, `test_S2_refusalInABatchKeepsTheValidReadings`, `test_S2_storeRefusalInABatchKeepsTheValidReadings` |
 | S3 dedupe / timestamps | Only readings `insert` returns go further, so a re-delivery or backfill copy is published once; backfill keeps its flag and date | `test_S3_redeliveredReadingIsPublishedOnce`, `ReplayScenarioTests.test_signalGapWithBackfill_…` |
 | S4 LOW/HIGH | Flags pass through untouched; Trio gets 39/401 only through the D21 policy line in `TrioCoordinator` | `ReplayScenarioTests` (LOW/HIGH scenarios), TrioBridge's own `test_S4_*` |
@@ -179,7 +202,8 @@ exists in Release.
   the store recovers, they are lost from history (alerts and Trio already had them). G7Kit decides
   what the sensor backfills from its own persisted newest-published mark; it exposes no hook to base
   backfill on the latest *stored* reading (Phase 2 must-do), so such readings are not re-requested.
-  Up to 10 000 readings wait; beyond that the oldest are dropped, loudly.
+  Up to 10 000 distinct readings wait (a re-delivered reading is held once); beyond that the oldest
+  are dropped, loudly.
 - The simulator Keychain needs a signed host: `scripts/check.sh` signs simulator test runs ad hoc
   (D40); `KeychainCredentialStoreTests` fail, not skip, on an unsigned host.
 - File protection, state restoration, background wakes, AlarmKit and real Trio consumption can only be

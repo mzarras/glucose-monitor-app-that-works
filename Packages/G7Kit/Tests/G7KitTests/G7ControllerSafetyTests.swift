@@ -233,6 +233,42 @@ final class G7ControllerSafetyTests: XCTestCase {
         XCTAssertEqual(relaunched.states.last, .expired)
     }
 
+    /// Review n1 (D41 residual), the reviewer's probe: the phone clock is moved 11 days forward and a
+    /// non-zero-status reply arrives. Its time is the phone clock, not anchored sensor time, so it
+    /// must not produce `.expired` (that would settle as "Sensor expired" for the wrong reason); the
+    /// next status-0 packet reports the clock mismatch, and `.expired` is never emitted or kept.
+    func test_S5_phoneClockJumpWithStatusReplyIsNotExpired() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(120))
+        let sensorNow = harness.sensorClock
+        harness.clock.advance(11 * 86_400 + 300) // phone clock jumps; the sensor clock does not
+        harness.connection(glucose: Fixture.glucose(status: 0x80, sensorClock: sensorNow + 300, age: 5, glucose: 121, state: 0x06))
+        XCTAssertEqual(harness.states.last, .error(code: 0x06, description: "OK, past the session end (not confirmed)"))
+        harness.connection(glucose: Fixture.glucose(sensorClock: sensorNow + 600, age: 5, glucose: 122, state: 0x06))
+        XCTAssertEqual(harness.states.last, .failed(G7FailureReason.sensorClockMismatch))
+        XCTAssertFalse(harness.states.contains(.expired), "\(harness.states)")
+        XCTAssertNotEqual(harness.controller.lastSensorState, .expired)
+        harness.controller.bluetoothPowerChanged(.poweredOff)
+        harness.controller.bluetoothPowerChanged(.poweredOn)
+        XCTAssertNotEqual(harness.states.last, .expired, "the settled state is not \"Sensor expired\"")
+        XCTAssertNil(harness.record?.sessionEnd)
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120)])
+
+        // Pipeline level: an established start and a status reply judged by a jumped phone clock.
+        let pipeline = G7ReadingPipeline(serial: "S", reportedParameters: tenDayParameters) { _ in }
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        pipeline.beginConnection()
+        _ = pipeline.handleGlucose(G7GlucoseMessage(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 100, state: 0x06))!, receivedAt: t0)
+        for raw: UInt8 in [0x06, 0x18] {
+            pipeline.beginConnection()
+            let reply = pipeline.handleGlucose(G7GlucoseMessage(Fixture.glucose(status: 0x80, sensorClock: 200_300, age: 5, glucose: 100, state: raw))!,
+                                               receivedAt: t0.addingTimeInterval(11 * 86_400))
+            XCTAssertNotEqual(reply.state, .expired, "state 0x\(String(raw, radix: 16))")
+            if case .error = reply.state {} else { XCTFail("expected .error, got \(String(describing: reply.state))") }
+        }
+        XCTAssertFalse(pipeline.sessionEnded)
+    }
+
     /// Probe P8b: one status-0 "stopped" report is shown but does not end the session; the next OK
     /// reading is published, the status is active and the session is still there.
     func test_S5_oneEndReportDoesNotEndTheSession() throws {

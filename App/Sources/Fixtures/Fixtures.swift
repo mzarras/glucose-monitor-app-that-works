@@ -62,7 +62,7 @@ enum Fixtures {
     enum NowScenario: String, CaseIterable, Identifiable {
         case normal, low, high, lowFlag, highFlag, stale, noData, warmUp, expired, bluetoothOff, trioFailing, sensorError,
              transientFailure, pairingRejected, sensorEnded, sensorProblem, calibrationNeeded, calibrationThenClockMismatch,
-             notPaired, clockMismatch, manyProblems
+             notPaired, clockMismatch, manyProblems, gracePeriod
         var id: String { rawValue }
     }
 
@@ -130,6 +130,9 @@ enum Fixtures {
         case .expired:
             points = dayOfPoints(now: now, lastReadingAge: 31)
             sensor = .expired
+        case .gracePeriod:
+            // D43: 7 h 40 min 12 s of the 12-hour grace period left; readings still arrive.
+            sensor = .gracePeriod(endsAt: now.addingTimeInterval(7 * 3_600 + 40 * 60 + 12))
         case .bluetoothOff:
             sensor = .bluetoothUnavailable(.poweredOff)
         case .clockMismatch:

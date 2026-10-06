@@ -15,7 +15,7 @@ extension LiveAppServices {
 
     /// Runs the retention purge when the last one is more than a day old (at launch and foreground).
     func purgeIfDue() async {
-        if let last = preferences.lastPurgeAt, abs(Date().timeIntervalSince(last)) < 86_400 { return }
+        if let last = preferences.lastPurgeAt, abs(now().timeIntervalSince(last)) < 86_400 { return }
         await purge()
     }
 
@@ -23,9 +23,9 @@ extension LiveAppServices {
         guard let store = productionStore else { return }
         do {
             let removed = try await store.purge(keeping: storage.retention)
-            let now = Date()
-            preferences.lastPurgeAt = now
-            storage.lastPurgeAt = now
+            let purgedAt = now()
+            preferences.lastPurgeAt = purgedAt
+            storage.lastPurgeAt = purgedAt
             storage.lastPurgeRemoved = removed
             log(.store, "retention \(storage.retention.rawValue): removed \(removed) reading(s)")
             send(.storage)

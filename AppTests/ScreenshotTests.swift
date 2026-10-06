@@ -51,6 +51,10 @@ final class ScreenshotTests: XCTestCase {
         try render(phone(tab: .now, hasProblems: true) { nowContent(.manyProblems) }, name: "now-banners-light", scheme: .light, height: nil)
         try render(phone(tab: .now, hasProblems: false) { nowContent(.warmUp) }, name: "now-warm-up-dark", scheme: .dark)
         try render(phone(tab: .now, hasProblems: true) { nowContent(.clockMismatch) }, name: "now-clock-mismatch-light", scheme: .light)
+        // D43: the grace-period countdown, light and dark.
+        for scheme in [ColorScheme.light, .dark] {
+            try render(phone(tab: .now, hasProblems: true) { nowContent(.gracePeriod) }, name: "now-grace-period-\(scheme.name)", scheme: scheme, height: nil)
+        }
         // Review B1: the hero at the largest accessibility text size.
         try render(phone(tab: .now, hasProblems: false) { nowContent(.lowFlag) }.environment(\.dynamicTypeSize, .accessibility5),
                    name: "now-low-flag-ax5-light", scheme: .light, height: nil)

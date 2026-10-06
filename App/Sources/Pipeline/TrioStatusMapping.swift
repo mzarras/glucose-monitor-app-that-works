@@ -16,14 +16,22 @@ extension TrioBridgeSummary {
         consecutiveFailures = status.consecutiveFailures
         lastErrorDescription = status.lastError.map(Self.describe)
         lastErrorAt = status.lastErrorAt
-        isStarving = status.isStarving()
+        bridgeIsStarving = status.isStarving()
         trioLag = status.trioLag
+        refreshStarvation(now: now)
         lastGateRefusalDescription = status.lastGateRefusal.map { "\($0.reason) — reading at \($0.readingDate.ISO8601Format())" }
         if status.isFailing || isStarving || unavailableReason != nil {
             problemSince = problemSince ?? (status.isFailing ? status.lastErrorAt : nil) ?? now
         } else {
             problemSince = nil
         }
+    }
+
+    /// Trio is starving when the bridge says so, or when readings have been held back from it for
+    /// the starvation threshold (review m5: a hold must count as readings Trio does not have).
+    mutating func refreshStarvation(now: Date) {
+        let heldTooLong = heldBackSince.map { now.timeIntervalSince($0) >= TrioBridgeStatus.starvationThreshold } ?? false
+        isStarving = bridgeIsStarving || heldTooLong
     }
 
     /// Words for Settings and the S5 banner.

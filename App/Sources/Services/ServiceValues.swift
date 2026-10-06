@@ -110,6 +110,12 @@ struct TrioBridgeSummary: Sendable, Equatable {
     /// Set while the bridge is turned on but cannot run at all in this build (no Trio App Group in
     /// Info.plist): nothing reaches Trio, so it counts as failing (S5, Phase 2 review minor 4).
     var unavailableReason: String?
+    /// Readings held back at launch until the re-seed (never written older than Trio's newest,
+    /// review m1) and since when; at most `TrioCoordinator.maximumHoldTime`.
+    var heldBackReadings: Int = 0
+    var heldBackSince: Date?
+    /// The bridge's own starvation signal (`isStarving` adds held-back readings to it).
+    var bridgeIsStarving = false
 
     var isFailing: Bool { consecutiveFailures > 0 || unavailableReason != nil }
 

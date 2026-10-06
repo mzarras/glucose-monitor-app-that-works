@@ -44,7 +44,11 @@ final class AlertTextTests: XCTestCase {
 
     func test_statusBodiesFallBackWhenTheStateHasMoved() {
         XCTAssertEqual(AlertText.body(.sensorExpiringIn24Hours, context: context(), isRepeat: false), "Plan a sensor change.")
-        XCTAssertEqual(AlertText.body(.sensorGracePeriod, context: context(), isRepeat: false), "Change the sensor soon.")
+        XCTAssertEqual(AlertText.body(.sensorExpiringIn12Hours, context: context(), isRepeat: false), "Plan a sensor change.")
+        XCTAssertEqual(AlertText.body(.sensorExpiringIn2Hours, context: context(), isRepeat: false), "Plan a sensor change.")
+        XCTAssertEqual(AlertText.body(.sensorGracePeriod, context: context(), isRepeat: false), "Replace the sensor soon.")
+        XCTAssertEqual(AlertText.title(.sensorExpiringIn12Hours, context: context()), "Sensor expires within 12 hours")
+        XCTAssertEqual(AlertText.title(.sensorGracePeriod, context: context()), "Sensor session ended — grace period")
         XCTAssertEqual(AlertText.body(.sensorFailed, context: context(), isRepeat: false), "Readings have stopped.")
         XCTAssertEqual(AlertText.body(.sensorError, context: context(), isRepeat: false), "The sensor reported an error.")
         XCTAssertEqual(AlertText.body(.bluetoothUnavailable, context: context(), isRepeat: false), "No readings can arrive.")
@@ -59,10 +63,45 @@ final class AlertTextTests: XCTestCase {
         XCTAssertEqual(AlertText.title(.sensorFailed, context: context()), "Sensor failed", "without a failure state: the list name")
     }
 
+    /// D43: the expiry reminders state the time left, to the minute, and the day as seen from delivery.
+    func test_durationsAndDays() {
+        XCTAssertEqual(AlertText.duration(24 * 3600), "24 hours")
+        XCTAssertEqual(AlertText.duration(3600), "1 hour")
+        XCTAssertEqual(AlertText.duration(20 * 3600 + 15 * 60 + 20), "20 h 15 min")
+        XCTAssertEqual(AlertText.duration(45 * 60), "45 minutes")
+        XCTAssertEqual(AlertText.duration(60), "1 minute")
+        XCTAssertEqual(AlertText.duration(20), "less than a minute")
+        XCTAssertEqual(AlertText.duration(-5), "less than a minute")
+        XCTAssertEqual(AlertText.shortDuration(12 * 3600), "12 h")
+        XCTAssertEqual(AlertText.shortDuration(9 * 3600 + 20 * 60), "9 h 20 min")
+        XCTAssertEqual(AlertText.shortDuration(45 * 60), "45 min")
+        let c = context()
+        XCTAssertEqual(AlertText.day(Fixtures.t0.addingTimeInterval(11 * 3600), from: Fixtures.t0, c), "today")
+        XCTAssertEqual(AlertText.day(Fixtures.t0.addingTimeInterval(13 * 3600), from: Fixtures.t0, c), "tomorrow")
+        XCTAssertEqual(AlertText.day(Fixtures.t0.addingTimeInterval(2 * 86_400), from: Fixtures.t0, c), "on Sep 25, 2026")
+    }
+
+    func test_aGracePeriodThatIsNotWholeHoursIsWrittenInHoursAndMinutes() {
+        var c = context()
+        c.deliveredAt = Fixtures.t0
+        c.sessionExpiresAt = Fixtures.t0
+        c.graceEndsAt = Fixtures.t0.addingTimeInterval(12 * 3600 + 30 * 60)
+        XCTAssertEqual(AlertText.title(.sensorGracePeriod, context: c), "Sensor session ended — 12 h 30 min grace period")
+        XCTAssertEqual(AlertText.body(.sensorExpiringIn2Hours, context: c, isRepeat: false), "Plan a sensor change. A 12 h 30 min grace period follows.")
+        c.graceEndsAt = Fixtures.t0.addingTimeInterval(11 * 3600 + 30 * 60)
+        XCTAssertEqual(AlertText.body(.sensorExpiringIn2Hours, context: c, isRepeat: false), "Plan a sensor change. An 11 h 30 min grace period follows.")
+        c.graceEndsAt = Fixtures.t0.addingTimeInterval(8 * 3600)
+        XCTAssertEqual(AlertText.body(.sensorExpiringIn2Hours, context: c, isRepeat: false), "Plan a sensor change. An 8-hour grace period follows.")
+    }
+
     func test_kindProperties() {
         XCTAssertEqual(AlertKind.urgentLow.priority, 0)
         XCTAssertTrue(AlertKind.allCases.allSatisfy { $0.priority < AlertKind.allCases.count })
         XCTAssertEqual(AlertKind.allCases.filter(\.isGlucoseAlert), [.urgentLow, .urgentLowSoon, .low, .high, .fallingFast, .risingFast])
         XCTAssertEqual(AlertKind.allCases.filter(\.usesScheduledNotifications), [.urgentLow, .missedReadings])
+        XCTAssertEqual(AlertKind.sensorExpiryReminders,
+                       [.sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod, .sensorExpired])
+        XCTAssertEqual(AlertKind.allCases.filter(\.isEventAlert),
+                       [.sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod])
     }
 }

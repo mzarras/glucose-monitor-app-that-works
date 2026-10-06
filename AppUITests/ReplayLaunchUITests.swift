@@ -26,8 +26,8 @@ final class ReplayLaunchUITests: XCTestCase {
         return app
     }
 
-    private func launch(scenario: String, minute: Int) -> XCUIApplication {
-        launchApp(["-replayScenario", scenario, "-replaySpeed", "1", "-replayStartMinute", String(minute)])
+    private func launch(scenario: String, minute: Int, extra: [String] = []) -> XCUIApplication {
+        launchApp(["-replayScenario", scenario, "-replaySpeed", "1", "-replayStartMinute", String(minute)] + extra)
     }
 
     private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
@@ -143,6 +143,52 @@ final class ReplayLaunchUITests: XCTestCase {
         XCTAssertFalse(element(app, "now.hero.reading").exists)
         waitForLabel(element(app, "banner.sensorExpired"), "expired banner") { $0.contains("Sensor expired") }
         assertReplayBanner(app, "sensorExpiry")
+    }
+
+    // MARK: - Alerts (D43)
+
+    /// The Alerts tab groups the sensor expiry reminders (24 h, 12 h, 2 h, grace start, expired). Each
+    /// row has one switch (on/off; review m8: no Sound switch in the list); an announcement's page has
+    /// the Sound switch (24 h off by default); urgent low's page has none (S7).
+    /// With SENSOR_WRITE_SCREENSHOTS=1 (TEST_RUNNER_ prefix through xcodebuild) it also saves the
+    /// list and the 24 h reminder's page to docs/screenshots, named with SENSOR_SCREENSHOT_SCHEME.
+    func test_alertsShowTheSensorExpiryReminders() throws {
+        let app = launch(scenario: "steady", minute: 60, extra: ["-tab", "alerts"])
+        let urgentLow = element(app, "alerts.row.urgentLow")
+        XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout))
+        urgentLow.tap()
+        XCTAssertTrue(app.staticTexts["Urgent low"].waitForExistence(timeout: timeout))
+        XCTAssertFalse(element(app, "alerts.detail.sound").exists, "S7: no Sound switch for urgent low")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout))
+        let first = element(app, "alerts.row.sensorExpiringIn24Hours")
+        let last = element(app, "alerts.row.sensorExpired")
+        // Scroll until the whole group is on screen (the last row of it visible).
+        for _ in 0..<12 where !(last.exists && last.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(first.isHittable && last.isHittable, "the expiry reminders are on the Alerts tab")
+        for kind in ["sensorExpiringIn24Hours", "sensorExpiringIn12Hours", "sensorExpiringIn2Hours", "sensorGracePeriod", "sensorExpired"] {
+            XCTAssertTrue(element(app, "alerts.row.\(kind)").exists, kind)
+            XCTAssertTrue(element(app, "alerts.toggle.\(kind)").exists, "\(kind): its on/off switch")
+        }
+        XCTAssertEqual(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'alerts.sound.'")).count, 0,
+                       "review m8: no Sound switch in the list")
+        try saveScreenshot("alerts-expiry-reminders")
+        first.tap()
+        XCTAssertTrue(app.staticTexts["Sensor expires in 24 h"].waitForExistence(timeout: timeout))
+        let sound = app.switches.matching(identifier: "alerts.detail.sound").firstMatch
+        XCTAssertTrue(sound.waitForExistence(timeout: timeout), "the Sound switch is on the reminder's page")
+        XCTAssertEqual(sound.value as? String, "0", "24 h: no sound by default")
+        try saveScreenshot("alerts-expiry-24h")
+    }
+
+    /// Writes the screen to docs/screenshots when asked (see above).
+    private func saveScreenshot(_ name: String) throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["SENSOR_WRITE_SCREENSHOTS"] == "1" else { return }
+        let scheme = environment["SENSOR_SCREENSHOT_SCHEME"] ?? "light"
+        let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("docs/screenshots", isDirectory: true)
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: directory.appendingPathComponent("\(name)-\(scheme).png"))
     }
 
     // MARK: - No sensor

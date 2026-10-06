@@ -158,48 +158,12 @@ final class SensorAlertTests: XCTestCase {
         XCTAssertFalse(active.fired.contains(.sensorWarmUpComplete))
     }
 
-    func test_expiringIn24HoursThenIn2Hours() {
-        let h = EngineHarness()
-        let expiresAt = h.now.addingTimeInterval(30 * 3600)
-        XCTAssertEqual(h.send(.sensorState(.active(sessionStart: Fixtures.t0, expiresAt: expiresAt))).fired, [])
-        XCTAssertEqual(h.advance(minutes: 6 * 60).fired.filter(\.isEventAlert), [.sensorExpiringIn24Hours])
-        let notice = h.engine.handle(.tick, at: h.now) // nothing more
-        XCTAssertEqual(notice.fired.filter(\.isEventAlert), [])
-        XCTAssertEqual(h.advance(minutes: 21 * 60).fired.filter(\.isEventAlert), [])
-        XCTAssertEqual(h.advance(minutes: 60).fired.filter(\.isEventAlert), [.sensorExpiringIn2Hours])
-        XCTAssertEqual(h.advance(minutes: 60).fired.filter(\.isEventAlert), [])
-        XCTAssertEqual(h.advance(minutes: 120).fired.filter(\.isEventAlert), [], "after expiry: nothing")
-    }
-
-    func test_onlyThe2HourNoticeWhenBothAreDueAtOnce() {
-        let h = EngineHarness()
-        let expiresAt = h.now.addingTimeInterval(3600)
-        let actions = h.send(.sensorState(.active(sessionStart: Fixtures.t0, expiresAt: expiresAt)))
-        XCTAssertEqual(actions.fired, [.sensorExpiringIn2Hours])
-        XCTAssertEqual(actions.firedNotice(.sensorExpiringIn2Hours)?.body, "The session ends Sep 23, 2026 at 1:00 PM. Plan a sensor change.")
-        XCTAssertEqual(h.tick().fired, [])
-    }
-
-    func test_gracePeriodIsAnnouncedOnce() {
-        let h = EngineHarness()
-        let ends = h.now.addingTimeInterval(12 * 3600)
-        let grace = h.send(.sensorState(.gracePeriod(endsAt: ends)))
-        XCTAssertEqual(grace.fired, [.sensorGracePeriod])
-        XCTAssertEqual(grace.firedNotice(.sensorGracePeriod)?.body, "Readings stop Sep 24, 2026 at 12:00 AM. Change the sensor soon.")
-        XCTAssertEqual(h.send(.sensorState(.gracePeriod(endsAt: ends))).fired, [])
-    }
-
-    func test_aDisabledAnnouncementIsDeliveredIfTurnedOnLaterInTheWindow() {
-        let h = EngineHarness()
-        h.settings { $0.sensorExpiringIn24Hours.isEnabled = false }
-        XCTAssertEqual(h.send(.sensorState(.active(sessionStart: Fixtures.t0, expiresAt: h.now.addingTimeInterval(20 * 3600)))).fired, [])
-        XCTAssertEqual(h.settings { $0.sensorExpiringIn24Hours.isEnabled = true }.fired, [.sensorExpiringIn24Hours])
-    }
+    // The expiry reminders (24 h, 12 h, 2 h, grace period, expired) are in ExpiryReminderTests (D43).
 
     func test_acknowledgingOrSnoozingAnAnnouncementRemovesIt() {
         let h = EngineHarness()
-        XCTAssertEqual(h.user(.acknowledge(.sensorGracePeriod)).first, .cancel(.sensorGracePeriod))
-        XCTAssertEqual(h.user(.snooze(.sensorWarmUpComplete, minutes: 30)).first, .cancel(.sensorWarmUpComplete))
+        XCTAssertEqual(h.user(.acknowledge(.sensorGracePeriod)).first, .dismiss(.sensorGracePeriod))
+        XCTAssertEqual(h.user(.snooze(.sensorWarmUpComplete, minutes: 30)).first, .dismiss(.sensorWarmUpComplete))
     }
 
     func test_silenceStopsOnlyTheSound() {
@@ -218,37 +182,32 @@ final class SensorAlertTests: XCTestCase {
         let h = EngineHarness()
         var fired = 0
         for day in 0..<40 {
-            fired += h.send(.sensorState(.gracePeriod(endsAt: Fixtures.t0.addingTimeInterval(Double(day) * 86_400 + 3600)))).fired.count
+            let end = h.now.addingTimeInterval(minutes(30))
+            h.send(.sensorState(.warmingUp(endsAt: end)))
+            h.clock.set(end)
+            fired += h.send(.sensorState(.active(sessionStart: end, expiresAt: end.addingTimeInterval(10 * 86_400)))).fired
+                .filter { $0 == .sensorWarmUpComplete }.count
+            h.clock.set(Fixtures.t0.addingTimeInterval(Double(day + 1) * 86_400))
         }
-        XCTAssertEqual(fired, 40, "each session's grace period (a day apart) is announced once")
+        XCTAssertEqual(fired, 40, "each sensor's warm-up (a day apart) is announced once")
         XCTAssertEqual(h.engine.snapshot.announcedSessionDates.count, 1)
     }
 
     /// Safety review WS4 M1: session dates are derived from the phone clock at each connection, so
     /// they jitter by a second or so; that must not re-announce.
-    func test_announcementsDoNotRepeatWhenDerivedDatesJitter() {
+    func test_warmUpCompleteDoesNotRepeatWhenDerivedDatesJitter() {
         let h = EngineHarness()
-        let expires = h.now.addingTimeInterval(20 * 3600)
-        var expiring = 0
-        for i in 0..<12 {
+        let end = h.now.addingTimeInterval(minutes(30))
+        h.send(.sensorState(.warmingUp(endsAt: end)))
+        h.clock.set(end)
+        var announced = 0
+        for i in 0..<6 {
             let jitter = TimeInterval(i % 3) - 1   // −1, 0, +1 s
-            let state = SensorState.active(sessionStart: expires.addingTimeInterval(-10 * 86_400 + jitter), expiresAt: expires.addingTimeInterval(jitter))
-            expiring += h.send(.sensorState(state)).fired.filter { $0 == .sensorExpiringIn24Hours }.count
-            h.clock.advance(minutes: 5)
+            h.send(.sensorState(.warmingUp(endsAt: end.addingTimeInterval(jitter))))
+            announced += h.send(.sensorState(.active(sessionStart: end, expiresAt: end.addingTimeInterval(10 * 86_400)))).fired
+                .filter { $0 == .sensorWarmUpComplete }.count
         }
-        XCTAssertEqual(expiring, 1)
-        var grace = 0
-        for i in 0..<12 {
-            grace += h.send(.sensorState(.gracePeriod(endsAt: h.now.addingTimeInterval(3600 + TimeInterval(i % 2))))).fired
-                .filter { $0 == .sensorGracePeriod }.count
-            h.clock.advance(minutes: 5)
-        }
-        XCTAssertEqual(grace, 1, "grace end jittering (and 'moving' with the clock by minutes) is one session")
-        // A new sensor ten days later is announced again.
-        let next = expires.addingTimeInterval(10 * 86_400)
-        h.clock.set(next.addingTimeInterval(-20 * 3600))
-        XCTAssertEqual(h.send(.sensorState(.active(sessionStart: next.addingTimeInterval(-10 * 86_400), expiresAt: next))).fired
-            .filter { $0 == .sensorExpiringIn24Hours }, [.sensorExpiringIn24Hours])
+        XCTAssertEqual(announced, 1)
     }
 }
 

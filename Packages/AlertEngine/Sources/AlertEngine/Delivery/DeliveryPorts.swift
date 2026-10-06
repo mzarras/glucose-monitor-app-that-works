@@ -14,6 +14,9 @@ public protocol AlertNotificationCenter: AnyObject {
     func requestAuthorization() async -> NotificationPermissionState
     func permissionState() async -> NotificationPermissionState
     func add(_ request: NotificationRequestSpec) async throws
+    /// Identifiers of this app's pending requests and of its notifications still shown in
+    /// Notification Center (D43 review B1: is a reminder that came due really out?).
+    func presentIdentifiers() async -> Set<String>
     func removePending(identifiers: [String])
     func removeDelivered(identifiers: [String])
 }

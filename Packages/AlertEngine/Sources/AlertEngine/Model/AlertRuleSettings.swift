@@ -218,20 +218,32 @@ public struct StatusAlertSettings: Sendable, Equatable, Hashable, Encodable {
     }
 }
 
-/// A one-off sensor announcement (warm-up complete, expiring in 24 h / 2 h, grace period). On by
-/// default, informational, so it respects the ringer switch unless the user turns sound on silent on.
+/// A one-off sensor announcement (warm-up complete; the expiry reminders 24 h / 12 h / 2 h before the
+/// end, grace period). On by default, informational, so it respects the ringer switch unless the user
+/// turns sound on silent on.
 public struct EventAlertSettings: Sendable, Equatable, Hashable, Encodable {
     public var isEnabled: Bool
     public var sound: AlertSoundID
     public var soundsOnSilent: Bool
+    /// `false`: delivered as a visible notification with no sound at all (D43: the 24-hour expiry
+    /// reminder's default). Overrides `soundsOnSilent`.
+    public var playsSound: Bool
 
     public init(
         isEnabled: Bool = true,
         sound: AlertSoundID = AlertSoundCatalog.defaultSound(for: .sensorWarmUpComplete),
-        soundsOnSilent: Bool = false
+        soundsOnSilent: Bool = false,
+        playsSound: Bool = true
     ) {
         self.isEnabled = isEnabled
         self.sound = sound
         self.soundsOnSilent = soundsOnSilent
+        self.playsSound = playsSound
+    }
+
+    /// Defaults per kind: on, Doorbell, respects the ringer switch; the 24-hour expiry reminder is
+    /// silent (D43).
+    public static func defaults(for kind: AlertKind) -> EventAlertSettings {
+        EventAlertSettings(sound: AlertSoundCatalog.defaultSound(for: kind), playsSound: kind != .sensorExpiringIn24Hours)
     }
 }

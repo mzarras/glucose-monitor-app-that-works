@@ -323,14 +323,20 @@ final class NightscoutUploadTests: XCTestCase {
     }
 
     func test_concurrentFlushesSendOnce() async throws {
+        // Deterministic: the first flush is held inside its POST, so the second provably overlaps it.
         let server = MockNightscoutServer(token: Self.token)
+        await server.holdNextRequest()
         let uploader = try makeUploader(server: server, clock: clock(at: 3_600))
         try await uploader.submit(fixture.reading(at: 3_600), session: fixture.session)
-        async let a = uploader.flush()
-        async let b = uploader.flush()
-        let outcomes = await [a, b]
-        XCTAssertTrue(outcomes.contains(.uploaded(count: 1)))
+        let first = Task { await uploader.flush() }
+        await server.waitUntilHoldingRequest()
+
+        await XCTAssertEqualAsync(await uploader.flush(), .alreadyFlushing)
+
+        await server.releaseHeldRequest()
+        await XCTAssertEqualAsync(await first.value, .uploaded(count: 1))
         await XCTAssertEqualAsync(await server.requests.count, 1)
+        await XCTAssertEqualAsync(await uploader.flush(), .nothingQueued)
     }
 
     func test_S5_failureAndBackoffSurviveRelaunch() async throws {

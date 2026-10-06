@@ -58,10 +58,17 @@ struct AlertsContent: View {
                 Hairline().padding(.top, 6)
             }
             ForEach(AlertSection.allCases, id: \.self) { section in
-                let rows = state.rows.filter { $0.kind.section == section }
+                let rows = state.rows(in: section)
                 if !rows.isEmpty {
                     VStack(alignment: .leading, spacing: 0) {
                         SectionLabel(section.rawValue).padding(.bottom, 4)
+                        if section == .expiryReminders {
+                            Text(verbatim: AlertsText.expiryRemindersNote)
+                                .font(Typography.body(size: 12))
+                                .foregroundStyle(Theme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.bottom, 4)
+                        }
                         ForEach(rows) { row in
                             AlertListRow(row: row, soundName: state.soundName(row.soundID), actions: actions)
                             Hairline()
@@ -104,6 +111,7 @@ struct AlertListRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("alerts.row.\(row.kind.rawValue)")
+
             if row.kind.canBeDisabled {
                 Toggle(isOn: Binding(get: { row.isEnabled }, set: { actions.edit(.enabled(row.kind, $0)) })) {
                     Text(verbatim: row.kind.title)
@@ -121,10 +129,15 @@ struct AlertListRow: View {
         .padding(.vertical, 8)
     }
 
-    /// "≤ 70 mg/dL · Low chime · sounds on silent"
+    /// "≤ 70 mg/dL · Low chime · sounds on silent", "Doorbell · no sound"
     private var detail: String {
         var parts: [String] = []
         if let threshold = AlertsText.threshold(row.threshold) { parts.append(threshold) }
+        if row.playsSound == false {
+            parts.append("no sound")
+            if !row.effectiveIsEnabled { parts.append("off") }
+            return parts.joined(separator: " · ")
+        }
         parts.append(soundName)
         if row.effectiveSoundOnSilent { parts.append("sounds on silent") }
         if !row.effectiveIsEnabled { parts.append("off") }
@@ -200,6 +213,19 @@ struct AlertDetailView: View {
                 Hairline()
                 if let threshold = row.threshold {
                     thresholdEditor(threshold)
+                    Hairline()
+                }
+                if let playsSound = row.playsSound {
+                    // D43: one-off announcements can be a notification without sound. Never offered
+                    // for urgent low (S7): its row has no `playsSound`.
+                    Toggle(isOn: Binding(get: { playsSound }, set: { actions.edit(.playsSound(row.kind, $0)) })) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: "Sound").font(Typography.body(size: 15, weight: .medium))
+                            Text(verbatim: AlertsText.playsSoundNote).font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
+                        }
+                    }
+                    .frame(minHeight: Layout.minTarget)
+                    .accessibilityIdentifier("alerts.detail.sound")
                     Hairline()
                 }
                 soundOnSilent
@@ -299,6 +325,7 @@ struct AlertDetailView: View {
                 }
             }
             .frame(minHeight: Layout.minTarget)
+            .disabled(row.playsSound == false) // no sound to play (D43)
         }
     }
 }

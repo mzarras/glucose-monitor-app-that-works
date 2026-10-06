@@ -244,4 +244,10 @@ struct ScrubPreview: View {
 #Preview("Onboarding · pairing bondRemoved · dark") { OnboardingContent(state: { var o = Fixtures.onboarding(.pairing, at: previewNow); o.pairing = .failed(Fixtures.pairingFailure(.bondRemoved)); return o }(), actions: .noop, now: previewNow).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
 #Preview("Onboarding · pairing rejected after authentication · light") { OnboardingContent(state: { var o = Fixtures.onboarding(.pairing, at: previewNow); o.pairing = .failed(Fixtures.pairingFailure(.pairingRejected)); return o }(), actions: .noop, now: previewNow, pairingContext: PairingContext(hasStoredSensor: true, isNewPairing: true, authenticatedInThisPairing: true)).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) }
 #Preview("Onboarding · pairing rejected after authentication · dark") { OnboardingContent(state: { var o = Fixtures.onboarding(.pairing, at: previewNow); o.pairing = .failed(Fixtures.pairingFailure(.pairingRejected)); return o }(), actions: .noop, now: previewNow, pairingContext: PairingContext(hasStoredSensor: true, isNewPairing: true, authenticatedInThisPairing: true)).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+
+// MARK: - D43: grace-period countdown
+
+#Preview("Now · gracePeriod · light") { PreviewScreen(scheme: .light) { NowContent(state: Fixtures.now(.gracePeriod, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop) } }
+#Preview("Now · gracePeriod · dark") { PreviewScreen(scheme: .dark) { NowContent(state: Fixtures.now(.gracePeriod, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop) } }
+#Preview("Now · gracePeriod, ticking · light") { PreviewScreen(scheme: .light) { NowContent(state: Fixtures.now(.gracePeriod, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop, liveClock: { Date() }) } }
 #endif

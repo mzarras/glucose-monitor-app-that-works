@@ -4,7 +4,7 @@
 //
 // 1. Latch (WidgetCore `ClockMismatchLatch.update`): a latest reading dated more than 60 s ahead of
 //    the phone clock (the clock was set back) is latched, and stays latched even after the clock
-//    passes its date, until a newer reading replaces it.
+//    passes its date, until a newer reading replaces it. An older reading never clears it.
 // 2. Memoryless check: at every ingest/wake the wall clock and the monotonic clock
 //    (`CLOCK_MONOTONIC_RAW`, counts through sleep, tagged with the boot) are recorded. If, since the
 //    previous record in the same boot, the wall clock moved more than 60 s differently from real
@@ -47,13 +47,24 @@ enum ClockMismatchMonitor {
         now: Date,
         uptime: Uptime?
     ) -> ClockMismatchState {
+        // Nil means "not known yet" (e.g. the store is still opening at launch), not "no reading":
+        // keep the latch and the last clock record as they are, so a relaunch can neither clear a
+        // latch nor hide a clock change made while the latest reading was unknown (review B1).
+        guard let latest else { return state }
         var next = state
-        let latestReading = latest.map { LatestReading(reading: $0, previous: previous) }
+        let latestReading = LatestReading(reading: latest, previous: previous)
         next.latchedFor = ClockMismatchLatch.update(latchedFor: state.latchedFor, latest: latestReading, now: now)
+        // Only a newer reading clears a latch (review m4). An older one can be the latest for a while
+        // — a re-delivered reading waiting for a store that cannot open — and the latched reading
+        // comes back as the latest once it opens; it must still be latched then. (The latch only
+        // affects the reading whose date it holds, so keeping it costs nothing meanwhile.)
+        if next.latchedFor == nil, let latched = state.latchedFor, latest.date < latched {
+            next.latchedFor = latched
+        }
         if let uptime, let lastUptime = state.lastCheckUptime, let lastWall = state.lastCheckWallClock,
            let realElapsed = uptime.seconds(since: lastUptime) {
             let wallElapsed = now.timeIntervalSince(lastWall)
-            if abs(wallElapsed - realElapsed) > tolerance, let latest {
+            if abs(wallElapsed - realElapsed) > tolerance {
                 next.latchedFor = latest.date
             }
         }

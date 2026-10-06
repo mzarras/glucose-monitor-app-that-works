@@ -6,12 +6,16 @@
 //    pipeline starts consuming at once and holds every event; `start(pairingCode: nil)`.
 // 2. bootstrap, as soon as protected data is available (at once in a normal launch; after the first
 //    unlock when iOS relaunched the app for Bluetooth after a reboot): preferences, the alert service
-//    (restoring its snapshot), Trio, uploads and the widget are attached, the pipeline is activated
-//    (held states flow), the store is opened and attached (held readings flow), the G7 source is
-//    started again if it could not read its pairing before, Trio is re-seeded, the force-quit gap is
-//    checked, retention runs.
-// 3. Every processed batch is a wake: alert tick, widget, clock-mismatch check, pipeline heartbeat.
-// 4. Foreground: permissions, alert tick, Trio retry, upload flush, retention, a 60 s ticker.
+//    (restoring its snapshot), Trio, uploads and the widget are attached; the pipeline is activated
+//    first — alerts and Trio get held and new readings at once — and the store is opened alongside
+//    (readings wait in memory until it is, the D42 path); the G7 source is started again if it could
+//    not read its pairing before; the force-quit gap is checked. Once the store is open: the latest
+//    reading is read, the widget may publish and the clock latch may update (not before: the latest
+//    reading is unknown until then, review B1), Trio is re-seeded, retention runs.
+// 3. Every drain attempt is a wake: storage health and alert tick, widget, clock-mismatch check,
+//    pipeline heartbeat.
+// 4. Foreground: permissions, `.foreground` (expiry reminders, D43), drain attempt (storage, tick),
+//    Trio retry, upload flush, retention, a 60 s ticker.
 //
 // Area-specific parts are in the LiveAppServices+*.swift extensions.
 
@@ -29,19 +33,28 @@ import WidgetCore
 final class LiveAppServices: AppServices {
     /// Everything the composition root builds for this class.
     struct Dependencies {
-        let g7: G7CGMSource
+        /// The G7 source (`G7CGMSource`; a scripted double in launch-order tests).
+        let g7: any SensorDevice
         let diagnostics: RingBufferDiagnosticLog
         let preferences: AppPreferences
         let credentials: any CredentialStore
         let trio: TrioCoordinator
         let uploads: UploadCoordinator
         let alertPorts: AlertPorts
-        let widget: LiveWidgetPublisher?
+        let widget: (any AppWidgetPublishing)?
         /// `Application Support/GlucoseStore/readings.sqlite` (PROGRESS D25).
         let databaseURL: URL
         let httpTransport: any HTTPTransport
         /// DEBUG: the launch argument `-replayScenario` (and options) to start with.
         let launchReplay: LaunchReplay?
+        /// The phone clock (the pipeline's `now`, the alert engine's wall clock); tests inject one.
+        var clock: @Sendable () -> Date = { Date() }
+        /// The monotonic clock with its boot (clock-fault detection); nil where it does not apply.
+        var uptime: @MainActor () -> Uptime? = { SystemAlertClock().uptime }
+        /// Opens the production database; tests delay it or make it fail.
+        var openStore: @Sendable (URL, any DiagnosticLog) async throws -> GlucoseStore = { url, diagnostics in
+            try await GlucoseStore.production(at: url, diagnostics: diagnostics)
+        }
     }
 
     struct LaunchReplay: Equatable {
@@ -52,18 +65,21 @@ final class LiveAppServices: AppServices {
 
     // MARK: Components
 
-    let g7: G7CGMSource
+    let g7: any SensorDevice
     let diagnostics: RingBufferDiagnosticLog
     let preferences: AppPreferences
     let credentials: any CredentialStore
     let trioCoordinator: TrioCoordinator
     let uploads: UploadCoordinator
     let alertPorts: AlertPorts
-    let widget: LiveWidgetPublisher?
+    let widget: (any AppWidgetPublishing)?
     let databaseURL: URL
     let httpTransport: any HTTPTransport
     let launchReplay: LaunchReplay?
-    let systemClock = SystemAlertClock()
+    /// The phone clock and the monotonic clock (see `Dependencies`).
+    let now: @Sendable () -> Date
+    let uptime: @MainActor () -> Uptime?
+    private let openStore: @Sendable (URL, any DiagnosticLog) async throws -> GlucoseStore
     let historyImports: HistoryImportCoordinator
 
     /// The G7 pipeline, for the whole process.
@@ -122,8 +138,14 @@ final class LiveAppServices: AppServices {
         databaseURL = dependencies.databaseURL
         httpTransport = dependencies.httpTransport
         launchReplay = dependencies.launchReplay
+        now = dependencies.clock
+        uptime = dependencies.uptime
+        openStore = dependencies.openStore
         historyImports = HistoryImportCoordinator(diagnostics: dependencies.diagnostics)
-        sensorPipeline = ReadingPipeline(name: "sensor", source: dependencies.g7, diagnostics: dependencies.diagnostics, now: { Date() })
+        sensorPipeline = ReadingPipeline(name: "sensor", source: dependencies.g7, diagnostics: dependencies.diagnostics, now: dependencies.clock)
+        // B1: no widget snapshot until the store is open — before that the latest reading is
+        // unknown, and a snapshot without it would clear the widget's clock-mismatch latch.
+        sensorPipeline.publishesWidget = false
 
         sensorPipeline.onChange = { [weak self] change in
             if change == .storage {
@@ -243,7 +265,13 @@ final class LiveAppServices: AppServices {
         }
         #endif
         guard isBootstrapped else { return }
-        let next = ClockMismatchMonitor.check(clockMismatch, latest: latestLiveReading, previous: previousLiveReading, now: now, uptime: systemClock.uptime)
+        // B1: while the store is still opening the latest reading is unknown (only readings that
+        // arrived since launch are known), so the persisted latch is left as it is. Once the open
+        // has succeeded or failed the check runs: after a failed open, readings waiting for the
+        // store are shown as the latest, and a clock change must still latch them (review m4). An
+        // older reading never clears a latch held for a newer one (`ClockMismatchMonitor`).
+        guard productionStore != nil || storeOpenError != nil else { return }
+        let next = ClockMismatchMonitor.check(clockMismatch, latest: latestLiveReading, previous: previousLiveReading, now: now, uptime: uptime())
         if next.latchedFor != clockMismatch.latchedFor {
             log(.app, next.latchedFor.map { "clock mismatch latched for the reading at \($0.ISO8601Format())" } ?? "clock mismatch cleared")
             send(.health)
@@ -336,9 +364,9 @@ final class LiveAppServices: AppServices {
         guard !isReplaying else { throw .notPaired }
         do throws(CalibrationRefusal) {
             try await g7.submitCalibration(request)
-            record(CalibrationRecord(request: request, status: .queued, refusal: nil, updatedAt: Date()))
+            record(CalibrationRecord(request: request, status: .queued, refusal: nil, updatedAt: now()))
         } catch {
-            record(CalibrationRecord(request: request, status: nil, refusal: CalibrationRefusalReason(error), updatedAt: Date()))
+            record(CalibrationRecord(request: request, status: nil, refusal: CalibrationRefusalReason(error), updatedAt: now()))
             throw error
         }
     }
@@ -350,7 +378,7 @@ final class LiveAppServices: AppServices {
         }
         var changed = recentCalibrations[index]
         changed.status = update.status
-        changed.updatedAt = Date()
+        changed.updatedAt = now()
         record(changed)
     }
 
@@ -467,13 +495,16 @@ final class LiveAppServices: AppServices {
 
         isBootstrapped = true
         log(.app, "bootstrapped (launched by Bluetooth restoration: \(launchedByBluetoothRestoration))")
-        // The store first, so readings that arrived before bootstrap are stored on the normal path.
-        await openStoreIfNeeded()
+        // Alerts and Trio first: the pipeline is activated before the store opens, so a slow open
+        // (a long migration) never delays them. Readings that arrive before the store is open go to
+        // Trio and the alert engine at once and are stored when it opens (the D42 path).
         sensorPipeline.activate()
+        let storeOpening = Task { await self.openStoreIfNeeded() }
         await startG7()
         await refreshStoredSensor()
         await updateTrioHeartbeat()
-        updateClockMismatchLatch(now: Date())
+        updateClockMismatchLatch(now: now())
+        await storeOpening.value
         for change in [ServiceChange.readings, .sensor, .calibration, .trio, .uploads, .historyImport, .alertSettings, .alertDelivery, .storage, .health, .appearance] {
             send(change)
         }
@@ -487,7 +518,7 @@ final class LiveAppServices: AppServices {
 
     func makeProductionAlerts() -> AlertService {
         alertPorts.makeProductionService(
-            settings: alertSettings, snapshot: preferences.alertEngineSnapshot, clock: PipelineAlertClock.system()
+            settings: alertSettings, snapshot: preferences.alertEngineSnapshot, clock: PipelineAlertClock(now: now, uptime: uptime)
         ) { [weak self] snapshot in
             self?.preferences.alertEngineSnapshot = snapshot
         }
@@ -496,7 +527,7 @@ final class LiveAppServices: AppServices {
     /// Attaches (or detaches) the Trio bridge and the uploaders to the active pipeline, following
     /// the user's switches and D20.
     func attachOutputs() {
-        let trio = trioCoordinator.activeBridge
+        let trio = trioCoordinator
         // Read at the moment of use, so a replaced uploader is picked up and a released one is not
         // kept alive (Phase 2 review M2).
         let uploaders: @MainActor () -> [ReadingUploader] = { [weak self] in self?.uploads.activeUploaders ?? [] }
@@ -524,7 +555,7 @@ final class LiveAppServices: AppServices {
         storage.availability = .opening
         send(.storage)
         do {
-            let store = try await GlucoseStore.production(at: databaseURL, diagnostics: diagnostics)
+            let store = try await openStore(databaseURL, diagnostics)
             productionStore = store
             storeOpenError = nil
             sensorPipeline.storeOpenFailingSince = nil
@@ -533,7 +564,10 @@ final class LiveAppServices: AppServices {
             log(.store, "database open at \(databaseURL.lastPathComponent)")
             updateStorageAvailability()
             await sensorPipeline.storeDidChange()
+            // The latest reading is known now: the widget and the clock latch may be updated.
+            sensorPipeline.publishesWidget = true
             await sensorPipeline.publishWidget()
+            updateClockMismatchLatch(now: now())
             await reseedTrio()
             await purgeIfDue()
             await refreshStorageSummary()
@@ -541,10 +575,12 @@ final class LiveAppServices: AppServices {
             storeOpenError = String(describing: error)
             if UIApplication.shared.isProtectedDataAvailable {
                 // D42: the storage-failure alert input, from the first failed open of this run.
-                sensorPipeline.storeOpenFailingSince = sensorPipeline.storeOpenFailingSince ?? Date()
+                sensorPipeline.storeOpenFailingSince = sensorPipeline.storeOpenFailingSince ?? now()
             }
             log(.store, "database could not be opened: \(error)")
             updateStorageAvailability()
+            // No re-seed is coming: readings held back from Trio at launch go out now (review m5).
+            await trioCoordinator.releaseHeldReadings(session: await g7.currentSession)
         }
     }
 
@@ -572,7 +608,7 @@ final class LiveAppServices: AppServices {
 
     /// After every batch of sensor events (each is a wake-up).
     private func sensorBatchProcessed() {
-        updateClockMismatchLatch(now: Date())
+        updateClockMismatchLatch(now: now())
         writePipelineHeartbeat()
         updateStorageAvailability()
         if isBootstrapped, productionStore == nil, storeOpenError != nil, UIApplication.shared.isProtectedDataAvailable {
@@ -584,14 +620,14 @@ final class LiveAppServices: AppServices {
     func writePipelineHeartbeat() {
         guard isBootstrapped else { return }
         preferences.pipelineHeartbeat = PipelineHeartbeat(
-            at: Date(), sensorWasActive: ForceQuitGapDetector.sensorIsActive(sensorPipeline.sensorState), boot: systemClock.uptime?.boot
+            at: now(), sensorWasActive: ForceQuitGapDetector.sensorIsActive(sensorPipeline.sensorState), boot: uptime()?.boot
         )
     }
 
     private func detectForceQuitGap() {
         let gap = ForceQuitGapDetector.gap(
             lastHeartbeat: preferences.pipelineHeartbeat, launchedByBluetoothRestoration: launchedByBluetoothRestoration,
-            now: Date(), boot: systemClock.uptime?.boot
+            now: now(), boot: uptime()?.boot
         )
         if let gap {
             forceQuitGap = gap
@@ -608,14 +644,19 @@ final class LiveAppServices: AppServices {
         await openStoreIfNeeded()
         // A drain attempt: stores waiting readings, sends the storage health and a tick (D42).
         activePipeline.retryHeldEvents()
+        // Re-reads permissions (and rebuilds pending reminders if notifications were just allowed in
+        // iOS Settings), then `.foreground`: expiry reminders refused or dropped are added again
+        // (D43). During a DEBUG replay run the replay service gets it (its reminders are the
+        // replay's); production gets one when the run ends (LiveAppServices+Replay `resumeSensor`).
         await refreshAlertDelivery()
+        await activeAlerts?.send(.foreground)
         if !isReplaying {
             await trioCoordinator.retry(session: sensorPipeline.sensorSession)
             await updateTrioHeartbeat()
         }
         uploads.flushIfDue()
         await purgeIfDue()
-        updateClockMismatchLatch(now: Date())
+        updateClockMismatchLatch(now: now())
         writePipelineHeartbeat()
         startForegroundTicker()
     }
@@ -643,7 +684,7 @@ final class LiveAppServices: AppServices {
                     await self.trioCoordinator.retry(session: self.sensorPipeline.sensorSession)
                     await self.updateTrioHeartbeat()
                 }
-                self.updateClockMismatchLatch(now: Date())
+                self.updateClockMismatchLatch(now: now())
                 self.writePipelineHeartbeat()
             }
         }
@@ -652,7 +693,7 @@ final class LiveAppServices: AppServices {
     // MARK: - Diagnostics
 
     func log(_ category: DiagnosticEvent.Category, _ message: String) {
-        diagnostics.record(DiagnosticEvent(date: Date(), category: category, message: message))
+        diagnostics.record(DiagnosticEvent(date: now(), category: category, message: message))
     }
 }
 

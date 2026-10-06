@@ -55,7 +55,7 @@ final class ReadingPipelineTests: XCTestCase {
         let uploader = try ReadingUploader(destination: destination, queueFile: queueFile, clock: PipelineTestWallClock(clock: clock), log: diagnostics)
         let pipeline = ReadingPipeline(name: "test", source: source, diagnostics: diagnostics, now: clock.closure)
         pipeline.outputs.alerts = alerts
-        pipeline.outputs.trio = trio.activeBridge
+        pipeline.outputs.trio = trio
         pipeline.outputs.uploaders = { [uploader] }
         await alerts.start()
         pipeline.startConsuming()
@@ -198,7 +198,7 @@ final class ReadingPipelineTests: XCTestCase {
         let trioStore = RecordingTrioStore()
         let trio = TrioCoordinator(appGroupID: "group.org.nightscout.ABCDE12345.trio.trio-app-group", store: trioStore, diagnostics: diagnostics, clock: clock.closure)
         trio.configure(enabled: true, liveOutputsAllowed: true)
-        pipeline.outputs.trio = trio.activeBridge
+        pipeline.outputs.trio = trio
         pipeline.startConsuming()
         pipeline.attach(store: store)
 
@@ -241,6 +241,41 @@ final class ReadingPipelineTests: XCTestCase {
         _ = await harness.uploader.flush()
         XCTAssertEqual(harness.destination.uploaded.map(\.id), [live.id])
         XCTAssertEqual(harness.destination.uploaded.first?.isBackfill, false, "the stored (first) copy is the one uploaded")
+    }
+
+    /// Review n2: a reading re-delivered while the store is failing (a repeated live packet, or its
+    /// backfill copy with the same id) waits once: the held count is the number of distinct
+    /// readings, Trio and alerts get it once, and it is stored and uploaded once on recovery.
+    func test_S3_redeliveryWhileStoreFailingIsHeldOnce() async throws {
+        let harness = try await makeHarness()
+        harness.repository.failInserts = true
+        let base = PipelineFixtures.start
+        let first = PipelineFixtures.reading(.mgdl(64), at: base.addingTimeInterval(-300))
+        let second = PipelineFixtures.reading(.mgdl(62), at: base.addingTimeInterval(-10))
+        let backfillCopy = GlucoseReading(
+            id: first.id, date: first.date.addingTimeInterval(1), value: first.value, trendRate: first.trendRate,
+            isBackfill: true, source: .sensor, sensorSerial: first.sensorSerial
+        )
+        harness.source.deliver(first)
+        await settle(harness, readings: 1)
+        harness.source.deliver(first)
+        harness.source.deliver(second)
+        harness.source.deliver(backfillCopy)
+        harness.source.deliver(second)
+        await settle(harness, readings: 5)
+
+        XCTAssertEqual(harness.pipeline.heldReadingCount, 2, "two distinct readings wait, whatever the re-deliveries")
+        XCTAssertEqual(harness.trioStore.payload.count, 2)
+        XCTAssertEqual(harness.center.posted("low").count, 1)
+
+        harness.repository.failInserts = false
+        harness.pipeline.retryHeldEvents()
+        await waitUntil("stored") { harness.pipeline.heldReadingCount == 0 && harness.pipeline.isIdle }
+        let stored = try await harness.store.readings(from: .distantPast, to: .distantFuture)
+        XCTAssertEqual(stored.map(\.id), [first.id, second.id])
+        XCTAssertEqual(stored.first?.isBackfill, false, "the copy that arrived first is the one kept")
+        let queued = await harness.uploader.status.queueDepth
+        XCTAssertEqual(queued, 2)
     }
 
     // MARK: - S6
@@ -299,10 +334,13 @@ final class ReadingPipelineTests: XCTestCase {
         XCTAssertEqual(harness.trioStore.writesOfReadings, 0)
         XCTAssertTrue(harness.center.posted.isEmpty)
 
-        // Protected data became available: bootstrap opens the store, then activates the pipeline.
-        harness.pipeline.attach(store: harness.repository)
+        // Protected data became available: bootstrap activates the pipeline (alerts and Trio get the
+        // held readings at once) and opens the store alongside; the readings are stored once it is.
         harness.pipeline.activate()
         await settle(harness, readings: 2, states: 1)
+        XCTAssertEqual(harness.trioStore.payload.count, 2, "Trio does not wait for the store")
+        harness.pipeline.attach(store: harness.repository)
+        await waitUntil("stored") { harness.pipeline.heldReadingCount == 0 && harness.pipeline.isIdle }
 
         XCTAssertEqual(harness.pipeline.heldReadingCount, 0)
         let stored = try await harness.store.readings(from: .distantPast, to: .distantFuture)
@@ -466,6 +504,24 @@ final class ReadingPipelineTests: XCTestCase {
         // Across a reboot the uptimes are not compared.
         state = ClockMismatchMonitor.check(state, latest: newer, previous: reading, now: t.addingTimeInterval(5_000), uptime: Uptime(seconds: 50, boot: "boot-2"))
         XCTAssertNil(state.latchedFor)
+    }
+
+    /// Review m4: only a newer reading clears a latch. An older reading shown for a while (waiting
+    /// for a store that cannot open) leaves the latch for the newer one in place; a newer reading
+    /// clears it as before.
+    func test_S1_anOlderReadingNeverClearsTheLatch() {
+        let t = PipelineFixtures.start
+        let latched = PipelineFixtures.reading(.mgdl(120), at: t.addingTimeInterval(-120))
+        let older = PipelineFixtures.reading(.mgdl(118), at: t.addingTimeInterval(-420), backfill: true)
+        let newer = PipelineFixtures.reading(.mgdl(122), at: t.addingTimeInterval(-10))
+        let state = ClockMismatchState(latchedFor: latched.date, lastCheckWallClock: nil, lastCheckUptime: nil)
+        let afterOlder = ClockMismatchMonitor.check(state, latest: older, previous: nil, now: t, uptime: nil)
+        XCTAssertEqual(afterOlder.latchedFor, latched.date)
+        let afterLatched = ClockMismatchMonitor.check(afterOlder, latest: latched, previous: older, now: t, uptime: nil)
+        XCTAssertEqual(afterLatched.latchedFor, latched.date, "the latched reading is still latched when it is the latest again")
+        let afterNewer = ClockMismatchMonitor.check(afterLatched, latest: newer, previous: latched, now: t, uptime: nil)
+        XCTAssertNil(afterNewer.latchedFor, "a newer, plausible reading clears it")
+        XCTAssertEqual(ClockMismatchMonitor.check(state, latest: nil, previous: nil, now: t, uptime: nil), state, "unknown latest: untouched")
     }
 
     private func isFiring(_ phase: AlertPhase) -> Bool {
