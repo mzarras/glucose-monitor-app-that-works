@@ -1012,7 +1012,14 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
             guard let self else { return }
             self.listenSearchScheduled = false
             guard self.isListening, self.isRunning, self.listenCycle == nil, self.record?.peripheralIdentifier == nil else { return }
+            if let stale = self.listenCandidate {
+                // The attach did not complete within the interval (e.g. the Dexcom app's link dropped
+                // and the connect became pending): withdraw it, so it cannot connect an advertising
+                // sensor later, and clear the in-flight mark so the search can attach again (review P15).
+                self.central?.cancelConnection(peripheralIdentifier: stale.identifier)
+            }
             self.listenCandidate = nil
+            self.listenAttachInFlight = false
             self.attachToSystemConnectedSensor()
             // Review m4: until the first follow, restart the scan so the sensor's next advertisement is
             // a new discovery (with its "DXCM" name); foreground only — timers do not run suspended.
@@ -1022,6 +1029,9 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     }
 
     private func listenDidConnect(link: G7Link, availableCharacteristics: Set<G7Characteristic>) {
+        // Every path below resolves the outstanding attach (review P15: a rejected late connection
+        // must not leave the in-flight mark blocking every later attach).
+        listenAttachInFlight = false
         guard isRunning, let record else {
             central?.cancelConnection(peripheralIdentifier: link.peripheralIdentifier)
             return
@@ -1032,7 +1042,6 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
             central?.cancelConnection(peripheralIdentifier: link.peripheralIdentifier)
             return
         }
-        listenAttachInFlight = false
         finishCycle()
         log(.ble, "listen: attached; waiting to observe the Dexcom app's authentication")
         emitTransient(.authenticating)

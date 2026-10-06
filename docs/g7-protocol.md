@@ -917,6 +917,9 @@ Not Auth_Stream (ownership payloads, `:1615-1616`), not Backfill (above), not Co
 connected to the phone — by the Dexcom app — found with `retrieveConnectedPeripherals` for the G7
 service (`:2082-2087`, BluetoothTransmitter.swift:561-586), checked at start, at each FEBC
 advertisement (scanning is only a wake-up signal, `:562-571`) and every 10 s in the foreground. An
+attach that has not completed by the next 10 s check (the Dexcom app's link dropped and this app's
+connect became pending) is withdrawn and tried again, so it can neither connect an advertising
+sensor later nor block later attaches (review P15). An
 advertising sensor is never connected to directly (it could take another phone's sensor
 connection). Only a G7 is attached (review m4): a connected peripheral named "DXCM" + 2 characters,
 or named "Dexcom" + 2 characters — the form a connected G7 can report (G7SensorKit
