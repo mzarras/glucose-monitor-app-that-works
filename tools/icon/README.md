@@ -36,9 +36,9 @@ The three compositions are the `designs` table in the script; `chosenName` picks
 the icon. To try another, change the parameters, re-run, and look at the 60 px previews first:
 that is where a design fails.
 
-- **A** — the hero's own stack: arrow and "mg/dL" share a left edge, the text a little wider than
+- **A** (chosen by Michael) — the hero's own stack: arrow and "mg/dL" share a left edge, the text a little wider than
   the arrow (as on the Now screen), 2-unit line.
-- **B** (chosen) — centred, 2.75-unit line, Plex Mono Regular a little narrower than the arrow.
+- **B** — centred, 2.75-unit line, Plex Mono Regular a little narrower than the arrow.
   The arrow clearly dominates, the line holds up at 60 px, and the text is the hero's exact font.
 - **C** — centred, heavy 3.5-unit line with larger Plex Mono Medium; the boldest at 60 px, but
   heavier than anything on the Now screen.
