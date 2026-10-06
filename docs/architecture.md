@@ -113,10 +113,13 @@ is called. `didFinishLaunching` records whether iOS relaunched the app for Bluet
 engine snapshot are read; the force-quit gap is checked against the persisted pipeline heartbeat;
 the production `AlertService` is created and `start()`ed (reconciles what an earlier process left
 pending), the intent bridge is connected, queued notification responses are delivered; Trio, uploads
-and the widget are attached; the pipeline is activated (held states flow, in order); the store is
-opened and attached (held readings flow, in order); the G7 source is started again if it could not
-read its pairing before; Trio is re-seeded with the last 5 h of stored sensor readings; the retention
-purge runs if due.
+and the widget are attached; the pipeline is activated (held events flow, in order); the store is
+opened alongside — never before — so a slow open (a long migration) cannot delay alerts or Trio:
+readings that arrive before it is open go to Trio and the alert engine at once and are stored when it
+opens (the D42 path; the storage-failure alert only fires if that takes longer than
+`AlertLimits.storageFailingMinutes`); the G7 source is started again if it could not read its pairing
+before; Trio is re-seeded with the last 5 h of stored sensor readings once the store is open; the
+retention purge runs if due.
 
 **Before the first unlock after a reboot**: preferences, the Keychain and the database are unreadable
 by design. Nothing is read or written; the G7 source reports `.failed(credentialsUnavailable)`; any
@@ -179,7 +182,8 @@ exists in Release.
   the store recovers, they are lost from history (alerts and Trio already had them). G7Kit decides
   what the sensor backfills from its own persisted newest-published mark; it exposes no hook to base
   backfill on the latest *stored* reading (Phase 2 must-do), so such readings are not re-requested.
-  Up to 10 000 readings wait; beyond that the oldest are dropped, loudly.
+  Up to 10 000 distinct readings wait (a re-delivered reading is held once); beyond that the oldest
+  are dropped, loudly.
 - The simulator Keychain needs a signed host: `scripts/check.sh` signs simulator test runs ad hoc
   (D40); `KeychainCredentialStoreTests` fail, not skip, on an unsigned host.
 - File protection, state restoration, background wakes, AlarmKit and real Trio consumption can only be
