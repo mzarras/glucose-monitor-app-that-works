@@ -117,18 +117,23 @@ and the widget are attached; the pipeline is activated first (held events flow, 
 store is opened alongside, so a slow open (a long migration) cannot delay alerts or Trio: readings that
 arrive before it is open go to Trio and the alert engine at once and are stored when it opens (the D42
 path; the storage-failure alert only fires if that takes longer than `AlertLimits.storageFailingMinutes`);
-the G7 source is started again if it could not read its pairing before. **Until the store is open the
+the G7 source is started again if it could not read its pairing before. **While the store is opening the
 latest reading is unknown** (review B1): no widget snapshot is written and the clock-mismatch latch is
-neither judged nor persisted, so neither can be cleared by a relaunch; if the open fails, the persisted
-latch and the last widget snapshot are kept (the widget's own timeline turns it stale and "No data" on
-time). Once the store is open: the latest reading is read, the widget is published, the latch is
+neither judged nor persisted, so neither can be cleared by a relaunch. If the open fails, the last
+widget snapshot is kept (the widget's own timeline turns it stale and "No data" on time), and the
+latch check runs again against the readings waiting for the store, which are then shown as the
+latest — a clock change still latches them (review m4); an older reading never clears a latch. Once the store is open: the latest reading is read, the widget is published, the latch is
 checked, Trio is re-seeded with the last 5 h of stored sensor readings, retention runs if due.
 
 **Trio at launch** (review m1): the bridge's window is empty in a new process, and G7Kit may deliver
 backfill the App Group already holds. So until the re-seed, readings not newer than the newest reading
 the App Group held when this process started are kept back (`TrioCoordinator`), and written with the
 first newer reading or by the re-seed — the first write never moves Trio's newest reading backwards.
-Nothing is written that did not pass the gate in this process.
+Nothing is written that did not pass the gate in this process. The hold is bounded (review m5): an App
+Group newest dated in the future is ignored; held readings go out when the store open fails, and at
+the latest after 2 minutes (`TrioCoordinator.maximumHoldTime`, on the next publish or retry); while
+held they are shown in the summary (`heldBackReadings`) and, held for 15 minutes, count as starving
+Trio (the Trio bridge alert).
 
 **Before the first unlock after a reboot**: preferences, the Keychain and the database are unreadable
 by design. Nothing is read or written; the G7 source reports `.failed(credentialsUnavailable)`; any
@@ -155,8 +160,9 @@ was active then, the boot is the same, and this is not a Bluetooth relaunch, `fo
 **Clock mismatch** (review N1): after every batch, at bootstrap, on foreground and on the UI's tick,
 `ClockMismatchMonitor` applies WidgetCore's latch rule and a memoryless check (wall-clock delta vs the
 monotonic clock since the last check, same boot, > 60 s apart → latch). The latch is persisted. It is
-checked only while the production store is open, and an unknown latest reading leaves it (and the
-last clock record) untouched — nil means "not known yet", not "no reading" (review B1).
+checked once the store's open has succeeded or failed (not while it is opening), an unknown latest
+reading leaves it (and the last clock record) untouched — nil means "not known yet", not "no reading"
+(review B1) — and only a newer reading clears it (review m4).
 
 ## DEBUG replay (D11, D19, D20)
 

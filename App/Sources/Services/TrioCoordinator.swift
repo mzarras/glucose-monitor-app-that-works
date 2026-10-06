@@ -29,6 +29,13 @@ final class TrioCoordinator {
     private var holdsOlderReadings = true
     private var heldOlderReadings: [GlucoseReading] = []
     private var appGroupNewestAtLaunch: Date??
+    /// When the current hold began. Held readings go out at the latest after `maximumHoldTime`, and
+    /// when the store open fails (review m5): a hold never withholds valid readings for long.
+    private var holdStartedAt: Date?
+    private let clock: @Sendable () -> Date
+
+    /// The longest readings are held back at launch waiting for the re-seed (review m5).
+    static let maximumHoldTime: TimeInterval = 120
     /// What this process last wrote as the heartbeat (nil = removed), and whether that write
     /// succeeded; a failed or unknown state is rewritten at the next re-evaluation.
     private var heartbeatWritten: TrioHeartbeatPeripheral?
@@ -43,6 +50,7 @@ final class TrioCoordinator {
         let policy = OutOfRangePolicy(low: .writeSentinel, high: .writeSentinel) // D21: LOW → 39, HIGH → 401, never 40/400 (S4)
         self.bridge = store.map { TrioBridge(store: $0, outOfRangePolicy: policy, diagnostics: diagnostics, clock: clock) }
         self.sharedStore = store
+        self.clock = clock
         var summary = TrioBridgeSummary.off
         summary.appGroupID = appGroupID
         self.summary = summary
@@ -87,22 +95,55 @@ final class TrioCoordinator {
     func publish(_ readings: [GlucoseReading], session: SensorSession?) async -> TrioPublishResult? {
         guard let bridge = activeBridge else { return nil }
         var toWrite = readings
-        if holdsOlderReadings, !readings.isEmpty, let floor = appGroupNewestBeforeThisProcess() {
-            let older = readings.filter { $0.date <= floor }
-            let newer = readings.filter { $0.date > floor }
-            if newer.isEmpty {
-                // After a relaunch G7Kit may deliver backfill the App Group already has. Written
-                // alone, it would replace the previous payload with older readings until the re-seed.
-                heldOlderReadings += older
-                log("holding \(older.count) reading(s) not newer than Trio's current newest (\(floor.ISO8601Format())) until the launch re-seed")
-                return nil
+        if holdsOlderReadings {
+            if let started = holdStartedAt, clock().timeIntervalSince(started) >= Self.maximumHoldTime {
+                log("releasing \(heldOlderReadings.count) held reading(s): no re-seed within \(Int(Self.maximumHoldTime)) s")
+                toWrite = readings + takeHeldReadings()
+            } else if !readings.isEmpty, let floor = appGroupNewestBeforeThisProcess() {
+                let older = readings.filter { $0.date <= floor }
+                let newer = readings.filter { $0.date > floor }
+                if newer.isEmpty {
+                    // After a relaunch G7Kit may deliver backfill the App Group already has. Written
+                    // alone, it would replace the previous payload with older readings until the re-seed.
+                    heldOlderReadings += older
+                    if holdStartedAt == nil { holdStartedAt = clock() }
+                    noteHold()
+                    log("holding \(older.count) reading(s) not newer than Trio's current newest (\(floor.ISO8601Format())) until the launch re-seed")
+                    return nil
+                }
+                // A newer reading keeps Trio's newest moving forward; the held ones can go with it.
+                toWrite = newer + older + takeHeldReadings()
             }
-            // A newer reading keeps Trio's newest moving forward; the held ones can go with it.
-            toWrite = newer + older + heldOlderReadings
-            heldOlderReadings = []
-            holdsOlderReadings = false
         }
         return await bridge.publish(toWrite, session: session)
+    }
+
+    /// The store could not be opened, so no re-seed is coming: write what is held now (review m5).
+    func releaseHeldReadings(session: SensorSession?) async {
+        guard let bridge = activeBridge, holdsOlderReadings else { return }
+        let held = takeHeldReadings()
+        guard !held.isEmpty else { return }
+        log("releasing \(held.count) held reading(s): the store could not be opened")
+        await bridge.publish(held, session: session)
+    }
+
+    /// Ends the launch hold and returns what it held.
+    private func takeHeldReadings() -> [GlucoseReading] {
+        let held = heldOlderReadings
+        heldOlderReadings = []
+        holdsOlderReadings = false
+        holdStartedAt = nil
+        noteHold()
+        return held
+    }
+
+    /// Shows held readings in the summary, so a hold is never invisible (review m5): they count as
+    /// starving Trio once held for the starvation threshold, like readings the bridge refused.
+    private func noteHold() {
+        summary.heldBackReadings = heldOlderReadings.count
+        summary.heldBackSince = heldOlderReadings.isEmpty ? nil : holdStartedAt
+        summary.refreshStarvation(now: clock())
+        onChange?(summary)
     }
 
     /// Hands recent stored readings to the bridge (launch re-seed and switching it on), with any
@@ -110,9 +151,7 @@ final class TrioCoordinator {
     /// readings are offered (S6).
     func reseed(with readings: [GlucoseReading], session: SensorSession?) async {
         guard let bridge = activeBridge else { return }
-        let live = (readings + heldOlderReadings).filter { $0.source.isLiveSensor }
-        heldOlderReadings = []
-        holdsOlderReadings = false
+        let live = (readings + takeHeldReadings()).filter { $0.source.isLiveSensor }
         let result = await bridge.publish(live, session: session)
         log("re-seeded with \(live.count) stored or held sensor reading(s): \(result.addedReadingIDs.count) written, \(result.refusals.count) refused")
     }
@@ -121,7 +160,13 @@ final class TrioCoordinator {
     /// none, unreadable, or not in the expected `"/Date(<ms>)/"` form).
     private func appGroupNewestBeforeThisProcess() -> Date? {
         if let known = appGroupNewestAtLaunch { return known }
-        let newest = Self.newestReadingDate(in: sharedStore?.data(forKey: TrioAppGroupContract.readingsKey))
+        var newest = Self.newestReadingDate(in: sharedStore?.data(forKey: TrioAppGroupContract.readingsKey))
+        // A floor in the future (another app's clock fault, a phone clock set back) would hold every
+        // valid reading: it is ignored (review m5).
+        if let found = newest, found > clock().addingTimeInterval(LiveReadingGate.futureTolerance) {
+            log("ignoring the App Group's newest reading time \(found.ISO8601Format()): it is in the future")
+            newest = nil
+        }
         appGroupNewestAtLaunch = .some(newest)
         return newest
     }
@@ -141,8 +186,8 @@ final class TrioCoordinator {
 
     /// Re-checks and retries a failed write without new readings (foreground, timer).
     func retry(session: SensorSession?) async {
-        guard let bridge = activeBridge else { return }
-        await bridge.publish([], session: session)
+        // Through `publish`, so a launch hold past its time is released here too (review m5).
+        await publish([], session: session)
     }
 
     /// The user turned the bridge off: remove this app's readings and the heartbeat keys from
