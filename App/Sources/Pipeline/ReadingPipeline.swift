@@ -326,10 +326,11 @@ final class ReadingPipeline {
     /// New gate-passed readings. Returns whether the latest readings may have changed.
     private func process(readings: [GatedReading]) async -> Bool {
         guard let store, unstored.isEmpty else {
-            // The store is closed, or failed for earlier readings this wake: hold these too.
-            hold(readings, reason: store == nil ? "the reading database is not open" : storeProblem ?? "earlier readings are still waiting")
-            await deliverToTrioAndAlerts(readings)
-            return true
+            // The store is closed, or failed for earlier readings this wake: hold these too. Only
+            // readings not already waiting go to Trio and alerts (they had the others).
+            let added = hold(readings, reason: store == nil ? "the reading database is not open" : storeProblem ?? "earlier readings are still waiting")
+            await deliverToTrioAndAlerts(added)
+            return !added.isEmpty
         }
         let result = await insert(readings, into: store)
         if !result.stored.isEmpty {
@@ -338,8 +339,8 @@ final class ReadingPipeline {
             await submitToUploads(result.stored)
         }
         if !result.unstored.isEmpty {
-            hold(result.unstored, reason: result.problem ?? "insert failed")
-            await deliverToTrioAndAlerts(result.unstored)
+            let added = hold(result.unstored, reason: result.problem ?? "insert failed")
+            await deliverToTrioAndAlerts(added)
         }
         return !result.stored.isEmpty || !result.unstored.isEmpty
     }
@@ -364,9 +365,18 @@ final class ReadingPipeline {
         return !result.stored.isEmpty
     }
 
-    private func hold(_ readings: [GatedReading], reason: String) {
-        guard !readings.isEmpty else { return }
-        unstored += readings
+    /// Adds readings to the ones waiting for the store, in arrival order, skipping any whose id is
+    /// already waiting (a re-delivery while the store fails must not count twice or eat into the
+    /// cap; review n2). Returns the readings newly held.
+    @discardableResult
+    private func hold(_ readings: [GatedReading], reason: String) -> [GatedReading] {
+        var waitingIDs = Set(unstored.map(\.reading.id))
+        let added = readings.filter { waitingIDs.insert($0.reading.id).inserted }
+        if added.count < readings.count {
+            log(.store, "\(readings.count - added.count) re-delivered reading(s) already waiting for the database (S3)")
+        }
+        guard !added.isEmpty else { return [] }
+        unstored += added
         if unstored.count > Self.maximumHeldEvents {
             let dropped = unstored.count - Self.maximumHeldEvents
             unstored.removeFirst(dropped)
@@ -375,7 +385,8 @@ final class ReadingPipeline {
         if storageFailingSince == nil {
             storageFailingSince = now()
         }
-        log(.store, "holding \(readings.count) reading(s) for the database (\(reason)); Trio and alerts get them now (D42)")
+        log(.store, "holding \(added.count) reading(s) for the database (\(reason)); Trio and alerts get them now (D42)")
+        return added
     }
 
     private struct InsertResult {

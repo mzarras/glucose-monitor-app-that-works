@@ -467,13 +467,16 @@ final class LiveAppServices: AppServices {
 
         isBootstrapped = true
         log(.app, "bootstrapped (launched by Bluetooth restoration: \(launchedByBluetoothRestoration))")
-        // The store first, so readings that arrived before bootstrap are stored on the normal path.
-        await openStoreIfNeeded()
+        // Alerts and Trio first: the pipeline is activated before the store opens, so a slow open
+        // (a long migration) never delays them. Readings that arrive before the store is open go to
+        // Trio and the alert engine at once and are stored when it opens (the D42 path).
         sensorPipeline.activate()
+        let storeOpening = Task { await self.openStoreIfNeeded() }
         await startG7()
         await refreshStoredSensor()
         await updateTrioHeartbeat()
         updateClockMismatchLatch(now: Date())
+        await storeOpening.value
         for change in [ServiceChange.readings, .sensor, .calibration, .trio, .uploads, .historyImport, .alertSettings, .alertDelivery, .storage, .health, .appearance] {
             send(change)
         }

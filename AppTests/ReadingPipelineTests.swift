@@ -243,6 +243,41 @@ final class ReadingPipelineTests: XCTestCase {
         XCTAssertEqual(harness.destination.uploaded.first?.isBackfill, false, "the stored (first) copy is the one uploaded")
     }
 
+    /// Review n2: a reading re-delivered while the store is failing (a repeated live packet, or its
+    /// backfill copy with the same id) waits once: the held count is the number of distinct
+    /// readings, Trio and alerts get it once, and it is stored and uploaded once on recovery.
+    func test_S3_redeliveryWhileStoreFailingIsHeldOnce() async throws {
+        let harness = try await makeHarness()
+        harness.repository.failInserts = true
+        let base = PipelineFixtures.start
+        let first = PipelineFixtures.reading(.mgdl(64), at: base.addingTimeInterval(-300))
+        let second = PipelineFixtures.reading(.mgdl(62), at: base.addingTimeInterval(-10))
+        let backfillCopy = GlucoseReading(
+            id: first.id, date: first.date.addingTimeInterval(1), value: first.value, trendRate: first.trendRate,
+            isBackfill: true, source: .sensor, sensorSerial: first.sensorSerial
+        )
+        harness.source.deliver(first)
+        await settle(harness, readings: 1)
+        harness.source.deliver(first)
+        harness.source.deliver(second)
+        harness.source.deliver(backfillCopy)
+        harness.source.deliver(second)
+        await settle(harness, readings: 5)
+
+        XCTAssertEqual(harness.pipeline.heldReadingCount, 2, "two distinct readings wait, whatever the re-deliveries")
+        XCTAssertEqual(harness.trioStore.payload.count, 2)
+        XCTAssertEqual(harness.center.posted("low").count, 1)
+
+        harness.repository.failInserts = false
+        harness.pipeline.retryHeldEvents()
+        await waitUntil("stored") { harness.pipeline.heldReadingCount == 0 && harness.pipeline.isIdle }
+        let stored = try await harness.store.readings(from: .distantPast, to: .distantFuture)
+        XCTAssertEqual(stored.map(\.id), [first.id, second.id])
+        XCTAssertEqual(stored.first?.isBackfill, false, "the copy that arrived first is the one kept")
+        let queued = await harness.uploader.status.queueDepth
+        XCTAssertEqual(queued, 2)
+    }
+
     // MARK: - S6
 
     /// Imported history goes to the store only. Written by an importer it never enters the pipeline;
