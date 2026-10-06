@@ -93,7 +93,6 @@ public struct AlertEngine: Sendable {
         let repair = Self.repairingClockFaults(snapshot, now: now, uptime: uptime)
         snapshot = repair.snapshot
         var actions: [AlertAction] = repair.rolledBack ? replanAfterRollback(now: now) : []
-        actions += rebuildIfTimeZoneChanged(input, now: now)
         switch input {
         case .reading(let reading, let session):
             if let rejection = Self.rejection(of: reading, session: session, now: now, configuration: configuration) {
@@ -122,6 +121,10 @@ public struct AlertEngine: Sendable {
         case .settings(let newSettings):
             actions += apply(newSettings, now: now)
         }
+        // After the rejection check (review m1): a refused input changes nothing, so the zone stays
+        // unrecorded and the next accepted input rebuilds — and evaluation then plans again what
+        // the rebuild removed.
+        actions += rebuildIfTimeZoneChanged(input, now: now)
         actions += evaluate(now: now)
         return actions
     }
@@ -239,9 +242,11 @@ public struct AlertEngine: Sendable {
             guard now >= snooze.until else { return [] }
             return kind == .urgentLow ? endUrgentLowSnooze(snooze, current: true, now: now) : fire(kind, now: now)
         case (.snoozed(let snooze), .holding):
-            // D44: urgent low re-alarms at snooze end without a new reading, unless the latest
-            // reading was above the threshold. Every other alert waits for a current reading.
-            guard kind == .urgentLow, now >= snooze.until, urgentLowSnoozeEndWanted else { return [] }
+            // Every other alert waits for a current reading. Urgent low at its snooze end: re-alarms
+            // without a new reading (D44), or — the latest reading above the threshold, inside the
+            // recovery band — stops holding the snooze and hands over to Low (D51).
+            guard kind == .urgentLow, now >= snooze.until else { return [] }
+            guard urgentLowSnoozeEndWanted else { return handOverUrgentLowSnooze(now: now) }
             return endUrgentLowSnooze(snooze, current: false, now: now)
         }
     }

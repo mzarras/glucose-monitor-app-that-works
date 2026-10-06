@@ -115,9 +115,9 @@ final class DueRepeatProtectionTests: XCTestCase {
 
         alarms.listingFails = true    // e.g. the user revoked alarms in Settings
         await h.service.send(.user(.acknowledge(.urgentLow)))
-        XCTAssertNotNil(alarms.scheduled[legacy.id])
-        XCTAssertTrue(alarms.scheduled.values.filter { $0.id != legacy.id }.allSatisfy { $0.fireDate >= Fixtures.t0.addingTimeInterval(minutes(30)) },
-                      "every alarm with a known ID is cancelled regardless; only the snooze-end ones are new (D44)")
+        XCTAssertNotNil(alarms.scheduled[legacy.id], "an alarm with an unknown ID cannot be found without the list")
+        XCTAssertEqual(alarms.scheduled.values.filter { $0.id != legacy.id }.map(\.fireDate).sorted(), SystemAlarmTests.snoozeEndGrid,
+                       "every alarm with a known ID is cancelled regardless; exactly the snooze-end grid is new (D44)")
         XCTAssertTrue(h.service.deliveryStatus.problems.contains { if case .urgentLowAlarmFailed = $0 { true } else { false } },
                       "the unreadable list is surfaced")
     }

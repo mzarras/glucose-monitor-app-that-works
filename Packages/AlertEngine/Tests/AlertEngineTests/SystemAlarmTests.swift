@@ -6,6 +6,10 @@ import GlucoseCore
 /// service with a fake AlarmKit port.
 @MainActor
 final class SystemAlarmTests: XCTestCase {
+    /// After acknowledging an urgent low fired at t0: the snooze-end alarm at +30 and the 5-minute
+    /// grid after it for an hour (D44).
+    static let snoozeEndGrid = (0..<12).map { Fixtures.t0.addingTimeInterval(minutes(30) + Double($0) * minutes(5)) }
+
     func test_urgentLowRingsAsASystemAlarmWithRepeatsWhenAllowed() async throws {
         let alarms = FakeSystemAlarms()
         let h = ServiceHarness(alarms: alarms)
@@ -31,9 +35,8 @@ final class SystemAlarmTests: XCTestCase {
         await h.service.start()
         await h.reading(.mgdl(50))
         await h.service.send(.user(.acknowledge(.urgentLow)))
-        XCTAssertEqual(alarms.repeatAlarms.map(\.fireDate).min(), Fixtures.t0.addingTimeInterval(minutes(30)),
-                       "the repeat alarms are cancelled; the snooze-end alarm and its grid are new (D44)")
-        XCTAssertNil(alarms.scheduled[SystemAlarmIDs.immediate])
+        XCTAssertEqual(alarms.scheduled.values.map(\.fireDate).sorted(), Self.snoozeEndGrid,
+                       "every old alarm is cancelled; exactly the snooze-end alarm and its grid remain (D44)")
 
         h.clock.advance(minutes: 31)
         await h.reading(.mgdl(50))
@@ -114,8 +117,8 @@ final class SystemAlarmTests: XCTestCase {
 
         await bridge.stopTapped()
         XCTAssertEqual(h.service.phase(of: .urgentLow), .snoozed(until: Fixtures.t0.addingTimeInterval(minutes(30))), "Stop = acknowledge")
-        XCTAssertTrue(alarms.scheduled.values.allSatisfy { $0.fireDate >= Fixtures.t0.addingTimeInterval(minutes(30)) },
-                      "the remaining repeat alarms are cancelled; the snooze-end alarm (≤ 30 min) replaces them (D44)")
+        XCTAssertEqual(alarms.scheduled.values.map(\.fireDate).sorted(), Self.snoozeEndGrid,
+                       "the remaining repeat alarms are cancelled; exactly the snooze-end alarm (≤ 30 min) and its grid remain (D44)")
 
         h.clock.advance(minutes: 31)
         await h.reading(.mgdl(50))

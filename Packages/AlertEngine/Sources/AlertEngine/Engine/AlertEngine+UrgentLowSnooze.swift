@@ -12,9 +12,16 @@
 //     its grid, and the engine only plays the due sound (`playDueAlert`) — one alarm, never two, also
 //     when a low reading arrives then;
 //   • otherwise (it was removed, or a clock rollback ended the snooze early) urgent low fires now if
-//     the latest reading is still low, as before.
+//     the latest reading is still low, as before;
+//   • the latest reading above the threshold, inside the 5 mg/dL recovery band (56–60 by default):
+//     urgent low stops holding the snooze and re-arms, so Low (≤ 70) is evaluated normally and fires
+//     (D51). Before, a band reading kept urgent low "snoozed" — and Low superseded — indefinitely.
 // Then it repeats as when firing, until a clearing reading or the next acknowledge. S7 is unchanged:
 // the snooze is ≤ 30 minutes and a clock rollback ends it at once; quiet hours never silence it.
+//
+// One alarm at the edges (review m2): a low reading in the snooze's last minute puts the snooze-end
+// alarm back even inside the protected minute, and at the end any pending entry due now (on the
+// snooze-end grid) or within the protected minute (one a clock rollback re-dated) is the sounding.
 
 import Foundation
 import GlucoseCore
@@ -35,27 +42,50 @@ extension AlertEngine {
     mutating func planUrgentLowSnoozeEnd(now: Date) -> [AlertAction] {
         guard case .snoozed(let snooze) = episode(.urgentLow) else { return [] }
         guard urgentLowSnoozeEndWanted else { return cancelFutureSeries(.urgentLow, now: now) }
-        return planSeries(.urgentLow, anchor: snooze.until, interval: urgentLowRepeatInterval, firstIndex: 0,
-                          count: urgentLowPendingCount, now: now, isRepeat: true)
+        var actions = planSeries(.urgentLow, anchor: snooze.until, interval: urgentLowRepeatInterval, firstIndex: 0,
+                                 count: urgentLowPendingCount, now: now, isRepeat: true)
+        if snooze.until > now {
+            // Inside the last minute the plan leaves the snooze-end date out (protected); put it back
+            // if a reading above the threshold had removed it.
+            actions += addSeriesEntry(.urgentLow, at: snooze.until, now: now, isRepeat: true)
+        }
+        return actions
+    }
+
+    /// D51: the snooze is over and the latest reading is above the threshold (in the recovery band):
+    /// urgent low re-arms — it fires again on the next reading at or below the threshold — and Low,
+    /// no longer superseded, is evaluated normally. A pending entry due within the minute is left
+    /// to ring (never disturbed); none is planned.
+    mutating func handOverUrgentLowSnooze(now: Date) -> [AlertAction] {
+        setEpisode(.urgentLow, .armed)
+        return cancelFutureSeries(.urgentLow, now: now)
     }
 
     /// The snooze is over and urgent low still applies: a current low reading (`current`), or no
     /// current reading with the latest one low.
     mutating func endUrgentLowSnooze(_ snooze: AlertSnooze, current: Bool, now: Date) -> [AlertAction] {
-        guard scheduledEntry(.urgentLow, at: snooze.until) != nil else {
-            // Nothing was pending for the snooze end (a clock rollback ended the snooze early, or it
-            // was removed): sound now. Without a current reading the text says the snooze ended and
+        let interval = urgentLowRepeatInterval
+        let slot = Self.latestSlot(anchor: snooze.until, interval: interval, now: now.addingTimeInterval(AlertLimits.repeatSlotEarlyTolerance))
+        let dueWithinTheMinute = series(.urgentLow).entries.first { $0.date > now && $0.date <= Self.protectedUntil(now) }
+        let anchor: Date
+        let sounding: Date
+        if scheduledEntry(.urgentLow, at: snooze.until) != nil {
+            // The snooze-end alarm went out (or is about to); the grid slot due now is this sounding.
+            (anchor, sounding) = (snooze.until, slot)
+        } else if let entry = dueWithinTheMinute {
+            // One due within the minute off that grid (a rollback re-dated it): it is the sounding.
+            (anchor, sounding) = (entry.date, entry.date)
+        } else {
+            // Nothing pending for the snooze end (a clock rollback ended the snooze early, or it was
+            // removed): sound now. Without a current reading the text says the snooze ended and
             // gives the last value with its time, never "Treat now" (S1).
             if current { return fire(.urgentLow, now: now) }
             setEpisode(.urgentLow, .firing(AlertFiring(since: now, lastSoundedAt: now)))
             return [.fire(makeNotice(.urgentLow, fireDate: nil, now: now, snoozeEnd: true))] + planUrgentLowRepeats(anchor: now, now: now)
         }
-        // The snooze-end alarm went out (or is about to): it is this sounding. Continue on its grid.
-        let slot = Self.latestSlot(anchor: snooze.until, interval: urgentLowRepeatInterval,
-                                   now: now.addingTimeInterval(AlertLimits.repeatSlotEarlyTolerance))
-        let notice = dueNotice(.urgentLow, at: slot, now: now)
-        setEpisode(.urgentLow, .firing(AlertFiring(since: snooze.until, lastSoundedAt: slot)))
-        return [.playDueAlert(notice)] + planUrgentLowRepeats(anchor: snooze.until, now: now)
+        let notice = dueNotice(.urgentLow, at: sounding, now: now)
+        setEpisode(.urgentLow, .firing(AlertFiring(since: anchor, lastSoundedAt: sounding)))
+        return [.playDueAlert(notice)] + planUrgentLowRepeats(anchor: anchor, now: now)
     }
 
     /// Notices planned while urgent low is snoozed say the snooze ended, never a current value (S1).

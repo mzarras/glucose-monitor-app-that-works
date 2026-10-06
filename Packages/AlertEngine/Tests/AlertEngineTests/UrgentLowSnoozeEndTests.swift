@@ -109,8 +109,105 @@ final class UrgentLowSnoozeEndTests: XCTestCase {
         XCTAssertEqual(h.pendingDates(.urgentLow), [], "any reading above the threshold removes it")
         h.clock.set(end.addingTimeInterval(30))
         XCTAssertEqual(h.tick().due + h.engine.handle(.tick, at: h.now).fired, [], "nothing at the snooze end")
-        XCTAssertEqual(h.phase(.urgentLow), .snoozed(until: end), "the next current reading decides, as before")
-        XCTAssertEqual(h.mgdl(52).fired, [.urgentLow], "a current low after the end fires at once: nothing was pending")
+        XCTAssertEqual(h.phase(.urgentLow), .armed, "the snooze is over and the latest reading is in the band: re-armed (D51)")
+        XCTAssertEqual(h.mgdl(52).fired, [.urgentLow], "a current low after the end fires at once")
+    }
+
+    // MARK: D51 — the recovery band at snooze end hands over to Low
+
+    /// The review's probe P2: 50 acknowledged at 12:00, then 58 every 5 minutes for 90 minutes.
+    func test_S5_aBandReadingAtSnoozeEndHandsOverToLow() {
+        let h = EngineHarness()
+        h.mgdl(50)
+        h.user(.acknowledge(.urgentLow))
+        var sounded: [(Double, AlertKind)] = []
+        for step in 1...18 {
+            h.clock.advance(minutes: 5)
+            let actions = h.mgdl(58)
+            sounded += (actions.fired + actions.due).map { (Double(step * 5), $0) }
+        }
+        XCTAssertEqual(sounded.first?.0, 30, "nothing before the snooze end")
+        XCTAssertEqual(sounded.first?.1, .low, "at the end: Low, no longer superseded, fires on the 58")
+        XCTAssertFalse(sounded.contains { $0.1 == .urgentLow }, "58 is above the urgent-low threshold")
+        XCTAssertEqual(h.phase(.urgentLow), .armed)
+        XCTAssertEqual(h.phase(.low), .firing(since: Fixtures.t0.addingTimeInterval(minutes(30))))
+    }
+
+    func test_S7_aLowReadingAtSnoozeEndIsTheUrgentLowAlarmWithoutLowOnTop() {
+        let h = EngineHarness()
+        h.mgdl(50)
+        h.user(.acknowledge(.urgentLow))
+        h.clock.advance(minutes: 30)
+        let end = h.mgdl(54)
+        XCTAssertEqual(end.due, [.urgentLow], "the snooze-end alarm")
+        XCTAssertEqual(end.fired, [], "no Low on top: urgent low is firing, Low stays superseded")
+        XCTAssertEqual(h.phase(.low), .armed)
+    }
+
+    func test_S7_withLowOffBandReadingsAreSilentAndUrgentLowIsReArmed() {
+        var settings = AlertSettings.defaults
+        settings.low.isEnabled = false
+        let h = EngineHarness(settings: settings)
+        h.mgdl(50)
+        h.user(.acknowledge(.urgentLow))
+        h.clock.advance(minutes: 30)
+        let end = h.mgdl(58)
+        XCTAssertEqual(end.fired + end.due, [], "Low off: silence, as configured")
+        XCTAssertEqual(h.phase(.urgentLow), .armed, "re-armed, not snoozed")
+        h.clock.advance(minutes: 5)
+        XCTAssertEqual(h.mgdl(55).fired, [.urgentLow], "≤ 55 fires at once")
+    }
+
+    func test_S5_atTheHandOverQuietHoursSilenceLowButNeverUrgentLow() {
+        var settings = AlertSettings.defaults
+        settings.quietHours = QuietHours(isEnabled: true, startMinuteOfDay: 22 * 60, endMinuteOfDay: 7 * 60)
+        let h = EngineHarness(settings: settings)
+        h.clock.set(twoAM)
+        h.mgdl(50)
+        h.user(.acknowledge(.urgentLow))
+        h.clock.advance(minutes: 30)
+        let end = h.mgdl(58)
+        XCTAssertEqual(end.firedNotice(.low)?.isSilenced, true, "Low is silenced in quiet hours, as configured")
+        h.clock.advance(minutes: 5)
+        XCTAssertEqual(h.mgdl(54).firedNotice(.urgentLow)?.isSilenced, false, "urgent low never is")
+    }
+
+    // MARK: Exactly one alarm at the edges (review m2)
+
+    /// Probe P8: 58 at end − 5:30 removes the alarm; 54 at end − 0:30 must put it back even inside
+    /// the protected minute; 53 at end + 4:00 must not fire afresh while the end + 5 entry rings.
+    func test_S7_aLowReadingInTheLastMinutePutsTheSnoozeEndAlarmBack() {
+        let h = EngineHarness()
+        h.mgdl(50)
+        h.user(.acknowledge(.urgentLow))
+        let end = Fixtures.t0.addingTimeInterval(minutes(30))
+        h.clock.advance(minutes: 24.5)
+        h.mgdl(58)
+        XCTAssertEqual(h.pendingDates(.urgentLow), [], "removed")
+        h.clock.advance(seconds: minutes(5))   // end − 0:30
+        XCTAssertEqual(h.mgdl(54).scheduled(.urgentLow), [end], "the snooze-end alarm is back (the grid after it was planned first)")
+        XCTAssertEqual(h.pendingDates(.urgentLow).first, end)
+        h.clock.advance(seconds: minutes(4) + 30)   // end + 4:00, still low
+        let later = h.mgdl(53)
+        XCTAssertEqual(later.fired, [], "not a fresh alarm")
+        XCTAssertEqual(later.due, [.urgentLow], "the end + 5 entry, about to ring, is this sounding")
+        XCTAssertEqual(h.phase(.urgentLow), .firing(since: end))
+    }
+
+    /// Probe P4: the clock set back in the snooze's last minute. The snooze-end alarm, due by real
+    /// time, is kept and re-dated 30 s ahead; it is the sounding — not a fresh fire on top.
+    func test_S7_aRollbackInTheLastMinuteTakesTheReDatedAlarmAsTheSounding() {
+        let h = EngineHarness()
+        h.mgdl(50)
+        h.user(.acknowledge(.urgentLow))
+        h.clock.advance(seconds: minutes(30) - 30)
+        h.clock.advance(minutes: -20)
+        let actions = h.tick()
+        XCTAssertEqual(actions.fired, [], "no fresh alarm")
+        XCTAssertEqual(actions.due, [.urgentLow])
+        let reDated = h.now.addingTimeInterval(30)
+        XCTAssertEqual(h.phase(.urgentLow), .firing(since: reDated))
+        XCTAssertEqual(h.pendingDates(.urgentLow).prefix(2), [reDated, reDated.addingTimeInterval(minutes(5))], "its grid follows")
     }
 
     func test_S7_aLowReadingAtSnoozeEndGivesExactlyOneAlarm() async throws {

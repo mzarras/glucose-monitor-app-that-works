@@ -131,6 +131,31 @@ final class FailureModeTests: XCTestCase {
         XCTAssertNil(h.tick().scheduled(.sensorExpiringIn2Hours), "rebuilt once, not on every input")
     }
 
+    /// Review m1: a zone change first seen on an input the engine refuses must not remove anything
+    /// it does not plan again; the next accepted input rebuilds for the new zone.
+    func test_aTimeZoneChangeSeenOnARejectedReadingLosesNothing() {
+        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+        let configuration = AlertEngineConfiguration(calendar: .autoupdatingCurrent, locale: Locale(identifier: "en_US_POSIX"))
+        let h = EngineHarness(configuration: configuration)
+        h.mgdl(50)
+        h.user(.acknowledge(.urgentLow))
+        let urgentLow = h.pendingDates(.urgentLow)
+        let missed = h.pendingDates(.missedReadings)
+        NSTimeZone.default = TimeZone(identifier: "America/Los_Angeles")!
+        h.clock.advance(minutes: 5)
+        let refused = h.send(.reading(Fixtures.reading(.mgdl(50), at: h.now.addingTimeInterval(300)), session: h.session))
+        XCTAssertEqual(refused.rejected.count, 1)
+        XCTAssertEqual(refused.count, 1, "nothing but the rejection")
+        XCTAssertEqual(h.pendingDates(.urgentLow), urgentLow, "the snooze-end alarm is still pending")
+        XCTAssertEqual(h.pendingDates(.missedReadings), missed)
+        XCTAssertEqual(h.engine.snapshot.timeZoneIdentifier, "America/New_York", "not recorded: the next accepted input rebuilds")
+        h.clock.advance(minutes: 1)
+        let next = h.tick()
+        XCTAssertTrue(next.contains { if case .cancelSlots(.urgentLow, _) = $0 { return true } else { return false } })
+        XCTAssertEqual(h.pendingDates(.urgentLow).first, Fixtures.t0.addingTimeInterval(minutes(30)), "rebuilt and planned again")
+        XCTAssertEqual(h.engine.snapshot.timeZoneIdentifier, "America/Los_Angeles")
+    }
+
     func test_aRestoredSnapshotFromAnotherZoneIsRebuiltByTheLaunch() throws {
         NSTimeZone.default = TimeZone(identifier: "America/New_York")!
         let configuration = AlertEngineConfiguration(calendar: .autoupdatingCurrent, locale: Locale(identifier: "en_US_POSIX"))

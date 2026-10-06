@@ -130,9 +130,17 @@ extension AlertEngine {
     }
 
     /// After a rollback the pending urgent-low repeats (and their alarms, set for wall-clock times)
-    /// are for the wrong times: cancel the ones not due and plan again from now.
+    /// are for the wrong times: cancel the ones not due and plan again from now. A snoozed urgent low
+    /// (its snooze just ended, S7) is planned again by evaluation; one due by real time, re-dated
+    /// above, is kept and taken as the snooze-end sounding (D44, review m2).
     mutating func replanAfterRollback(now: Date) -> [AlertAction] {
-        guard case .firing(let firing) = episode(.urgentLow) else { return [] }
-        return cancelFutureSeries(.urgentLow, now: now) + planUrgentLowRepeats(anchor: firing.since, now: now)
+        switch episode(.urgentLow) {
+        case .firing(let firing):
+            return cancelFutureSeries(.urgentLow, now: now) + planUrgentLowRepeats(anchor: firing.since, now: now)
+        case .snoozed:
+            return cancelFutureSeries(.urgentLow, now: now)
+        case .armed, .delaying:
+            return []
+        }
     }
 }
