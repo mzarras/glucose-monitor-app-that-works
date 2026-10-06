@@ -5,7 +5,7 @@ import Foundation
 
 enum AppIdentity {
     /// Fallback when the bundle has no display name (unit-test hosts, previews).
-    static let fallbackName = "Sensor"
+    static let fallbackName = "glucose"
 
     static var displayName: String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackName
