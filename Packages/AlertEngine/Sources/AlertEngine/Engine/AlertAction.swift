@@ -22,10 +22,13 @@ public struct AlertNotice: Sendable, Equatable {
     /// For a pending repeat: its identifier slot (`ScheduledRepeat.slot`), which names the
     /// notification and, for urgent low, the system alarm. `nil` for the immediate notification.
     public let slot: Int?
+    /// `false`: a visible notification with no sound at all (an announcement whose sound the user
+    /// turned off, D43). Never false for urgent low (S7).
+    public let playsSound: Bool
 
     public init(
         kind: AlertKind, title: String, body: String, sound: AlertSoundID, soundsOnSilent: Bool,
-        isSilenced: Bool, snoozeMinutes: Int?, fireDate: Date?, slot: Int? = nil
+        isSilenced: Bool, snoozeMinutes: Int?, fireDate: Date?, slot: Int? = nil, playsSound: Bool = true
     ) {
         self.kind = kind
         self.title = title
@@ -36,6 +39,7 @@ public struct AlertNotice: Sendable, Equatable {
         self.snoozeMinutes = snoozeMinutes
         self.fireDate = fireDate
         self.slot = slot
+        self.playsSound = playsSound
     }
 }
 
@@ -44,11 +48,13 @@ public enum AlertAction: Sendable, Equatable {
     case fire(AlertNotice)
     /// A notification that was scheduled for this moment is due (iOS posts it by itself). The app
     /// happens to be awake, so play the in-app sound if the delivery policy says so. Used for the
-    /// urgent-low repeats and the missed-readings alert.
+    /// urgent-low repeats, the missed-readings alert, and the sensor-expired alert when its pending
+    /// expiry reminder already went out (D43).
     case playDueAlert(AlertNotice)
     /// Add these pending notifications (each has a `fireDate` and a `slot`); for urgent low, also
     /// their system alarms. Replaces only the same slots; removes nothing else. The engine never
-    /// includes a slot that is due within `AlertLimits.protectedLeadTime`.
+    /// includes a slot that is due within `AlertLimits.protectedLeadTime`. Also used for the sensor
+    /// expiry reminders (D43): one pending notification per kind, slot 0.
     case schedule(AlertKind, [AlertNotice])
     /// Remove these pending slots (notifications and, for urgent low, alarms). The engine only names
     /// slots due later than `protectedLeadTime`.

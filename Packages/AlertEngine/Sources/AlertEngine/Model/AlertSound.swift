@@ -91,7 +91,7 @@ public enum AlertSoundCatalog {
         case .high: return .summit
         case .fallingFast, .risingFast: return .swoop
         case .missedReadings: return .sonar
-        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod:
+        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod:
             return .doorbell
         case .sensorFailed, .sensorError, .calibrationNeeded, .sensorExpired, .bluetoothUnavailable, .trioBridge, .storageFailing:
             return .warble

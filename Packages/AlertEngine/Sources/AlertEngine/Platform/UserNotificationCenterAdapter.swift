@@ -61,6 +61,7 @@ public final class UserNotificationCenterAdapter: AlertNotificationCenter {
         content.userInfo = spec.userInfo
         switch spec.interruption {
         case .passive: content.interruptionLevel = .passive
+        case .active: content.interruptionLevel = .active
         case .timeSensitive: content.interruptionLevel = .timeSensitive
         case .critical: content.interruptionLevel = .critical
         }

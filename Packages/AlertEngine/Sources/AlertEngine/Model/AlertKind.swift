@@ -24,11 +24,13 @@ public enum AlertKind: String, Sendable, Equatable, Hashable, Codable, CaseItera
     case missedReadings
     /// The sensor finished warming up.
     case sensorWarmUpComplete
-    /// The sensor session ends within 24 hours.
+    /// Reminder 24 hours before the sensor session ends (D43). No sound by default.
     case sensorExpiringIn24Hours
-    /// The sensor session ends within 2 hours.
+    /// Reminder 12 hours before the sensor session ends (D43).
+    case sensorExpiringIn12Hours
+    /// Reminder 2 hours before the sensor session ends.
     case sensorExpiringIn2Hours
-    /// The sensor entered its grace period.
+    /// Reminder when the session ends and the grace period starts.
     case sensorGracePeriod
     /// The sensor is finished (replace it) or no longer accepts this phone (pair again): only
     /// `SensorFailure.raisesSensorAlert` failures (D36). Transient failures raise nothing; missed
@@ -38,7 +40,8 @@ public enum AlertKind: String, Sendable, Equatable, Hashable, Codable, CaseItera
     case sensorError
     /// The sensor withholds readings until it is calibrated, or rejected a calibration (D36).
     case calibrationNeeded
-    /// The sensor session has ended (grace period over). S5.
+    /// The sensor session has ended (grace period over). S5. Also the last expiry reminder (D43): its
+    /// first notification is pending for the end of the grace period.
     case sensorExpired
     /// Bluetooth is off, unauthorized, or unsupported, so no readings can arrive. S5.
     case bluetoothUnavailable
@@ -62,12 +65,20 @@ public enum AlertKind: String, Sendable, Equatable, Hashable, Codable, CaseItera
     /// *condition* alert with the armed → firing → snoozed → cleared lifecycle.
     public var isEventAlert: Bool {
         switch self {
-        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn2Hours, .sensorGracePeriod:
+        case .sensorWarmUpComplete, .sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod:
             return true
         default:
             return false
         }
     }
+
+    /// The sensor expiry reminders (D43), in the order they come due: 24 h, 12 h and 2 h before the
+    /// session ends, the start of the grace period (the session's end), and its end (sensor
+    /// expired). Each is one pending notification per session, so it fires while the app is
+    /// suspended, and each can be turned off on its own.
+    public static let sensorExpiryReminders: [AlertKind] = [
+        .sensorExpiringIn24Hours, .sensorExpiringIn12Hours, .sensorExpiringIn2Hours, .sensorGracePeriod, .sensorExpired,
+    ]
 
     /// Alerts whose repeats are pre-scheduled as pending notifications, because the app may be
     /// suspended when they are due (HANDOFF §4.7): the urgent-low 5-minute repeats and the
