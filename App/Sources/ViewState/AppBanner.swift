@@ -130,7 +130,14 @@ enum AppBanners {
         if let banner = missedReadings(sensorState: sensorState, latest: latestLiveReadingDate, now: now, clockMismatchLatched: clockMismatchLatched, context: context) {
             banners.append(banner)
         }
-        banners += sensorBanners(sensorState, now: now, listening: listening, context: context)
+        // P3b review p1: while the connection setting is unresolved, the critical setting banner
+        // explains why the sensor connection is down; the source's "credentials unavailable" banner
+        // would contradict it ("pair again" / "waiting for the phone to unlock").
+        if health.connectionSettingProblem != nil, case .failed(let failure) = sensorState, failure.kind == .credentialsUnavailable {
+            // the setting banner covers it
+        } else {
+            banners += sensorBanners(sensorState, now: now, listening: listening, context: context)
+        }
 
         switch health.trio {
         case .failing(let since, let message):
@@ -234,10 +241,11 @@ enum AppBanners {
         }
 
         if let problem = health.connectionSettingProblem {
+            let cause = ConnectionSettingProblem(problem)
             banners.append(AppBanner(
                 kind: .connectionSettingUnreadable, severity: .critical,
-                title: "Connection setting couldn't be read",
-                detail: "Choose Listen or Pair again in Settings › Sensor. Until then this app doesn't connect to the sensor. (\(problem))",
+                title: cause.title,
+                detail: "\(cause.explanation) Choose Listen or Pair again in Settings › Sensor. Until then this app doesn't connect to the sensor. (\(problem))",
                 action: .openSensorSettings, actionTitle: "Open Settings"))
         }
 

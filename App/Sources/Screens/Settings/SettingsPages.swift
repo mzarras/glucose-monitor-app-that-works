@@ -22,6 +22,8 @@ struct SensorSettingsView: View {
     /// D45: a switch on its way, and why the last one didn't happen.
     var connectionSwitchingTo: SensorConnectionMode? = nil
     var connectionFeedback: String? = nil
+    /// `AppServices.connectionSettingProblem`: why the choice is asked for again.
+    var connectionSettingProblem: String? = nil
     @State private var confirmingStop = false
     @State private var confirmingForget = false
     @State private var confirmingMode: SensorConnectionMode?
@@ -63,7 +65,13 @@ struct SensorSettingsView: View {
                 }
                 if let connection, connection.mode == nil {
                     // Not chosen yet: the choice comes first, before anything about pairing.
-                    ExplanationNote(text: ConnectionModeText.chooseFirst)
+                    if let connectionSettingProblem {
+                        // P3b nit: asked again because the saved setting can't be used — say why.
+                        WarningNote(text: "\(ConnectionSettingProblem(connectionSettingProblem).explanation) \(ConnectionModeText.chooseAgain)")
+                            .accessibilityIdentifier("settings.sensor.chooseAgain")
+                    } else {
+                        ExplanationNote(text: ConnectionModeText.chooseFirst)
+                    }
                     connectionSection(connection)
                 } else {
                     if listening {

@@ -358,7 +358,7 @@ group, or reading Trio's device-status uploads back from Nightscout.
 ## Trio patch
 
 **None** (PROGRESS.md D22). Trio's existing App Group source consumes the bridge's writes unchanged; the tests prove the payload
-against a model of Trio's reader and against the golden file. A distinct source name ("Sensor" instead of
+against a model of Trio's reader and against the golden file. A distinct source name ("glucose" instead of
 "xDrip4iOS") would need a new `CGMType` case and touches `CGMType.swift`, `CGMOptions.swift`,
 `FetchGlucoseManager.swift:215-230`, two exhaustive switches (`HomeRootView.swift:1027-1037`,
 `CGMRootView.swift:157-167`) and `CustomCGMOptionsView.swift:55-61` — cosmetic only, and a fork divergence to

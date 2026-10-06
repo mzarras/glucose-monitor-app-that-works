@@ -79,7 +79,8 @@ struct SettingsScreen: View {
                     switch route {
                     case .sensor: SensorSettingsView(sensor: state.sensor, calibration: calibration, feedback: state.feedback.pairing, actions: actions,
                                                      hasStoredSensor: hasStoredSensor, connection: state.connection,
-                                                     connectionSwitchingTo: state.connectionSwitchingTo, connectionFeedback: state.feedback.connection)
+                                                     connectionSwitchingTo: state.connectionSwitchingTo, connectionFeedback: state.feedback.connection,
+                                                     connectionSettingProblem: state.connectionSettingProblem)
                     case .trio: TrioSettingsView(trio: state.trio, setEnabled: actions.setTrioEnabled, listening: state.isListening)
                     case .sharing: SharingSettingsView(nightscout: state.nightscout, share: state.dexcomShare, feedback: state.feedback, actions: actions,
                                                        listening: state.isListening)
@@ -219,6 +220,11 @@ struct SettingsContent: View {
                             Text(verbatim: PacketRecordingText.title).font(Typography.body(size: 15))
                             Text(verbatim: PacketRecordingText.explanation).font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
                                 .fixedSize(horizontal: false, vertical: true)
+                            if recording.unresolved {
+                                Text(verbatim: PacketRecordingText.unresolvedNote).font(Typography.body(size: 12)).foregroundStyle(Theme.alert)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("settings.packetRecording.unresolved")
+                            }
                         }
                     }
                     .frame(minHeight: Layout.minTarget)

@@ -1,7 +1,7 @@
 # Following Michael's glucose
 
-Michael is replacing the Dexcom app on his phone with **Sensor**, an open-source app that talks to
-his Dexcom G7 directly. When the Dexcom app goes, Dexcom stops receiving his readings, so Sensor
+Michael is replacing the Dexcom app on his phone with **glucose**, an open-source app that talks to
+his Dexcom G7 directly. When the Dexcom app goes, Dexcom stops receiving his readings, so glucose
 uploads them itself. You can follow in any of the three ways below. **If you rely on alarms for
 lows, you must switch to LoopFollow (section 2).**
 
@@ -33,10 +33,10 @@ Other follower apps work too, but check how they handle LOW before relying on th
 
 ## 3. Dexcom Follow (unchanged app, unofficial path)
 
-If you already use the Dexcom Follow app, keep it: Sensor also uploads to Dexcom Share, which is
+If you already use the Dexcom Follow app, keep it: glucose also uploads to Dexcom Share, which is
 what Dexcom Follow reads. Two caveats:
 
-- **Unofficial.** Dexcom does not publish this interface; Sensor uses the one the open-source
+- **Unofficial.** Dexcom does not publish this interface; glucose uses the one the open-source
   community reverse-engineered (from xDrip4iOS). Dexcom can break it at any time without notice.
   Michael's app will tell him when it fails, but you will simply see no new data.
 - **LOW and HIGH are sent the way other apps read them (39 and 401), but this is not yet
@@ -52,21 +52,21 @@ If you rely on alarms, use LoopFollow (option 2); keep Dexcom Follow as a backup
 - Readings come from the same sensor, so values are the same. The trend arrow is computed from
   the sensor's own rate with the app's thresholds, so an arrow can occasionally differ from what
   the Dexcom app showed at a boundary (e.g. 45° vs. straight).
-- In Nightscout, readings are labelled with the device **"Sensor"**.
+- In Nightscout, readings are labelled with the device **"glucose"**.
 - Michael will tell you the day he switches. Expect a short gap around the switch.
 
 ---
 
 ## For Michael: configuration
 
-**Exactly one app uploads CGM readings to Nightscout: Sensor.** Turn off glucose (CGM) upload in
+**Exactly one app uploads CGM readings to Nightscout: glucose.** Turn off glucose (CGM) upload in
 Trio; Trio keeps uploading its own data (loop status, treatments). How to do that in Trio and why
 is in [docs/trio-bridge.md → Nightscout uploads](trio-bridge.md#nightscout-uploads). Nightscout
 only merges two uploads of a reading if their timestamps match to the millisecond
 (`sysTime` + `type`, cgm-remote-monitor `lib/server/entries.js:238-248`), so two uploaders would
 produce doubled points and skew Nightscout's statistics.
 
-**Nightscout token for Sensor** (entered in Sensor's settings, stored in the Keychain; never paste
+**Nightscout token for glucose** (entered in glucose's settings, stored in the Keychain; never paste
 it anywhere else). Nightscout's default roles cannot create entries except `admin`
 (`lib/authorization/storage.js:140-148`), so in Nightscout → Admin Tools:
 
@@ -74,14 +74,14 @@ it anywhere else). Nightscout's default roles cannot create entries except `admi
    (the app only calls `/api/v1/entries`: read for the history import, create for uploads).
 2. Subjects → Add new subject: name `glucose`, roles `sensor-uploader`. (`readable` also works but grants
    read access to everything on the site, which the app does not need.)
-3. Copy that subject's access token into Sensor. Sensor sends it in the `api-secret` header, not
+3. Copy that subject's access token into glucose. glucose sends it in the `api-secret` header, not
    in the URL (`lib/authorization/index.js:76-96, 194-200`).
 
 **Follower links**: create a subject per follower (or one shared) with role `readable` and send
 them `https://diabetes.mzarras.com/?token=<that subject's token>`. Revoke it by deleting the
 subject.
 
-**Alarms (PROGRESS D29).** Sensor sends LOW as sgv 39 and HIGH as 401: Nightscout displays them
+**Alarms (PROGRESS D29).** glucose sends LOW as sgv 39 and HIGH as 401: Nightscout displays them
 as LOW/HIGH, and they are never a real reading (the G7's numbers are 40–400). But Nightscout's own
 alarms skip 39 — `lib/plugins/simplealarms.js:21` only alarms when `mgdl > 39`, `lib/plugins/bgnow.js:96`
 treats ≤ 39 as not a reading — and with no alarm active it auto-acknowledges a running one with
@@ -94,7 +94,7 @@ Dexcom Follow renders them. In HANDOFF §11 step 4a, with a follower, confirm De
 LOW/HIGH and alarms; if not, revert to withholding LOW/HIGH (`DexcomShareEGV.value(for:)` and
 `DexcomShareUploadDestination.canRepresent`) and update section 3 above.
 
-**Dexcom Share** (PROGRESS D7: on, region US). In Sensor's settings enter the Dexcom account name
+**Dexcom Share** (PROGRESS D7: on, region US). In glucose's settings enter the Dexcom account name
 and password (Keychain only) and the receiver/upload serial number assigned to the account — not
 the G7 pairing code. Invitations to Dexcom Follow are managed in the Dexcom app; invite anyone new
 **before** removing it. Wrong credentials are retried only every 30 minutes (also across app
