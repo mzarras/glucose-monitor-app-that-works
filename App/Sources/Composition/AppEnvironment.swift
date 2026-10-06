@@ -69,14 +69,7 @@ final class AppEnvironment {
             credentials: credentials, queueDirectory: support.appendingPathComponent("Uploads"),
             deviceName: AppIdentity.displayName, diagnostics: diagnostics
         )
-        let alarms = SystemAlarmAdapter(makeStopIntent: {
-            if #available(iOS 26.0, *) { return StopUrgentLowAlarmIntent() }
-            return nil
-        })
-        let ports = AlertPorts(
-            notificationCenter: UserNotificationCenterAdapter(), audio: PlaybackAlertAudioPlayer(), alarms: alarms,
-            configuration: AlertEngineConfiguration(), diagnostics: diagnostics
-        )
+        let ports = makeAlertPorts(arguments: arguments, diagnostics: diagnostics)
         let widget = WidgetSnapshotPublisher.appGroup().map { LiveWidgetPublisher(publisher: $0, accent: .default, diagnostics: diagnostics) }
         if widget == nil {
             diagnostics.record(DiagnosticEvent(date: Date(), category: .app, message: "widget snapshot disabled: the App Group container is not available to this build"))
@@ -89,6 +82,31 @@ final class AppEnvironment {
             alertPorts: ports, widget: widget, databaseURL: support.appendingPathComponent("GlucoseStore/readings.sqlite"),
             httpTransport: URLSessionTransport(), launchReplay: launchReplay(arguments)
         ))
+    }
+
+    /// The alert service's delivery ports: UNUserNotificationCenter, the `.playback` audio player and
+    /// AlarmKit with the app's Stop intent (docs/alerts.md §9). DEBUG: `-silenceAlertAudio` swaps in
+    /// silent versions (SilentAlertOutputs.swift) — same delivery, nothing audible.
+    static func makeAlertPorts(arguments: [String], diagnostics: any DiagnosticLog) -> AlertPorts {
+        let notifications: any AlertNotificationCenter = UserNotificationCenterAdapter()
+        let audio: any AlertAudioPlaying = PlaybackAlertAudioPlayer()
+        let alarms: any SystemAlarmScheduling = SystemAlarmAdapter(makeStopIntent: {
+            if #available(iOS 26.0, *) { return StopUrgentLowAlarmIntent() }
+            return nil
+        })
+        #if DEBUG
+        if arguments.contains(SilentAlertAudio.launchArgument) {
+            diagnostics.record(DiagnosticEvent(date: Date(), category: .alert, message: "alert audio silenced (\(SilentAlertAudio.launchArgument), DEBUG)"))
+            return AlertPorts(
+                notificationCenter: SilentNotificationCenter(), audio: SilentAlertAudioPlayer(volumeSource: audio),
+                alarms: SilentSystemAlarms(real: alarms), configuration: AlertEngineConfiguration(), diagnostics: diagnostics
+            )
+        }
+        #endif
+        return AlertPorts(
+            notificationCenter: notifications, audio: audio, alarms: alarms,
+            configuration: AlertEngineConfiguration(), diagnostics: diagnostics
+        )
     }
 
     /// DEBUG: `-replayScenario <name>` [`-replaySpeed <x>`] [`-replayStartMinute <m>`]. Nil in Release.
