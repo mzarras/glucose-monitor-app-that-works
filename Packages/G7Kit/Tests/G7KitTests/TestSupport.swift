@@ -90,6 +90,24 @@ enum Fixture {
         return Data(bytes)
     }
 
+    /// Listen mode `0x31` (G6 layout, CRC appended): [1] status, [2..5] sequence, [6..9] reading
+    /// transmitter time, [10..11] glucose (high nibble = display-only), [12] state, [13] trend.
+    static func coexistenceGlucose(status: UInt8 = 0, readingTransmitterTime: UInt32, glucose: UInt16?, displayOnlyNibble: UInt16 = 0,
+                                   state: UInt8 = 0x06, trend: Int8 = 5) -> Data {
+        var bytes: [UInt8] = [0x31, status] + G7Bytes.littleEndian(UInt32(1)) + G7Bytes.littleEndian(readingTransmitterTime)
+        bytes += G7Bytes.littleEndian((glucose ?? 0xFFFF) | (displayOnlyNibble << 12))
+        bytes += [state, UInt8(bitPattern: trend)]
+        return Data(G7CRC16.appending(to: bytes))
+    }
+
+    /// Listen mode `0x25` (CRC appended): [1] status, [2..5] transmitter clock now, [6..9] session
+    /// start in transmitter time, [10..13] not decoded.
+    static func transmitterTime(status: UInt8 = 0, current: UInt32, sessionStart: UInt32) -> Data {
+        var bytes: [UInt8] = [0x25, status] + G7Bytes.littleEndian(current) + G7Bytes.littleEndian(sessionStart)
+        bytes += [0x01, 0x00, 0x00, 0x00]
+        return Data(G7CRC16.appending(to: bytes))
+    }
+
     /// Captured 10-day `0x52` (xDrip Tests/DexcomG7CalibrationTests.swift:231-236).
     static let tenDayExtendedVersion = Data(hex: "5200c0d70d00540600020404ff0c00")
     /// Captured 15-day `0x52` (xDrip Tests/DexcomG7CalibrationTests.swift:241-246).
@@ -170,6 +188,11 @@ final class FakeCentral: G7CentralDriving {
     func cancelConnection(peripheralIdentifier: UUID) {
         cancelRequests.append(peripheralIdentifier)
     }
+
+    /// Listen mode: G7s "the Dexcom app" has connected right now.
+    var connected: [G7ConnectedSensor] = []
+
+    func connectedSensors() -> [G7ConnectedSensor] { connected }
 }
 
 /// Moves bytes between a `FakeLink` and a `G7SensorSimulator`, delivering callbacks in order,

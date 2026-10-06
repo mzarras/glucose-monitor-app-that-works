@@ -90,6 +90,22 @@ public enum G7FailureReason {
         kind: .otherAppRejected,
         message: "Another app on this phone seems to be connecting to the sensor and being refused, which cuts connections short. This phone is still accepted. Close or remove other Dexcom G7 apps."
     )
+    /// Listen mode (D45): the sensor's session length (`0x52`) has not been observed. Only the Dexcom
+    /// app can ask for it there, and without it no reading can be checked against the session (S2).
+    public static let listenSessionLengthUnknown = SensorFailure(
+        kind: .sessionLengthUnknown,
+        message: "Listening to the Dexcom app's connection, but the sensor's session length has not been seen yet, so readings are held back. In listen mode this app never asks the sensor itself; it waits for the Dexcom app to ask."
+    )
+    /// Listen mode (D45): two sensor wakes in a row without an observed authenticated connection.
+    public static let listenNoAuthenticatedConnection = SensorFailure(
+        kind: .authenticationFailed,
+        message: "Listening for the Dexcom app's connection, but it was not seen authenticating the sensor at the last sensor wakes, so no readings are used. Keep the Dexcom app installed, signed in and running."
+    )
+    /// Listen mode (D45): the observed connection was refused after it had been authenticated.
+    public static let listenConnectionRejected = SensorFailure(
+        kind: .rejectedAfterAuthentication,
+        message: "The sensor refused the Dexcom app's connection after it had started, so readings from this sensor wake are not used. The next sensor wake (within about 5 minutes) is checked again."
+    )
     /// The pairing record could not be read (for example, the Keychain is locked before the first
     /// unlock after a restart; not the same as "not paired"), or saving it failed three times in a row
     /// (what was not saved would be lost at the next app restart).

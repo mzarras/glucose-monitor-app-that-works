@@ -185,7 +185,7 @@ final class G7ReadingPipeline {
     }
 
     /// Handles one `0x4E` received at `receivedAt` on an authenticated connection.
-    func handleGlucose(_ message: G7GlucoseMessage, receivedAt: Date) -> Output {
+    func handleGlucose(_ message: some G7GlucoseReport, receivedAt: Date) -> Output {
         var output = Output()
         if isUnsupportedSensor {
             output.state = .failed(G7FailureReason.unsupportedSensor)
@@ -399,7 +399,7 @@ final class G7ReadingPipeline {
         log("session ended (\(end.rawValue)): reported at sensor times \(first.sensorClock) and \(sensorClock)")
     }
 
-    private func liveReading(from message: G7GlucoseMessage, start: Date, session: SensorSession, now: Date) -> LiveOutcome {
+    private func liveReading(from message: some G7GlucoseReport, start: Date, session: SensorSession, now: Date) -> LiveOutcome {
         guard message.algorithmState.category == .ok else {
             log("glucose: state \(message.algorithmState.name); not published")
             return .withheld(surfacedReason: nil)
@@ -417,7 +417,7 @@ final class G7ReadingPipeline {
             return .withheld(surfacedReason: nil)
         }
         guard let timestamp = message.readingSensorTimestamp else {
-            log("glucose: age \(message.age) exceeds sensor clock \(message.sensorClock); not published")
+            log("glucose: age \(message.readingAge) exceeds sensor clock \(message.sensorClock); not published")
             return .withheld(surfacedReason: nil)
         }
         guard !isPublished(timestamp) else {

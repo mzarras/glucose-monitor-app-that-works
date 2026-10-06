@@ -3,12 +3,16 @@
 import Foundation
 import GlucoseCore
 
-/// Dexcom G7 10-day sensor in primary mode: this app pairs (J-PAKE with the 4-digit code),
+/// Dexcom G7 10-day sensor. In primary mode this app pairs (J-PAKE with the 4-digit code),
 /// authenticates on every ~5-minute connection, and publishes only valid readings (S2-S4).
 ///
 /// Create exactly one, early in app launch (so CoreBluetooth state restoration can find its
 /// central), then call `start(pairingCode: nil)`. Stream rules follow `CGMSource`: each stream is
 /// created once with unbounded buffering, never finished, one consumer each.
+///
+/// Two modes (D45, `G7ConnectionMode`): primary (above) and listen, where the Dexcom app on the
+/// same phone owns the connection and this source only observes it — no pairing code, no writes to
+/// the sensor; start it with `start(pairingCode: nil)` after choosing `.listen`.
 ///
 /// Settings support: `pair(code:)` (a new sensor), `pairAgain(code:)` (the same sensor, after it
 /// refused this phone), `forgetSensor()`. There is no "stop session": xDrip4iOS
@@ -69,6 +73,8 @@ public final class G7CGMSource: CalibratingCGMSource, @unchecked Sendable {
             diagnostics: diagnostics,
             now: clock,
             slot: configuration.authenticationSlot,
+            mode: configuration.mode,
+            recordsRawGlucosePackets: configuration.recordsRawGlucosePackets,
             output: G7Controller.Output(
                 reading: { readingsContinuation.yield($0) },
                 state: { stateContinuation.yield($0) },
@@ -112,9 +118,49 @@ public final class G7CGMSource: CalibratingCGMSource, @unchecked Sendable {
         await onQueue { self.controller.stop() }
     }
 
+    // MARK: - Mode (D45) and raw recording (D47)
+
+    /// Primary (this app pairs and owns the connection) or listen (the Dexcom app owns it; this app
+    /// only observes). See `G7ConnectionMode`.
+    public var mode: G7ConnectionMode {
+        get async { await onQueue { self.controller.mode } }
+    }
+
+    /// Switches mode — the app's explicit choice; G7Kit never switches by itself. Stops, drops every
+    /// stored pairing and session (code, key, followed sensor, session start and end), and reports
+    /// `.notPaired` (primary) or `.searching` (listen). Then call `start(pairingCode: nil)` for
+    /// listen, or `pair(code:)` for primary. The app persists the choice and passes it as
+    /// `G7Configuration.mode` at the next launch. Throws `G7StartError.credentialStoreFailed` when the
+    /// stored pairing cannot be deleted (nothing switched).
+    public func setMode(_ mode: G7ConnectionMode) async throws {
+        let result = await onQueue { () -> Result<Void, G7StartError> in
+            do throws(G7StartError) {
+                try self.controller.setMode(mode)
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
+        try result.get()
+    }
+
+    /// Calibration needs primary mode (listen mode never writes to the sensor; `submitCalibration`
+    /// refuses with `.notAuthenticated` there).
+    public var supportsCalibration: Bool {
+        get async { await onQueue { self.controller.mode != .listen } }
+    }
+
+    /// D47 (Settings › Diagnostics): when on, the hex of every received glucose packet (`0x4E`; in
+    /// listen mode also `0x31` and `0x25`), valid ones included, goes to the diagnostic log with its
+    /// time. Off by default.
+    public func setRecordsRawGlucosePackets(_ enabled: Bool) async {
+        await onQueue { self.controller.recordsRawGlucosePackets = enabled }
+    }
+
     // MARK: - Settings
 
-    /// Pairs a new sensor: `start(pairingCode:)` with the code from the applicator.
+    /// Pairs a new sensor: `start(pairingCode:)` with the code from the applicator. Primary mode only
+    /// (`G7StartError.notAvailableInListenMode`).
     public func pair(code: String) async throws {
         try await start(pairingCode: code)
     }
@@ -139,11 +185,14 @@ public final class G7CGMSource: CalibratingCGMSource, @unchecked Sendable {
     /// `pairAgain(code:)` (the same sensor), otherwise to `pair(code:)` (a first or new sensor). In
     /// particular, a retry after the sensor authenticated during onboarding must use `pairAgain`:
     /// `pair(code:)` treats the stored sensor as the previous one (its refusal is skipped, §2.2).
+    /// Always false in listen mode (no pairing there).
     public var hasStoredSensor: Bool {
         get async { await onQueue { self.controller.hasStoredSensor } }
     }
 
     /// The stored sensor's serial ("DXCMxx-" + 8 hex of the iOS identifier), nil when none is stored.
+    /// In listen mode: the sensor whose authenticated connection was observed (same serial as primary
+    /// mode would give).
     public var storedSensorSerial: String? {
         get async { await onQueue { self.controller.storedSensorSerial } }
     }
@@ -167,8 +216,9 @@ public final class G7CGMSource: CalibratingCGMSource, @unchecked Sendable {
     }
 
     /// The values Trio's heartbeat needs (see `G7HeartbeatTarget`), or nil when there is no
-    /// authenticated pairing. Re-read it after `pair`, `forgetSensor` and whenever `state` changes;
-    /// publish nil (remove the keys) when it is nil.
+    /// authenticated pairing — always nil in listen mode (D45: the Trio handoff is off there). Re-read
+    /// it after `pair`, `forgetSensor`, `setMode` and whenever `state` changes; publish nil (remove the
+    /// keys) when it is nil.
     public var heartbeatTarget: G7HeartbeatTarget? {
         get async { await onQueue { self.controller.heartbeatTarget } }
     }

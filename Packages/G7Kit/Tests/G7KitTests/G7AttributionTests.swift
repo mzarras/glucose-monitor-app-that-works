@@ -21,12 +21,17 @@ final class G7AttributionTests: XCTestCase {
         "Sources/G7Kit/Calibration/G7CalibrationQueue.swift": ([xdrip + "G7/CGMG7Transmitter.swift"], nil),
         "Sources/G7Kit/Connection/G7Characteristic.swift": ([xdrip + "G7/CGMG7Transmitter.swift"], nil),
         "Sources/G7Kit/Connection/G7ConnectionCycle.swift": ([xdrip + "G7/CGMG7Transmitter.swift"], nil),
+        "Sources/G7Kit/Connection/G7ListenCycle.swift": ([xdrip + "G7/CGMG7Transmitter.swift"], nil),
         "Sources/G7Kit/Messages/G7AlgorithmState.swift": ([xdrip + "Generic/DexcomAlgorithmState.swift"], "Copyright © 2021 Johan Degraeve"),
         "Sources/G7Kit/Messages/G7AuthChallengeMessages.swift": ([xdrip + "Generic/AuthRequestRxMessage.swift", xdrip + "Generic/DexcomG7AuthBridge.m"], "Copyright © 2015 Nathan Racklyeft"),
         "Sources/G7Kit/Messages/G7AuthStatusMessage.swift": ([xdrip + "Generic/AuthChallengeRxMessage.swift"], "Copyright © 2015 Nathan Racklyeft"),
         "Sources/G7Kit/Messages/G7BackfillMessage.swift": ([xdrip + "Generic/DexcomG7BackfillMessage.swift"], nil),
         "Sources/G7Kit/Messages/G7CalibrationMessages.swift": ([xdrip + "Generic/DexcomG7CalibrationMessages.swift"], nil),
         "Sources/G7Kit/Messages/G7ControlRequests.swift": ([xdrip + "G7/CGMG7Transmitter.swift"], nil),
+        "Sources/G7Kit/Messages/G7CoexistenceMessages.swift": (
+            [xdrip + "Generic/DexcomG7GlucoseDataRxMessage.swift", xdrip + "Generic/DexcomTransmitterTimeRxMessage.swift"],
+            "Copyright © 2024 Johan Degraeve"
+        ),
         "Sources/G7Kit/Messages/G7CRC16.swift": ([xdrip + "Generic/NSData+CRC.swift"], "Copyright © 2016 Nathan Racklyeft"),
         "Sources/G7Kit/Messages/G7ExtendedVersionMessage.swift": ([xdrip + "Generic/DexcomG7ExtendedVersionMessage.swift"], nil),
         "Sources/G7Kit/Messages/G7GlucoseMessage.swift": ([xdrip + "Generic/DexcomG7GlucoseDataRxMessage.swift"], "Copyright © 2024 Johan Degraeve"),
@@ -106,6 +111,7 @@ final class G7AttributionTests: XCTestCase {
         "Sources/G7Kit/Messages/G7CRC16.swift": ["CGMBLEKit/NSData+CRC.swift"],
         "Sources/G7Kit/Messages/G7OwnershipMessages.swift": ["CGMBLEKit/Messages/KeepAliveTxMessage.swift", "CGMBLEKit/Messages/BondRequestTxMessage.swift"],
         "Sources/G7Kit/Auth/G7AuthenticationSlot.swift": ["CGMBLEKit/Messages/AuthRequestTxMessage.swift"],
+        "Sources/G7Kit/Messages/G7CoexistenceMessages.swift": ["CGMBLEKit/Messages/GlucoseRxMessage.swift", "CGMBLEKit/Messages/TransmitterTimeRxMessage.swift"],
     ]
 
     func test_S8_cgmbleKitDerivedFilesShipItsLicense() throws {

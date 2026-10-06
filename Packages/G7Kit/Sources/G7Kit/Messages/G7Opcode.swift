@@ -42,6 +42,14 @@ enum G7Opcode: UInt8 {
     /// Ownership proof status `0D 00 02` (sent) / `0D ..` (received).
     /// DexcomTransmitterOpCode.swift:26, DexcomG7AuthSession.swift:284-292 and :624.
     case authProofStatus = 0x0D
+    /// Listen mode (D45) only, observed, never sent: the sensor's 16-byte transmitter-time response
+    /// to the Dexcom app's `24` request. DexcomTransmitterOpCode.swift:35 (transmitterTimeRx),
+    /// CGMG7Transmitter.swift:1004, CGMBLEKit Opcode.swift:30.
+    case transmitterTime = 0x25
+    /// Listen mode (D45) only, observed, never sent: the sensor's 16-byte glucose response to the
+    /// Dexcom app's `30` request. DexcomTransmitterOpCode.swift:44 (glucoseRx), CGMG7Transmitter.swift:1002,
+    /// CGMBLEKit Opcode.swift:37.
+    case coexistenceGlucose = 0x31
     /// Calibration bounds request `32` / 20-byte record. DexcomTransmitterOpCode.swift:45,
     /// CGMG7Transmitter.swift:1746, DexcomG7CalibrationMessages.swift:235-252.
     case calibrationBounds = 0x32

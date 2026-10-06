@@ -838,6 +838,9 @@ final class G7SensorStatusTests: XCTestCase {
             (G7FailureReason.rejectedAfterAuthentication, .rejectedAfterAuthentication),
             (G7FailureReason.otherAppRejected, .otherAppRejected),
             (G7FailureReason.credentialsUnavailable, .credentialsUnavailable),
+            (G7FailureReason.listenSessionLengthUnknown, .sessionLengthUnknown),
+            (G7FailureReason.listenNoAuthenticatedConnection, .authenticationFailed),
+            (G7FailureReason.listenConnectionRejected, .rejectedAfterAuthentication),
         ]
         for (failure, kind) in expected { XCTAssertEqual(failure.kind, kind, failure.message) }
         XCTAssertEqual(G7FailureReason.previousSensorRejectedCode(sensorName: "DXCM4F").kind, .pairingRejected)
