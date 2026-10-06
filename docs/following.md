@@ -70,8 +70,10 @@ produce doubled points and skew Nightscout's statistics.
 it anywhere else). Nightscout's default roles cannot create entries except `admin`
 (`lib/authorization/storage.js:140-148`), so in Nightscout → Admin Tools:
 
-1. Roles → Add new role: name `sensor-uploader`, permissions `api:entries:create`.
-2. Subjects → Add new subject: name `Sensor`, roles `readable, sensor-uploader`.
+1. Roles → Add new role: name `sensor-uploader`, permissions `api:entries:read,api:entries:create`
+   (the app only calls `/api/v1/entries`: read for the history import, create for uploads).
+2. Subjects → Add new subject: name `glucose`, roles `sensor-uploader`. (`readable` also works but grants
+   read access to everything on the site, which the app does not need.)
 3. Copy that subject's access token into Sensor. Sensor sends it in the `api-secret` header, not
    in the URL (`lib/authorization/index.js:76-96, 194-200`).
 

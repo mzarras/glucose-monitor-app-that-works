@@ -311,9 +311,10 @@ keep uploads paused (D20), and in §5 uploads stay off until Part B. While liste
 are off whatever their switches say (D45): Trio keeps uploading CGM readings to Nightscout.
 
 1. In Nightscout › Admin Tools: **Roles › Add new role**, e.g. `sensor-uploader`, permissions
-   `api:entries:create`. **Subjects › Add new subject**, e.g. `Sensor`, roles
-   `readable, sensor-uploader` (`readable` gives the read access the history import needs).
-   Nightscout's default roles can't create entries except `admin`.
+   `api:entries:read,api:entries:create` (the app only calls `/api/v1/entries`: read for the history
+   import, create for uploads). **Subjects › Add new subject**, e.g. `glucose`, role `sensor-uploader`.
+   (`readable` also works but grants read access to everything on the site.) Nightscout's default
+   roles can't create entries except `admin`.
 2. In this app: Settings › Sharing › Nightscout: **Site URL** (`https://` only; plain `http` is
    refused except for loopback hosts) and **Access token** (that subject's token) › Save. The token
    goes to the Keychain and is sent in the `api-secret` header, never in a URL. Never paste it
