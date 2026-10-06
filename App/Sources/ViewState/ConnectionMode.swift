@@ -1,7 +1,7 @@
-// D45 listen mode and D47 raw packet recording: the screens' side, prepared before the G7Kit API
-// (WS1) and the facade (Integrator A) exist. Every D45/D47 control hangs off an optional view state
-// that stays nil until `AppServices` offers the feature; while it is nil every screen looks and
-// behaves exactly as before D45. Wiring is then mapping only (docs/app-wiring.md "D45/D47").
+// D45 listen mode and D47 raw packet recording: the screens' side. `AppModel` maps the facade's
+// `connectionMode`, `recordsRawGlucosePackets` and the outputs' `offWhileListening` into these view
+// states (docs/app-wiring.md "D45/D47"); a fixture model or preview without them (nil) shows every
+// screen as before D45.
 //
 // D45 (PROGRESS): listen mode only observes the BLE connection the Dexcom app on this phone
 // authenticated — no pairing code, nothing written to the sensor (no auth, backfill, calibration or
@@ -10,8 +10,9 @@
 // sensor, after the Dexcom app is deleted.
 
 import Foundation
+import GlucoseCore
 
-/// How this app reaches the G7 sensor (D45).
+/// How this app reaches the G7 sensor (D45). Also the facade's `AppServices.connectionMode`.
 enum SensorConnectionMode: String, CaseIterable, Identifiable, Sendable {
     /// Observe the Dexcom app's connection to the current sensor; send nothing.
     case listen
@@ -67,7 +68,7 @@ enum ConnectionModeText {
 
     /// Pairing-only actions, explained instead of offered while listening.
     static let calibrationWhileListening = "Calibrate in the Dexcom app: while listening, this app sends nothing to the sensor."
-    static let pairingWhileListening = "Pairing isn't used while listening. To pair this app, delete the Dexcom app, then choose \u{201C}\(title(.pair))\u{201D}."
+    static let pairingWhileListening = "Pairing isn't used while listening. To pair this app, delete the Dexcom app, then choose \u{201C}\(title(.pair))\u{201D} under Connection in Settings \u{203A} Sensor."
     static let sensorProblemWhileListening = "Check the sensor in the Dexcom app: it owns the connection while this app listens."
 
     /// Confirmation before switching modes in Settings.
@@ -76,6 +77,10 @@ enum ConnectionModeText {
         case .listen: return "Listen alongside the Dexcom app?"
         case .pair: return "Pair this app with the sensor?"
         }
+    }
+
+    static func switchButton(to mode: SensorConnectionMode) -> String {
+        mode == .listen ? "Listen alongside the Dexcom app" : "Pair this app"
     }
 
     static func switchMessage(to mode: SensorConnectionMode) -> String {
@@ -87,13 +92,63 @@ enum ConnectionModeText {
         }
     }
 
+    /// Why `setConnectionMode(_:)` did not switch; nothing changed in every case.
+    static func errorText(_ error: ConnectionModeError) -> String {
+        switch error {
+        case .replayActive:
+            return "A replay is running, so the connection can't change. Stop the replay (Settings › Developer) first. Nothing changed."
+        case .couldNotSave(let message):
+            return "The connection choice couldn't be saved, so nothing changed. \(message)"
+        case .credentialStoreFailed(let message):
+            return "The sensor's stored connection couldn't be changed, so nothing changed. Unlock the phone and try again. \(message)"
+        }
+    }
+
+    /// Shown while a switch is on its way.
+    static let switching = "Changing how the app connects…"
+
     /// Onboarding's listening step.
     static let onboardingWaiting = "Waiting for the Dexcom app's connection… The sensor talks to it about every 5 minutes; keep the Dexcom app installed and signed in."
     static let onboardingListening = "Listening. Readings arrive whenever the Dexcom app's sensor connects."
 }
 
+/// A listen-mode sensor failure in the person's words (S5: it stays on screen as a banner and in
+/// Settings › Sensor until it clears).
+struct ListenFailureText: Equatable, Sendable {
+    let title: String
+    let detail: String
+    /// Lower-case word for the SENSOR rows.
+    let row: String
+}
+
 /// D45 rules the screens apply while listening. Pure; unit-tested.
 enum ListenModeRules {
+    /// G7Kit's three transient listen-mode failures (`G7FailureReason.listen…`), recognised by kind
+    /// while listening (D36: decisions from the kind). Nil for anything else, which keeps its usual
+    /// wording.
+    static func failure(_ failure: SensorFailure, listening: Bool) -> ListenFailureText? {
+        guard listening else { return nil }
+        switch failure.kind {
+        case .sessionLengthUnknown:
+            return ListenFailureText(
+                title: "Waiting for session details",
+                detail: "Waiting for the sensor's session details. They come from the Dexcom app's (or Trio's) connection within a few readings; readings are held back until then.",
+                row: "waiting for session details")
+        case .authenticationFailed:
+            return ListenFailureText(
+                title: "Connection not confirmed",
+                detail: "Can't confirm the Dexcom app's connection to the sensor is authenticated, so no readings are used until it is. Keep the Dexcom app installed, signed in and running.",
+                row: "connection not confirmed")
+        case .rejectedAfterAuthentication:
+            return ListenFailureText(
+                title: "Sensor rejected the connection",
+                detail: "The sensor rejected the Dexcom app's connection, so readings from this sensor wake aren't used. The next wake, within about 5 minutes, is checked again.",
+                row: "connection rejected")
+        default:
+            return nil
+        }
+    }
+
     /// The Now hero while listening: no pairing or calibration button (those write to the sensor);
     /// the detail says where to act instead. Anything else is unchanged.
     static func hero(_ hero: NowHero, listening: Bool) -> NowHero {

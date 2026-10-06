@@ -52,7 +52,8 @@ struct NowViewState: Equatable, Sendable {
 
     func banners(now: Date, context: DisplayContext = .current) -> [AppBanner] {
         AppBanners.make(sensorState: sensorState, latestLiveReadingDate: latestLiveReading?.date, health: health, now: now,
-                        clockMismatchLatched: isClockMismatchLatched, sensorNeedsCalibration: sensorNeedsCalibration, context: context)
+                        clockMismatchLatched: isClockMismatchLatched, sensorNeedsCalibration: sensorNeedsCalibration,
+                        listening: connection?.isListening == true, context: context)
     }
 
     func display(now: Date) -> GlucoseDisplayState {

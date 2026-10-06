@@ -19,6 +19,9 @@ struct SensorSettingsView: View {
     /// D45: nil until the facade offers listen mode; then the CONNECTION choice is shown, and while
     /// listening the pairing-only actions (calibrate, pair again, forget) are explained instead.
     var connection: ConnectionModeState? = nil
+    /// D45: a switch on its way, and why the last one didn't happen.
+    var connectionSwitchingTo: SensorConnectionMode? = nil
+    var connectionFeedback: String? = nil
     @State private var confirmingStop = false
     @State private var confirmingForget = false
     @State private var confirmingMode: SensorConnectionMode?
@@ -33,7 +36,8 @@ struct SensorSettingsView: View {
                 if listening {
                     ListeningStatusLine()
                 }
-                SettingsValueRow(title: "Status", value: SensorStatusText.row(sensor.state, now: Date()))
+                SettingsValueRow(title: "Status", value: SensorStatusText.row(sensor.state, now: Date(), listening: listening))
+                    .accessibilityIdentifier("settings.sensor.status")
                 if let serial = sensor.serial {
                     SettingsValueRow(title: "Serial", value: serial)
                 }
@@ -75,7 +79,8 @@ struct SensorSettingsView: View {
     @ViewBuilder
     private var listeningSection: some View {
         if case .failed(let failure) = sensor.state {
-            FieldMessage(text: failure.message)
+            // S5: the failure stays on the page, in words for listening where it is one of those.
+            FieldMessage(text: ListenModeRules.failure(failure, listening: true)?.detail ?? failure.message)
         }
         VStack(alignment: .leading, spacing: 6) {
             ExplanationNote(text: ConnectionModeText.calibrationWhileListening)
@@ -87,14 +92,26 @@ struct SensorSettingsView: View {
     private func connectionSection(_ connection: ConnectionModeState) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             SectionLabel("CONNECTION")
-            ConnectionModeChoices(selected: connection.mode) { mode in
+            ConnectionModeChoices(selected: connectionSwitchingTo ?? connection.mode) { mode in
                 if mode != connection.mode { confirmingMode = mode }
+            }
+            .disabled(connectionSwitchingTo != nil)
+            if connectionSwitchingTo != nil {
+                HStack(spacing: 10) {
+                    ProgressView().accessibilityHidden(true)
+                    Text(verbatim: ConnectionModeText.switching).font(Typography.body(size: 13))
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if let connectionFeedback {
+                FieldMessage(text: connectionFeedback)
+                    .accessibilityIdentifier("settings.connection.message")
             }
         }
         .confirmationDialog(confirmingMode.map(ConnectionModeText.switchTitle(to:)) ?? "",
                             isPresented: Binding(get: { confirmingMode != nil }, set: { if !$0 { confirmingMode = nil } }),
                             titleVisibility: .visible, presenting: confirmingMode) { mode in
-            Button(mode == .listen ? "Listen alongside the Dexcom app" : "Pair this app") { actions.setConnectionMode(mode) }
+            Button(ConnectionModeText.switchButton(to: mode)) { actions.setConnectionMode(mode) }
         } message: { mode in
             Text(verbatim: ConnectionModeText.switchMessage(to: mode))
         }

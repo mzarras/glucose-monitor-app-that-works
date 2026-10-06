@@ -242,7 +242,7 @@ struct NowContent: View {
             Hairline()
                 .padding(.bottom, 4)
             StatusRow(label: "SENSOR", value: state.sensorStateKnown || state.sensorState != .notPaired
-                      ? SensorStatusText.row(state.sensorState, session: state.sensorSession, now: now, context: context)
+                      ? SensorStatusText.row(state.sensorState, session: state.sensorSession, now: now, context: context, listening: isListening)
                       : "checking…")
                 .accessibilityIdentifier("now.sensorRow")
             StatusRow(label: "TRIO", value: ListenModeRules.outputRow(TrioStatusText.row(state.health.trio, context: context), listening: isListening),

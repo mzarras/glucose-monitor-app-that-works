@@ -140,6 +140,67 @@ extension AppModel {
         track { await services.forgetSensor() }
     }
 
+    // MARK: - Connection mode (D45) and packet recording (D47)
+
+    /// Settings › Sensor, after the page's confirmation. The view states follow the `.sensor`
+    /// change the facade sends; a refusal (nothing changed) is shown under the choices.
+    func setConnectionMode(_ mode: SensorConnectionMode) {
+        guard let services else {
+            settings.connection = ConnectionModeState(mode: mode)
+            return
+        }
+        settings.feedback.connection = nil
+        settings.connectionSwitchingTo = mode
+        track { [weak self] in
+            do throws(ConnectionModeError) {
+                try await services.setConnectionMode(mode)
+            } catch {
+                self?.settings.feedback.connection = ConnectionModeText.errorText(error)
+            }
+            self?.settings.connectionSwitchingTo = nil
+        }
+    }
+
+    func setPacketRecording(_ enabled: Bool) {
+        guard let services else {
+            settings.packetRecording = PacketRecordingState(isOn: enabled)
+            return
+        }
+        track { await services.setRecordsRawGlucosePackets(enabled) }
+    }
+
+    /// Onboarding's connection step: the choice is only remembered here; Continue applies it.
+    /// Listening offers no Dexcom Share upload by default (D7's default is for pairing mode).
+    func chooseOnboardingConnection(_ mode: SensorConnectionMode) {
+        guard onboarding != nil else { return }
+        onboarding?.connection = ConnectionModeState(mode: mode)
+        onboarding?.connectionMessage = nil
+        onboarding?.shareUploadEnabled = mode == .pair
+    }
+
+    /// Continue on the connection step: switches the facade to the chosen mode if it differs, then
+    /// moves on; a refusal stays on the step with its reason (nothing changed).
+    func continueFromConnectionStep() {
+        guard let chosen = onboarding?.connection?.mode else { return }
+        let next = onboarding?.step(after: .connection) ?? .importHistory
+        guard let services, services.connectionMode != chosen else {
+            goToOnboardingStep(next)
+            return
+        }
+        onboarding?.connectionMessage = nil
+        onboarding?.connectionSwitching = true
+        track { [weak self] in
+            do throws(ConnectionModeError) {
+                try await services.setConnectionMode(chosen)
+                self?.onboarding?.connectionSwitching = false
+                self?.goToOnboardingStep(next)
+            } catch {
+                self?.onboarding?.connectionSwitching = false
+                self?.onboarding?.connectionMessage = ConnectionModeText.errorText(error)
+            }
+        }
+    }
+
     // MARK: - Trio
 
     func setTrioEnabled(_ enabled: Bool) {

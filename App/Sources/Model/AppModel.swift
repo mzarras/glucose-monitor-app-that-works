@@ -515,8 +515,19 @@ final class AppModel {
                                                  bluetooth: services.bluetoothAuthorization, failureSince: failure?.since,
                                                  pairingInProgress: pairingInProgress)
         settings.sensor.stateKnown = sensorStateKnown
+
+        // D45/D47: the connection mode and packet recording (a mode change also sends `.sensor`).
+        let mode = services.connectionMode
+        let connection = ConnectionModeState(mode: mode)
+        now.connection = connection
+        settings.connection = connection
+        settings.packetRecording = PacketRecordingState(isOn: services.recordsRawGlucosePackets)
+        calibration.listening = mode == .listen
+
         if var onboarding {
             onboarding.sensorState = state
+            onboarding.currentConnectionMode = mode
+            onboarding.connectionSwitchNeedsConfirmation = hasStoredSensor
             onboarding.pairing = OnboardingMapping.pairing(current: onboarding.pairing, sensorState: state,
                                                            sawConnectionStep: pairingSawConnectionStep)
             // An existing sensor showed up before the person started onboarding (e.g. after an
@@ -548,7 +559,18 @@ final class AppModel {
     // MARK: Onboarding
 
     func presentOnboarding(at step: OnboardingStep) {
-        onboarding = freshOnboardingState(at: step)
+        var state = freshOnboardingState(at: step)
+        if let services {
+            // D45: the connection step; listening (chosen before) stays chosen, otherwise nothing is
+            // preselected. D7's "Share upload on" is for pairing mode only (the Dexcom app keeps
+            // sharing while this app listens).
+            let mode = services.connectionMode
+            state.connection = ConnectionModeState(mode: mode == .listen ? .listen : nil)
+            state.currentConnectionMode = mode
+            state.connectionSwitchNeedsConfirmation = services.hasStoredSensor
+            state.shareUploadEnabled = mode == .pair
+        }
+        onboarding = state
         hadStoredSensorAtPairingStart = nil
         refreshOnboardingPermissions()
     }
