@@ -279,11 +279,11 @@ screens word it "off while listening".
 
 | Where | While listening | Action → facade |
 |---|---|---|
-| Onboarding | A "How to connect" step after Welcome: the two choices ("Listen alongside the Dexcom app (this sensor)", "Pair this app (Dexcom app removed)"), one line each; nothing preselected in pairing mode, listening preselected if already chosen. Listening skips Remove the Dexcom app and Pairing and adds a Listening step (status line, the source's problem in listen words, Continue always offered); Dexcom Share upload is not on by default (D7's default is for pairing mode). | Continue → `setConnectionMode(_:)` when the choice differs (confirmation first if a sensor is stored); a refusal stays on the step (`ConnectionModeText.errorText`, nothing changed) |
-| Settings › Sensor | "Listening — the Dexcom app owns the connection"; calibrate, pairing offers and forget replaced by one-line explanations; the CONNECTION choice | choice → confirmation → `setConnectionMode(_:)`; the choices wait while it runs; a refusal (`.replayActive`, `.couldNotSave`, `.credentialStoreFailed`) is shown under them |
+| Onboarding | A "How to connect" step after Welcome, before any pairing step: the two choices ("Listen alongside the Dexcom app (this sensor)", "Pair this app (Dexcom app removed)"), one line each; **nothing preselected, ever**, and no Continue until one is chosen. The pairing step says before the code field: "Pairing takes over the sensor's connection: the Dexcom app on this phone will stop receiving readings. Delete the Dexcom app first." Listening skips Remove the Dexcom app and Pairing and adds a Listening step (status line, the source's problem in listen words, Continue always offered); Dexcom Share upload is not on by default (D7's default is for pairing mode). | Continue → `setConnectionMode(_:)` when the choice differs (confirmation first if a sensor is stored); a refusal stays on the step (`ConnectionModeText.errorText`, nothing changed) |
+| Settings › Sensor | Until a choice is made (`AppUIPreferences.connectionModeChosen`; a new install's stored `.pair` is only a storage default): the CONNECTION choice first, nothing selected, no code field. Pairing: the takeover warning above every code field. Listening: "Listening — the Dexcom app owns the connection"; calibrate and pairing offers replaced by one-line explanations; Forget becomes "Stop following this sensor" (confirmed; G7Kit §14: how listen mode follows the next sensor) | choice → confirmation (switching to Pair says the takeover warning) → `setConnectionMode(_:)` (the mode the facade is already in only records the choice); the choices wait while it runs; a refusal (`.replayActive`, `.couldNotSave`, `.credentialStoreFailed`) is shown under them. Stop following → `forgetSensor()` |
 | Settings main | Connection row; Trio, Nightscout, Dexcom Share rows "off while listening" | — |
 | Trio, Sharing pages | switches off and disabled, "Off while listening alongside the Dexcom app"; Retry uploads hidden; site and credentials can still be saved | — |
-| Now | TRIO row "off while listening", the listening line under the status rows, no Pair/Calibrate button in the hero (`ListenModeRules.hero`) | — |
+| Now | Before a choice, no sensor reads "No sensor set up" with "Set up the sensor" (Settings › Sensor's choice), never "Pair a sensor". Listening: TRIO row "off while listening", the listening line under the status rows, no Pair/Calibrate button in the hero (`ListenModeRules.hero`; an ended sensor says to start the new one in the Dexcom app and stop following this one), no followed sensor reads "Not following a sensor" | — |
 | Calibration (Now menu, flow, Settings) | "Calibrate in the Dexcom app: while listening, this app sends nothing to the sensor." (`CalibrationRules.availability`) | — |
 | Banners, SENSOR rows | G7Kit's three transient listen failures (`listenSessionLengthUnknown`, `listenNoAuthenticatedConnection`, `listenConnectionRejected`, by kind while listening) stay up as warnings with their own words (`ListenModeRules.failure`): "Waiting for session details", "Connection not confirmed", "Sensor rejected the connection". Missed readings and alerts are unchanged. | — |
 | Settings › DIAGNOSTICS | "Record raw glucose packets" (D47, off by default) with its line | `setRecordsRawGlucosePackets(_:)` |
@@ -291,7 +291,13 @@ screens word it "off while listening".
 `PairingError.notAvailableInListenMode` reads `ConnectionModeText.pairingWhileListening`. UI tests
 start each launch in pairing mode (DEBUG `-resetConnectionMode`, AppEnvironment) and switch on the
 simulator's live source (Bluetooth unsupported there) or are refused in a replay run.
-Screenshots: `docs/screenshots/listen-*.png` (UI tests), `design-d45-*.png` (renders).
+A choice is recorded when onboarding's Continue or Settings' confirmation succeeds; listening, or a
+sensor stored in pairing mode (an install from before D45), counts as chosen.
+
+Open (services): after `forgetSensor()` in listen mode the live facade does not start listening
+again (`g7Started` stays true, so `startG7()` returns) until the next launch.
+
+Screenshots: `docs/screenshots/listen-*.png` and `first-run-*.png` (UI tests).
 
 ## Widget (DEBUG replay marker, audit m9)
 

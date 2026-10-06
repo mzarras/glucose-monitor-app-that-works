@@ -24,9 +24,10 @@ final class ListenModeWiringTests: XCTestCase {
     func test_modeReachesEveryScreen() {
         let services = PreviewAppServices(sensorState: .notPaired)
         let model = launch(services)
-        XCTAssertEqual(model.settings.connection?.mode, .pair)
+        XCTAssertEqual(model.settings.connection, ConnectionModeState(mode: nil), "a new install's stored .pair is not shown as the choice")
         XCTAssertFalse(model.settings.isListening)
         XCTAssertEqual(model.now.connection?.mode, .pair)
+        XCTAssertFalse(model.now.connectionChosen)
         XCTAssertFalse(model.calibration.listening)
         XCTAssertEqual(model.settings.packetRecording, PacketRecordingState(isOn: false), "D47: off by default")
 
@@ -38,7 +39,8 @@ final class ListenModeWiringTests: XCTestCase {
         services.recordsRawGlucosePackets = true
         model.apply(.sensor)
         model.apply(.trio)
-        XCTAssertTrue(model.settings.isListening)
+        XCTAssertTrue(model.settings.isListening, "listening counts as chosen")
+        XCTAssertTrue(model.now.connectionChosen)
         XCTAssertEqual(model.now.connection?.mode, .listen)
         XCTAssertTrue(model.calibration.listening)
         XCTAssertEqual(CalibrationRules.availability(model.calibration, now: t0), .unavailable(reason: ConnectionModeText.calibrationWhileListening))
@@ -79,11 +81,35 @@ final class ListenModeWiringTests: XCTestCase {
             model.setConnectionMode(.listen)
             await model.settle()
             XCTAssertEqual(model.settings.feedback.connection, ConnectionModeText.errorText(error))
-            XCTAssertEqual(model.settings.connection?.mode, .pair, "nothing changed")
+            XCTAssertNil(model.settings.connection?.mode, "nothing changed (still not chosen)")
+            XCTAssertEqual(services.connectionMode, .pair)
             XCTAssertNil(model.settings.connectionSwitchingTo)
         }
         XCTAssertTrue(ConnectionModeText.errorText(.replayActive).contains("Stop the replay"))
         XCTAssertTrue(ConnectionModeText.errorText(.couldNotSave("disk full")).contains("disk full"))
+    }
+
+    /// A new install: choosing "Pair this app" (the facade is already in pairing mode) records the
+    /// choice without a switch; from then on Settings shows it and Now offers pairing.
+    func test_choosingPairOnANewInstallRecordsTheChoice() async {
+        let services = PreviewAppServices(sensorState: .notPaired)
+        let model = launch(services)
+        XCTAssertNil(model.settings.connection?.mode)
+        model.setConnectionMode(.pair)
+        await model.settle()
+        XCTAssertFalse(services.calls.contains { $0.hasPrefix("setConnectionMode") }, "already pairing mode: nothing to switch")
+        XCTAssertEqual(model.settings.connection?.mode, .pair)
+        XCTAssertTrue(model.now.connectionChosen)
+        model.apply(.sensor)
+        XCTAssertEqual(model.settings.connection?.mode, .pair, "remembered")
+    }
+
+    /// An install from before D45 with a paired sensor has evidently chosen pairing.
+    func test_aStoredSensorCountsAsChosen() {
+        let services = PreviewAppServices(sensorState: .searching)
+        services.hasStoredSensor = true
+        let model = launch(services)
+        XCTAssertEqual(model.settings.connection?.mode, .pair)
     }
 
     func test_packetRecordingSwitch() async {
@@ -144,14 +170,17 @@ final class ListenModeWiringTests: XCTestCase {
         XCTAssertEqual(services.connectionMode, .pair)
     }
 
-    /// Already listening (chosen before): the step shows it chosen, and Share isn't on by default.
+    /// Already listening: the step still preselects nothing (the person always chooses), Share
+    /// isn't on by default, and choosing listening again switches nothing.
     func test_onboardingWhileAlreadyListening() async {
         let services = PreviewAppServices(sensorState: .searching)
         services.connectionMode = .listen
         let model = launch(services, onboardingCompleted: false)
-        XCTAssertEqual(model.onboarding?.connection, ConnectionModeState(mode: .listen))
+        model.presentOnboarding(at: .welcome)
+        XCTAssertEqual(model.onboarding?.connection, ConnectionModeState(mode: nil))
         XCTAssertEqual(model.onboarding?.shareUploadEnabled, false)
         model.goToOnboardingStep(.connection)
+        model.chooseOnboardingConnection(.listen)
         model.continueFromConnectionStep()
         await model.settle()
         XCTAssertEqual(model.onboarding?.step, .importHistory)
@@ -230,18 +259,43 @@ final class ListenModeWiringTests: XCTestCase {
     /// Pairing and calibration write to the sensor: while listening the hero offers neither and
     /// says where to act; readings and other messages are unchanged.
     func test_heroHasNoPairingOrCalibrationButtonWhileListening() {
-        let pairAgain = NowHero.message(title: "Sensor not connected", detail: "The sensor no longer accepts this phone.", action: .pairAgain)
-        guard case .message(_, let detail, let action) = ListenModeRules.hero(pairAgain, listening: true) else { return XCTFail() }
+        let rejected = SensorFailure(kind: .pairingRejected, message: "The sensor no longer accepts this phone.")
+        let failedDisplay = GlucoseDisplayState.sensorFailed(rejected, last: nil)
+        let pairAgain = NowHero.message(title: "Pair the sensor again", detail: rejected.message, action: .pairAgain)
+        guard case .message(_, let detail, let action) = ListenModeRules.hero(pairAgain, display: failedDisplay, listening: true) else { return XCTFail() }
         XCTAssertNil(action)
         XCTAssertTrue(detail.hasSuffix(ConnectionModeText.sensorProblemWhileListening))
-        guard case .message(_, let calibrateDetail, let calibrate) = ListenModeRules.hero(.message(title: "Calibrate", detail: "The sensor asks for a fingerstick.", action: .calibrate), listening: true) else { return XCTFail() }
+        let calibrateHero = NowHero.message(title: "Calibrate", detail: "The sensor asks for a fingerstick.", action: .calibrate)
+        guard case .message(_, let calibrateDetail, let calibrate) = ListenModeRules.hero(calibrateHero, display: .calibrationNeeded(last: nil), listening: true) else { return XCTFail() }
         XCTAssertNil(calibrate)
         XCTAssertTrue(calibrateDetail.hasSuffix(ConnectionModeText.calibrationWhileListening))
-        XCTAssertEqual(ListenModeRules.hero(pairAgain, listening: false), pairAgain, "paired: unchanged")
-        let reading = NowHero.reading(LatestReading(date: t0, value: .mgdl(112), trend: .flat, delta: nil))
-        XCTAssertEqual(ListenModeRules.hero(reading, listening: true), reading)
+        XCTAssertEqual(ListenModeRules.hero(pairAgain, display: failedDisplay, listening: false), pairAgain, "paired: unchanged")
+        let latest = LatestReading(date: t0, value: .mgdl(112), trend: .flat, delta: nil)
+        let reading = NowHero.reading(latest)
+        XCTAssertEqual(ListenModeRules.hero(reading, display: .current(latest), listening: true), reading)
         let noAction = NowHero.message(title: "No data", detail: "x", action: nil)
-        XCTAssertEqual(ListenModeRules.hero(noAction, listening: true), noAction)
+        XCTAssertEqual(ListenModeRules.hero(noAction, display: .noData(last: nil), listening: true), noAction)
+
+        // An expired sensor while listening: no "Start a new sensor" button; how to follow the new one.
+        let expired = NowHero.make(.sensorExpired(last: nil), now: t0)
+        guard case .message(_, let expiredDetail, let expiredAction) = ListenModeRules.hero(expired, display: .sensorExpired(last: nil), listening: true) else { return XCTFail() }
+        XCTAssertNil(expiredAction)
+        XCTAssertTrue(expiredDetail.hasSuffix(ConnectionModeText.stopFollowingNote))
+        // No followed sensor while listening.
+        let notPaired = NowHero.make(.notPaired, now: t0)
+        XCTAssertEqual(ListenModeRules.hero(notPaired, display: .notPaired, listening: true),
+                       .message(title: ConnectionModeText.notFollowingTitle, detail: ConnectionModeText.notFollowingDetail, action: nil))
+        XCTAssertEqual(ListenModeRules.stateLine(StateLine(text: "NO SENSOR PAIRED", dot: .muted), display: .notPaired, listening: true).text,
+                       "NOT FOLLOWING A SENSOR")
+    }
+
+    /// Before the person has chosen listen or pair, "no sensor" offers the choice, never pairing.
+    func test_heroOffersTheChoiceBeforeAnyPairing() {
+        let notPaired = NowHero.make(.notPaired, now: t0)
+        XCTAssertEqual(ListenModeRules.hero(notPaired, display: .notPaired, listening: false, chosen: false),
+                       .message(title: ConnectionModeText.notSetUpTitle, detail: ConnectionModeText.notSetUpDetail, action: .setUpSensor))
+        XCTAssertEqual(ListenModeRules.hero(notPaired, display: .notPaired, listening: false, chosen: true), notPaired)
+        XCTAssertEqual(NowHero.HeroAction.setUpSensor.title, "Set up the sensor")
     }
 
     func test_outputsReadOffWhileListening() {

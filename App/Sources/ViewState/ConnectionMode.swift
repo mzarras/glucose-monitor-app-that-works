@@ -11,6 +11,7 @@
 
 import Foundation
 import GlucoseCore
+import WidgetCore
 
 /// How this app reaches the G7 sensor (D45). Also the facade's `AppServices.connectionMode`.
 enum SensorConnectionMode: String, CaseIterable, Identifiable, Sendable {
@@ -49,13 +50,36 @@ enum ConnectionModeText {
         }
     }
 
-    /// Short value for the Settings row.
-    static func row(_ mode: SensorConnectionMode) -> String {
+    /// Short value for the Settings row (nil: not chosen yet).
+    static func row(_ mode: SensorConnectionMode?) -> String {
         switch mode {
         case .listen: return "listening alongside Dexcom"
         case .pair: return "paired with this app"
+        case nil: return "not chosen yet"
         }
     }
+
+    /// Before every pairing-code field (onboarding, Settings › Sensor) and in the switch to pairing:
+    /// pairing evicts the Dexcom app on this phone from the sensor (they share the slot).
+    static let pairingTakeoverWarning = "Pairing takes over the sensor's connection: the Dexcom app on this phone will stop receiving readings. Delete the Dexcom app first."
+
+    /// Settings › Sensor before a choice: no code field until "Pair this app" is chosen.
+    static let chooseFirst = "Choose how this app connects before pairing anything. If the Dexcom app is on this phone, listen alongside it."
+
+    /// Listen mode: forgetting the followed sensor is how the app follows another one (G7Kit §14).
+    static let stopFollowingButton = "Stop following this sensor"
+    static let stopFollowingTitle = "Stop following this sensor?"
+    static let stopFollowingMessage = "This app forgets this sensor and its readings stop here. It then follows the next sensor the Dexcom app connects to, for example after you start a new one. The Dexcom app isn't affected."
+    static let stopFollowingNote = "After this sensor ends, start the new one in the Dexcom app, then stop following this one here so this app follows the new one."
+
+    /// The Now hero before the person has chosen listen or pair.
+    static let notSetUpTitle = "No sensor set up"
+    static let notSetUpDetail = "Choose how this app connects: listen alongside the Dexcom app on this phone, or pair this app with the Dexcom app removed."
+
+    /// The Now hero and state line while listening and no sensor is followed.
+    static let notFollowingTitle = "Not following a sensor"
+    static let notFollowingDetail = "Listening for the Dexcom app's connection to a sensor. Readings start once the Dexcom app connects to one."
+    static let notFollowingStateLine = "NOT FOLLOWING A SENSOR"
 
     /// The calm status line while listening (Now, Settings › Sensor). Not a warning: this is the
     /// chosen way of working.
@@ -88,7 +112,7 @@ enum ConnectionModeText {
         case .listen:
             return "This app stops connecting to the sensor itself and only listens to the Dexcom app's connection. Trio handoff and uploads turn off while listening."
         case .pair:
-            return "Delete the Dexcom app first: only one app can be the sensor's primary device. Then enter the sensor's 4-digit pairing code."
+            return "\(pairingTakeoverWarning) Then enter the sensor's 4-digit pairing code."
         }
     }
 
@@ -150,15 +174,34 @@ enum ListenModeRules {
     }
 
     /// The Now hero while listening: no pairing or calibration button (those write to the sensor);
-    /// the detail says where to act instead. Anything else is unchanged.
-    static func hero(_ hero: NowHero, listening: Bool) -> NowHero {
-        guard listening, case .message(let title, let detail, let action?) = hero else { return hero }
+    /// the detail says where to act instead — for an ended sensor, how to follow the new one. No
+    /// followed sensor reads "Not following a sensor". Anything else is unchanged.
+    /// - Parameter chosen: false until the person has chosen listen or pair: no sensor then reads
+    ///   "No sensor set up" with "Set up the sensor" (the choice), never "Pair a sensor".
+    static func hero(_ hero: NowHero, display: GlucoseDisplayState, listening: Bool, chosen: Bool = true) -> NowHero {
+        if !chosen, case .notPaired = display, case .message(_, _, .pairSensor?) = hero {
+            return .message(title: ConnectionModeText.notSetUpTitle, detail: ConnectionModeText.notSetUpDetail, action: .setUpSensor)
+        }
+        guard listening else { return hero }
+        if case .notPaired = display {
+            return .message(title: ConnectionModeText.notFollowingTitle, detail: ConnectionModeText.notFollowingDetail, action: nil)
+        }
+        guard case .message(let title, let detail, let action?) = hero else { return hero }
         switch action {
         case .calibrate:
             return .message(title: title, detail: "\(detail) \(ConnectionModeText.calibrationWhileListening)", action: nil)
-        case .pairSensor, .pairAgain:
+        case .pairSensor:
+            // An ended sensor (expired, replace): the new one starts in the Dexcom app.
+            return .message(title: title, detail: "\(detail) \(ConnectionModeText.stopFollowingNote)", action: nil)
+        case .pairAgain, .setUpSensor:
             return .message(title: title, detail: "\(detail) \(ConnectionModeText.sensorProblemWhileListening)", action: nil)
         }
+    }
+
+    /// The Now state line while listening with no followed sensor.
+    static func stateLine(_ line: StateLine, display: GlucoseDisplayState, listening: Bool) -> StateLine {
+        guard listening, case .notPaired = display else { return line }
+        return StateLine(text: ConnectionModeText.notFollowingStateLine, dot: line.dot)
     }
 
     /// A Settings row for an output (Trio, Nightscout, Dexcom Share): forced off while listening.

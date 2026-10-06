@@ -80,7 +80,8 @@ struct NowContent: View {
                 }
             }
             NowHeroView(hero: ListenModeRules.hero(NowHero.make(display, now: now, context: context, sensorStateKnown: state.sensorStateKnown),
-                                                   listening: state.connection?.isListening == true), now: now,
+                                                   display: display, listening: isListening,
+                                                   chosen: state.connectionChosen), now: now,
                         pairSensor: actions.pairSensor, pairAgain: actions.pairAgain, calibrate: actions.openCalibration)
             stateLine(display)
             if let end = GraceCountdown.end(sensorState: state.sensorState, now: now) {
@@ -183,7 +184,9 @@ struct NowContent: View {
     // MARK: State line
 
     private func stateLine(_ display: GlucoseDisplayState) -> some View {
-        let line = StateLine.make(display, sensorState: state.sensorState, now: now, context: context, sensorStateKnown: state.sensorStateKnown)
+        let line = ListenModeRules.stateLine(
+            StateLine.make(display, sensorState: state.sensorState, now: now, context: context, sensorStateKnown: state.sensorStateKnown),
+            display: display, listening: isListening)
         return HStack(spacing: 8) {
             Circle()
                 .fill(dotStyle(line.dot))
@@ -311,7 +314,7 @@ struct NowHeroView: View {
                 if let action {
                     Button(action.title) {
                         switch action {
-                        case .pairSensor: pairSensor()
+                        case .pairSensor, .setUpSensor: pairSensor() // both open Settings › Sensor
                         case .pairAgain: pairAgain()
                         case .calibrate: calibrate()
                         }

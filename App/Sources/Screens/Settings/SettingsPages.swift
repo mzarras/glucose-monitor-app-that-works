@@ -25,6 +25,7 @@ struct SensorSettingsView: View {
     @State private var confirmingStop = false
     @State private var confirmingForget = false
     @State private var confirmingMode: SensorConnectionMode?
+    @State private var confirmingStopFollowing = false
 
     private var listening: Bool { connection?.isListening == true }
 
@@ -60,13 +61,19 @@ struct SensorSettingsView: View {
                 if let feedback {
                     FieldMessage(text: feedback)
                 }
-                if listening {
-                    listeningSection
-                } else {
-                    pairedSection
-                }
-                if let connection {
+                if let connection, connection.mode == nil {
+                    // Not chosen yet: the choice comes first, before anything about pairing.
+                    ExplanationNote(text: ConnectionModeText.chooseFirst)
                     connectionSection(connection)
+                } else {
+                    if listening {
+                        listeningSection
+                    } else {
+                        pairedSection
+                    }
+                    if let connection {
+                        connectionSection(connection)
+                    }
                 }
             }
             .padding(.horizontal, Layout.sideMargin)
@@ -87,6 +94,20 @@ struct SensorSettingsView: View {
             ExplanationNote(text: ConnectionModeText.pairingWhileListening)
         }
         .accessibilityIdentifier("settings.sensor.listeningNotes")
+        if sensor.state != .notPaired {
+            // G7Kit §14: forgetting the followed sensor is how listen mode follows the next one.
+            VStack(alignment: .leading, spacing: 6) {
+                Button(ConnectionModeText.stopFollowingButton) { confirmingStopFollowing = true }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .accessibilityIdentifier("settings.sensor.stopFollowing")
+                    .confirmationDialog(ConnectionModeText.stopFollowingTitle, isPresented: $confirmingStopFollowing, titleVisibility: .visible) {
+                        Button(ConnectionModeText.stopFollowingButton, role: .destructive, action: actions.forgetSensor)
+                    } message: {
+                        Text(verbatim: ConnectionModeText.stopFollowingMessage)
+                    }
+                ExplanationNote(text: ConnectionModeText.stopFollowingNote)
+            }
+        }
     }
 
     private func connectionSection(_ connection: ConnectionModeState) -> some View {
@@ -132,6 +153,11 @@ struct SensorSettingsView: View {
                                                             hasStoredSensor: hasStoredSensor, now: Date()) {
             if case .failed(let failure) = sensor.state {
                 FieldMessage(text: failure.message)
+            }
+            if connection != nil {
+                // D45: said plainly before the code field.
+                WarningNote(text: ConnectionModeText.pairingTakeoverWarning)
+                    .accessibilityIdentifier("settings.sensor.takeoverWarning")
             }
             PairingOfferView(offer: offer, pair: actions.pair, pairAgain: actions.pairAgain)
         } else if sensor.canStopSession {
@@ -231,6 +257,7 @@ struct PairingCodeEntry: View {
             .padding(.horizontal, 12)
             .overlay(Rectangle().stroke(Theme.ink, lineWidth: 1))
             .accessibilityLabel(Text("Pairing code, 4 digits"))
+            .accessibilityIdentifier("pairing.code")
             Button(buttonTitle) { pair(code) }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(!PairingCode.isComplete(code))
@@ -608,6 +635,8 @@ enum Credits {
         Entry(name: "Loop", license: "MIT", use: "Alert delivery approach: ringer-off playback, AlarmKit system alarms, stale/backfill guards."),
         Entry(name: "Nightscout cgm-remote-monitor", license: "AGPL-3.0", use: "REST API contract, authorization, entry dedupe, LOW/HIGH (39/401) conventions."),
         Entry(name: "share2nightscout-bridge", license: "GPL-3.0-only", use: "Dexcom trend-code numbering."),
+        Entry(name: "LoopFollow", license: "AGPL-3.0", use: "Follower alarm behaviour on a LOW reading (39)."),
+        Entry(name: "nightguard", license: "AGPL-3.0", use: "How a follower displays LOW and HIGH (39/401)."),
         Entry(name: "LoopKit dexcom-share-client-swift", license: "MIT", use: "Dexcom Share LOW/HIGH reading convention."),
         Entry(name: "Trio", license: "AGPL-3.0", use: "App Group CGM contract and Nightscout upload settings; integrated through its App Group contract only."),
     ]

@@ -200,7 +200,9 @@ final class AppModel {
         }
         #if DEBUG
         if launchArguments.contains("-resetOnboardingFlag") { preferences.onboardingCompleted = false }
+        if launchArguments.contains("-resetConnectionMode") { preferences.connectionModeChosen = false }
         #endif
+        refreshConnection()
         settings.appearance = preferences.appearance
         // Phase 3: the tab and Trends period from before the app was killed (an explicit `-tab`
         // launch argument wins).
@@ -516,17 +518,11 @@ final class AppModel {
                                                  pairingInProgress: pairingInProgress)
         settings.sensor.stateKnown = sensorStateKnown
 
-        // D45/D47: the connection mode and packet recording (a mode change also sends `.sensor`).
-        let mode = services.connectionMode
-        let connection = ConnectionModeState(mode: mode)
-        now.connection = connection
-        settings.connection = connection
-        settings.packetRecording = PacketRecordingState(isOn: services.recordsRawGlucosePackets)
-        calibration.listening = mode == .listen
+        refreshConnection()
 
         if var onboarding {
             onboarding.sensorState = state
-            onboarding.currentConnectionMode = mode
+            onboarding.currentConnectionMode = services.connectionMode
             onboarding.connectionSwitchNeedsConfirmation = hasStoredSensor
             onboarding.pairing = OnboardingMapping.pairing(current: onboarding.pairing, sensorState: state,
                                                            sawConnectionStep: pairingSawConnectionStep)
@@ -538,6 +534,32 @@ final class AppModel {
                 self.onboarding = onboarding
             }
         }
+    }
+
+    // MARK: Connection mode (D45) and packet recording (D47)
+
+    /// The facade's mode on Now and in calibration; in Settings only once the person has chosen
+    /// (`AppUIPreferences.connectionModeChosen`): a new install's stored `.pair` is a storage default,
+    /// never shown as the choice. Listening, or a sensor stored in pairing mode (an install from
+    /// before D45), counts as chosen.
+    func refreshConnection() {
+        guard let services else { return }
+        let mode = services.connectionMode
+        if preferencesLoaded, let preferences, !preferences.connectionModeChosen, mode == .listen || hasStoredSensor {
+            preferences.connectionModeChosen = true
+        }
+        let chosen = preferencesLoaded && preferences?.connectionModeChosen == true
+        now.connection = ConnectionModeState(mode: mode)
+        now.connectionChosen = chosen
+        settings.connection = ConnectionModeState(mode: chosen ? mode : nil)
+        settings.packetRecording = PacketRecordingState(isOn: services.recordsRawGlucosePackets)
+        calibration.listening = mode == .listen
+    }
+
+    /// Remembers that the person chose (onboarding's Continue, Settings' confirmation).
+    func noteConnectionModeChosen() {
+        if preferencesLoaded { preferences?.connectionModeChosen = true }
+        refreshConnection()
     }
 
     // MARK: Health (S5)
@@ -561,11 +583,12 @@ final class AppModel {
     func presentOnboarding(at step: OnboardingStep) {
         var state = freshOnboardingState(at: step)
         if let services {
-            // D45: the connection step; listening (chosen before) stays chosen, otherwise nothing is
-            // preselected. D7's "Share upload on" is for pairing mode only (the Dexcom app keeps
-            // sharing while this app listens).
+            // D45: the connection step. D7's "Share upload on" is for pairing mode only (the Dexcom
+            // app keeps sharing while this app listens).
+            // Nothing preselected, ever: the person chooses before any pairing step (no accidental
+            // takeover of the Dexcom app's connection).
             let mode = services.connectionMode
-            state.connection = ConnectionModeState(mode: mode == .listen ? .listen : nil)
+            state.connection = ConnectionModeState(mode: nil)
             state.currentConnectionMode = mode
             state.connectionSwitchNeedsConfirmation = services.hasStoredSensor
             state.shareUploadEnabled = mode == .pair

@@ -45,6 +45,9 @@ struct NowViewState: Equatable, Sendable {
     /// listening line, Trio reads "off while listening", and the hero offers no pairing or
     /// calibration button (`ListenModeRules.hero`).
     var connection: ConnectionModeState? = nil
+    /// D45: the person has chosen listen or pair; until then "No sensor paired" offers to set up
+    /// the sensor (the choice), not to pair.
+    var connectionChosen: Bool = true
 
     /// The DEBUG/REPLAY banner. Computed, not stored, so no code path can clear it in a DEBUG
     /// build; nil in Release.

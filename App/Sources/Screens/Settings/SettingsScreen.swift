@@ -124,8 +124,8 @@ struct SettingsContent: View {
                                     : SensorStatusText.row(state.sensor.state, session: state.sensor.session, now: now, context: context,
                                                          listening: state.isListening), route: .sensor)
                     .accessibilityIdentifier("settings.sensor")
-                if let mode = state.connection?.mode {
-                    SettingsLinkRow(title: "Connection", value: ConnectionModeText.row(mode), route: .sensor)
+                if let connection = state.connection {
+                    SettingsLinkRow(title: "Connection", value: ConnectionModeText.row(connection.mode), route: .sensor)
                         .accessibilityIdentifier("settings.connection")
                 }
             }

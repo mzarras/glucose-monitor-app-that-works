@@ -20,12 +20,15 @@ enum NowHero: Equatable, Sendable {
         case pairAgain
         /// The sensor asks for a calibration (D36).
         case calibrate
+        /// D45: nothing chosen yet — Settings › Sensor, where the person chooses listen or pair.
+        case setUpSensor
 
         var title: String {
             switch self {
             case .pairSensor: return "Pair a sensor"
             case .pairAgain: return "Pair again"
             case .calibrate: return "Calibrate"
+            case .setUpSensor: return "Set up the sensor"
             }
         }
     }

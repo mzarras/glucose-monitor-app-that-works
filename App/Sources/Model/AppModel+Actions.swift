@@ -143,17 +143,23 @@ extension AppModel {
     // MARK: - Connection mode (D45) and packet recording (D47)
 
     /// Settings › Sensor, after the page's confirmation. The view states follow the `.sensor`
-    /// change the facade sends; a refusal (nothing changed) is shown under the choices.
+    /// change the facade sends; a refusal (nothing changed) is shown under the choices. Choosing the
+    /// mode the facade is already in (a new install's `.pair`) only records the choice.
     func setConnectionMode(_ mode: SensorConnectionMode) {
         guard let services else {
             settings.connection = ConnectionModeState(mode: mode)
             return
         }
         settings.feedback.connection = nil
+        guard services.connectionMode != mode else {
+            noteConnectionModeChosen()
+            return
+        }
         settings.connectionSwitchingTo = mode
         track { [weak self] in
             do throws(ConnectionModeError) {
                 try await services.setConnectionMode(mode)
+                self?.noteConnectionModeChosen()
             } catch {
                 self?.settings.feedback.connection = ConnectionModeText.errorText(error)
             }
@@ -184,6 +190,7 @@ extension AppModel {
         guard let chosen = onboarding?.connection?.mode else { return }
         let next = onboarding?.step(after: .connection) ?? .importHistory
         guard let services, services.connectionMode != chosen else {
+            noteConnectionModeChosen()
             goToOnboardingStep(next)
             return
         }
@@ -192,6 +199,7 @@ extension AppModel {
         track { [weak self] in
             do throws(ConnectionModeError) {
                 try await services.setConnectionMode(chosen)
+                self?.noteConnectionModeChosen()
                 self?.onboarding?.connectionSwitching = false
                 self?.goToOnboardingStep(next)
             } catch {

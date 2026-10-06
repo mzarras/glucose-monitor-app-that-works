@@ -392,7 +392,7 @@ enum Fixtures {
             state.pairing = .paired
             state.sensorState = .warmingUp(endsAt: now.addingTimeInterval(27 * 60))
         case .connection:
-            state.connection = ConnectionModeState(mode: .listen)
+            state.connection = ConnectionModeState(mode: nil) // the person always chooses (D45)
         case .listen:
             state.connection = ConnectionModeState(mode: .listen)
             state.bluetooth = .granted

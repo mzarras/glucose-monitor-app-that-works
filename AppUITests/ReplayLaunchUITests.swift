@@ -211,7 +211,7 @@ final class ReplayLaunchUITests: XCTestCase {
         let setUpLater = element(app, "onboarding.dismiss")
         XCTAssertTrue(setUpLater.waitForExistence(timeout: timeout), "every onboarding step offers Set up later")
         setUpLater.tap()
-        waitForLabel(element(app, "now.hero.message"), "Now: no sensor paired") { $0.contains("No sensor paired") }
+        waitForLabel(element(app, "now.hero.message"), "Now: no sensor set up (D45: the choice first)") { $0.contains("No sensor set up") }
         let pair = element(app, "now.hero.action")
         XCTAssertTrue(pair.waitForExistence(timeout: timeout))
         pair.tap()
@@ -300,7 +300,18 @@ final class ReplayLaunchUITests: XCTestCase {
         XCTAssertTrue(element(app, "connection.listeningStatus").waitForExistence(timeout: timeout), "the listening line")
         XCTAssertTrue(element(app, "settings.sensor.listeningNotes").exists, "calibrate and pair explained, not offered")
         XCTAssertFalse(app.buttons["Calibrate with a fingerstick…"].exists)
+        XCTAssertFalse(element(app, "settings.sensor.forget").exists, "no Forget while listening…")
+        let stopFollowing = element(app, "settings.sensor.stopFollowing")
+        reveal(app, stopFollowing)
+        XCTAssertTrue(stopFollowing.isHittable, "…but Stop following this sensor (G7Kit §14)")
         try saveScreenshot("listen-sensor-page")
+        // Stop following (confirmed): the sensor is forgotten; the page no longer offers it.
+        stopFollowing.tap()
+        confirm(app, "Stop following this sensor")
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: stopFollowing)
+        waitForExpectations(timeout: timeout)
+        XCTAssertTrue(element(app, "connection.listeningStatus").exists, "still listening")
         app.navigationBars.buttons.firstMatch.tap()
         element(app, "settings.nightscout").tap()
         assertSharingSwitches(app, enabled: false)
@@ -312,7 +323,6 @@ final class ReplayLaunchUITests: XCTestCase {
         reveal(app, pair)
         pair.tap()
         confirm(app, "Pair this app")
-        let gone = NSPredicate(format: "exists == false")
         expectation(for: gone, evaluatedWith: element(app, "connection.listeningStatus"))
         waitForExpectations(timeout: timeout)
         XCTAssertFalse(element(app, "settings.sensor.listeningNotes").exists)
@@ -340,5 +350,75 @@ final class ReplayLaunchUITests: XCTestCase {
         XCTAssertFalse(element(app, "connection.listeningStatus").exists, "still pairing mode")
         reveal(app, message)
         try saveScreenshot("listen-replay-refused")
+    }
+
+    /// D45, no accidental eviction: a first run makes the person choose listen or pair, nothing
+    /// preselected and no code field until "Pair" is chosen; the pairing step says, before the code
+    /// field, that pairing takes over the Dexcom app's connection. Settings › Sensor is the same:
+    /// no code field until "Pair this app" is chosen and confirmed.
+    func test_firstRunMakesThePersonChooseBeforeAnyCodeField() throws {
+        let app = launchApp(["-resetOnboardingFlag", "-onboarding"])
+        element(app, "onboarding.welcome.start").tap()
+        let listen = element(app, "connection.listen")
+        let pair = element(app, "connection.pair")
+        XCTAssertTrue(listen.waitForExistence(timeout: timeout), "the connection step comes first")
+        XCTAssertFalse(listen.isSelected || pair.isSelected, "nothing preselected")
+        XCTAssertFalse(element(app, "onboarding.connection.continue").exists, "no way on without a choice")
+        XCTAssertFalse(element(app, "pairing.code").exists, "no code field")
+        pair.tap()
+        XCTAssertTrue(pair.isSelected)
+        element(app, "onboarding.connection.continue").tap()
+        let skip = element(app, "onboarding.import.skip")
+        XCTAssertTrue(skip.waitForExistence(timeout: timeout))
+        skip.tap()
+        let removed = element(app, "onboarding.removeDexcom.continue")
+        XCTAssertTrue(removed.waitForExistence(timeout: timeout), "pairing keeps the Remove the Dexcom app step")
+        let share = app.switches.firstMatch
+        if share.exists, share.value as? String == "1" { share.tap() } // no Share account here
+        removed.tap()
+        let permissions = element(app, "onboarding.permissions.continue")
+        XCTAssertTrue(permissions.waitForExistence(timeout: timeout))
+        permissions.tap()
+        let alarms = element(app, "onboarding.alarms.continue")
+        if alarms.waitForExistence(timeout: 3) { alarms.tap() }
+        let warning = element(app, "onboarding.pairing.takeoverWarning")
+        let code = element(app, "pairing.code")
+        XCTAssertTrue(warning.waitForExistence(timeout: timeout), "the takeover warning on the pairing step")
+        XCTAssertTrue(warning.label.contains("Pairing takes over the sensor's connection: the Dexcom app on this phone will stop receiving readings. Delete the Dexcom app first."))
+        XCTAssertTrue(code.exists)
+        XCTAssertLessThan(warning.frame.minY, code.frame.minY, "said before the code field")
+        try saveScreenshot("first-run-pairing-warning")
+
+        // Choosing Pair (above) was recorded: the hero now offers pairing.
+        element(app, "onboarding.dismiss").tap()
+        waitForLabel(element(app, "now.hero.message"), "Now after choosing Pair") { $0.contains("No sensor paired") }
+        app.terminate()
+
+        // A fresh install that leaves onboarding without choosing: Now offers the choice, and
+        // Settings › Sensor shows it first, with no code field.
+        let fresh = launchApp(["-resetOnboardingFlag"])
+        let setUpLater = element(fresh, "onboarding.dismiss")
+        XCTAssertTrue(setUpLater.waitForExistence(timeout: timeout))
+        setUpLater.tap()
+        try checkSettingsChoiceOnAFreshInstall(fresh)
+    }
+
+    private func checkSettingsChoiceOnAFreshInstall(_ app: XCUIApplication) throws {
+        waitForLabel(element(app, "now.hero.message"), "Now: no sensor set up") { $0.contains("No sensor set up") }
+        element(app, "now.hero.action").tap()
+        XCTAssertTrue(element(app, "settings.sensor.page").waitForExistence(timeout: timeout))
+        let settingsPair = element(app, "connection.pair")
+        XCTAssertTrue(settingsPair.waitForExistence(timeout: timeout))
+        XCTAssertFalse(settingsPair.isSelected || element(app, "connection.listen").isSelected, "nothing preselected in Settings either")
+        XCTAssertFalse(element(app, "pairing.code").exists, "no code field before the choice")
+        try saveScreenshot("first-run-settings-choice")
+        settingsPair.tap()
+        let message = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Pairing takes over the sensor's connection")).firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: timeout), "the confirmation says it plainly")
+        confirm(app, "Pair this app")
+        let settingsWarning = element(app, "settings.sensor.takeoverWarning")
+        XCTAssertTrue(settingsWarning.waitForExistence(timeout: timeout))
+        XCTAssertTrue(element(app, "pairing.code").exists, "the code field once Pair is chosen")
+        XCTAssertLessThan(settingsWarning.frame.minY, element(app, "pairing.code").frame.minY, "said before the code field")
     }
 }

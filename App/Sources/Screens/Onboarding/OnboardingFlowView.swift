@@ -547,6 +547,11 @@ struct PairingStep: View {
 
     var body: some View {
         StepTitle(title: "Pair your sensor", lead: "Apply the sensor first. iOS will ask to pair with it; tap Pair.")
+        if state.connection != nil {
+            // D45: said plainly before the code field.
+            WarningNote(text: ConnectionModeText.pairingTakeoverWarning)
+                .accessibilityIdentifier("onboarding.pairing.takeoverWarning")
+        }
         Text(verbatim: OnboardingState.otherG7AppsWarning)
             .font(Typography.body(size: 12))
             .foregroundStyle(Theme.muted)
