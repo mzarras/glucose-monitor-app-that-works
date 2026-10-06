@@ -8,7 +8,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 |---|---|
 | 0 — Bootstrap | done (2026-09-23) |
 | 1 — Parallel build | done (2026-09-23): all 7 workstreams merged into `integration`; gates 1–3 PASS |
-| 2 — Integration | gate 5 on `p2-stage`: test-verifier PASS, reviewer 2 PASS (M1 onboarding trap + minors), reviewer 1 **FAIL** (B1 D39 on unconfirmed expiry → D41; M1 store failure starves alerts → D42; M2 uploader re-attach) → fixing |
+| 2 — Integration | done (2026-10-06): Phase 2 + follow-ups (D43 expiry reminders, launch order) merged into `integration` (0a24794); all reviews PASS; gates 1–4 PASS on the identical tree; merge to `main` pending gate-6 self-test |
 | 3 — Hardening | not started |
 | 4 — Device build | not started |
 
@@ -156,6 +156,9 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Follow-ups staged on `p2-followups` 0b6ea8a (ws1 dc428bb, p2-services 1323698, ws7 5352b43, p2-app 0f2c50f incl. ws4 60f03f5). Combined review: **FAIL ×2**.
   - D43 review: B1 first "Sensor expired" relies on an unverified pending add made days earlier (failed add → nothing posted at detection; +120 min re-alert); M1 failed sensor keeps reminders; minors m1 quiet hours judged at fire date, m2 launch reconcile leaves strays, m4 dates not re-adopted, m5 early expired then grace, m7 countdown shown 4×, m8 adjacent switches, m9 render clock, m10 gate-4 sound assert, m11 S7 test, m12 comment. → WS4 (engine) and Integrator B (UI).
   - Follow-ups review: n1 PASS, n2 PASS, m3 PASS, WS7 PASS; **B1 bootstrap reorder clears the persisted clock-mismatch latch on every relaunch** (activate before store open → latest nil → latch cleared; widget too); M1 no composition-level launch test; m1 Trio window during open; m2 stale comments. → Integrator A.
+- Fix rounds: WS4 75395a0 + 50effb7, Integrator A 39aaff8 + ff7629f, Integrator B 20f5589 + db54113 + ef2ad1e. Re-reviews at 5a127b0: D43 **PASS**, follow-ups **PASS** (minors fixed); final verification at 00ce318: both **PASS**, no open blockers. Reviewer full gate run on 00ce318 exit 0 (186 app tests; S1 48, S2 76, S3 67, S4 49, S5 130, S6 38, S7 28, S8 2).
+- Merged `p2-followups` into integration as 0a24794 (tree identical to 00ce318; review summary in the merge message).
+- Carry-overs added for Phase 3: Trio App Group newest can move backwards after the 2-min hold release in slow/failed opens (end the hold without writing held readings alone); snapshot sanitize could drop a malformed `knownSession`; onboarding stored-sensor baseline ordering (facade "stored sensor known" flag); latch overwrite in a failed-open + clock-change + later-open compound case; Settings could show "N readings held back" (`heldBackReadings`).
 
 ### Phase 1 — Parallel build (2026-09-23)
 
