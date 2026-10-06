@@ -79,8 +79,11 @@ import as LOW/HIGH. `trendRate` is always `nil`: Nightscout has no rate field (`
 **Malformed pages fail closed, never trap** (audit m6). A `date` that is text, NaN, ±infinity,
 negative, or absurdly large (e.g. 1e300) is skipped and counted (`missingDate` / `futureDated`)
 and the import continues. Paging inside a window uses only dates inside the requested range, so a
-full page with no such date stops the import with `malformedResponse` instead of guessing; so does
-an "everything" probe whose answer is not a numeric date below the requested bound. A stored
+full page with no such date stops the import with `unusableHistory` instead of guessing; so does
+an "everything" probe whose answer is not a numeric date below the requested bound. Retrying fails
+the same way, so the message names the date range and says what to do: fix or delete those
+entries and reset the import, or reset and choose a date range instead of everything. Readings
+already imported are kept. A stored
 checkpoint whose dates are outside 1970 … now + 1 year (or out of order) is discarded and the plan
 starts over.
 

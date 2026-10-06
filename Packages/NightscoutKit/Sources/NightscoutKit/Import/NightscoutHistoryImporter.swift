@@ -18,9 +18,14 @@ public enum NightscoutImportError: Error, Sendable, Equatable, CustomStringConve
     case pageTooDense(atMilliseconds: Int64)
     case repository(String)
     case checkpoint(String)
+    /// The site's history has entries the import cannot get past (no usable date where one is
+    /// required). Retrying fails the same way; the message says what to do (reset the import, fix
+    /// the entries, or choose a date range). Readings already imported are kept.
+    case unusableHistory(String)
 
     public var description: String {
         switch self {
+        case .unusableHistory(let message): return message
         case .alreadyRunning: return "A Nightscout import is already running"
         case .nightscout(let error): return error.description
         case .pageTooDense(let ms): return "Too many Nightscout entries at \(ms) ms to page through"
@@ -226,7 +231,11 @@ public actor NightscoutHistoryImporter {
             // that contract. Stop loudly (the checkpoint keeps what finished) rather than guess.
             let lowerMs = Double(milliseconds(lower))
             guard let newestMs = newest.date, newestMs.isFinite, newestMs > 0, newestMs < lowerMs else {
-                throw NightscoutImportError.nightscout(.malformedResponse("the newest older entry has no usable date below the requested bound"))
+                throw NightscoutImportError.unusableHistory(
+                    "While looking for history before \(Self.iso(milliseconds(lower))), Nightscout returned an entry "
+                    + "without a usable date, so importing everything cannot continue. Reset the import and choose a "
+                    + "date range (for example the last 90 days) instead. Readings imported so far are kept."
+                )
             }
             checkpoint.completedDownTo = Date(timeIntervalSince1970: (newestMs.rounded(.down) + 1) / 1000)
         }
@@ -259,7 +268,11 @@ public actor NightscoutHistoryImporter {
             // conversion below, which is therefore always in range (fail closed, never trap).
             let inWindow = page.compactMap(\.date).filter { $0.isFinite && $0 >= Double(lowerMs) && $0 < Double(pageUpperMs) }
             guard let oldest = inWindow.min() else {
-                throw NightscoutImportError.nightscout(.malformedResponse("a full page without a date inside the requested range"))
+                throw NightscoutImportError.unusableHistory(
+                    "Nightscout has a full page of entries between \(Self.iso(lowerMs)) and \(Self.iso(pageUpperMs)) "
+                    + "without a usable date, so the import cannot continue past them. Check or delete those entries "
+                    + "in Nightscout, then reset the import. Readings imported so far are kept."
+                )
             }
             let nextUpperMs = Int64(oldest.rounded(.down)) + 1
             guard nextUpperMs < pageUpperMs else { throw NightscoutImportError.pageTooDense(atMilliseconds: nextUpperMs - 1) }
@@ -275,6 +288,13 @@ public actor NightscoutHistoryImporter {
         } catch {
             throw NightscoutImportError.checkpoint(String(describing: error))
         }
+    }
+
+    /// Epoch milliseconds as an ISO 8601 UTC date, for error messages.
+    private static func iso(_ milliseconds: Int64) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1000))
     }
 
     private func milliseconds(_ date: Date) -> Int64 {

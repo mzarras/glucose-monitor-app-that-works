@@ -407,7 +407,9 @@ final class NightscoutImportTests: XCTestCase {
             try await importer.run()
             XCTFail("a full page with no usable date cannot be paged")
         } catch let error as NightscoutImportError {
-            guard case .nightscout(.malformedResponse) = error else { return XCTFail("unexpected \(error)") }
+            guard case .unusableHistory = error else { return XCTFail("unexpected \(error)") }
+            XCTAssertTrue(error.description.contains("2026-09-13T12:00:00Z"), "names the window: \(error)")
+            XCTAssertTrue(error.description.contains("reset the import"))
         }
         await XCTAssertEqualAsync(await checkpoints.checkpoint?.completedDownTo, Self.now, "nothing marked done")
     }
@@ -423,7 +425,9 @@ final class NightscoutImportTests: XCTestCase {
                 try await importer.run(scope: .everything)
                 XCTFail("probe answer \(probe) accepted")
             } catch let error as NightscoutImportError {
-                guard case .nightscout(.malformedResponse) = error else { return XCTFail("unexpected \(error)") }
+                guard case .unusableHistory = error else { return XCTFail("unexpected \(error)") }
+                XCTAssertTrue(error.description.contains("choose a date range"), "tells the user what to do: \(error)")
+                XCTAssertTrue(error.description.contains("2026-09-13T12:00:00Z"), "names where it stopped: \(error)")
             }
         }
     }
