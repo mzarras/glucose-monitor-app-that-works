@@ -30,8 +30,12 @@ import GlucoseCore
 ///    it falls strictly between the dates of the published readings just before and just after it in
 ///    sensor time. With one fixed session start this always holds; it can fail only after a
 ///    re-anchor (the phone clock was changed), and such readings are withheld with
-///    `.failed(sensorClockMismatch)`. The newest published reading is persisted (G7ReadingMark), so
-///    the rule also holds across relaunches.
+///    `.failed(sensorClockMismatch)`. Across a relaunch only the newest published reading is known
+///    (persisted as G7ReadingMark), so a reading is then checked against that one mark, not against
+///    every reading published before the relaunch (audit m15). Residual: after a phone clock change
+///    and a re-anchor in the new process, a backfill record for a never-published sensor time before
+///    the mark is dated with the new anchor and can sit up to the clock change away from its stored
+///    neighbours (its id still dedupes; alerts never evaluate backfill).
 /// LOW/HIGH stay flags (S4, G7GlucoseRange).
 ///
 /// Session clock (S3, safety review M2). The session start is derived once per serial from the
@@ -61,6 +65,14 @@ import GlucoseCore
 /// first anchor of a pairing, whose own clock supplied the start, or any non-zero-status reply, which
 /// is judged by the phone clock) is `.error` too: a garbled sensor clock or a changed phone clock must
 /// not look like a confirmed end.
+///
+/// Backfill floor (audit m1). The app tells the pipeline the latest reading it has durably stored for
+/// this serial (`backfillFloor`). A backfill record for a sensor time above that floor is published
+/// again even if this pipeline already published it (it was delivered but may never have been
+/// stored, e.g. a failing store and then app termination), with the same id and date as the first
+/// delivery (only `isBackfill` may differ); the store and Trio dedupe by id. Everything else applies
+/// unchanged (gate, session, latch). The G7 has no backfill request: it decides which records it
+/// sends, so only records it sends again can be re-published (docs/g7-protocol.md §5.6).
 ///
 /// Backfill records arriving before this connection's `0x4E` are held raw until the clock is checked;
 /// undatable records are discarded at disconnect (CGMG7Transmitter.swift:656-667). Each batch is
@@ -101,6 +113,21 @@ final class G7ReadingPipeline {
     private(set) var clock: G7SessionClock?
 
     private var pendingAnchorStart: Date?
+    /// What the app has durably stored for this serial (m1); nil until the app says.
+    enum BackfillFloor: Equatable {
+        /// No reading of this sensor is stored: every record the sensor backfills may be re-published.
+        case nothingStored
+        /// The newest stored reading has this sensor timestamp; records above it may be re-published.
+        case storedThrough(sensorTimestamp: UInt32)
+    }
+
+    /// Set by the controller from the app's store (m1). nil: already-published records are never
+    /// re-published (the behaviour without a store).
+    var backfillFloor: BackfillFloor?
+    /// Published during the current connection: never re-published in the same connection (the app
+    /// has had no chance to store them yet, so the floor cannot be above them).
+    private var publishedThisConnection: Set<UInt32> = []
+
     /// A reported end not yet confirmed by a second report; persisted by the controller.
     private(set) var unconfirmedEnd: G7UnconfirmedSessionEnd?
     /// Every reading published for this serial in this process (seeded with the persisted newest
@@ -141,6 +168,7 @@ final class G7ReadingPipeline {
 
     /// A new physical connection: the previous anchor and any raw frames belong to the old one.
     func beginConnection() {
+        publishedThisConnection.removeAll()
         clock = nil
         pendingBackfillFrames.removeAll()
         backfillBatch.removeAll()
@@ -157,7 +185,7 @@ final class G7ReadingPipeline {
     }
 
     /// Handles one `0x4E` received at `receivedAt` on an authenticated connection.
-    func handleGlucose(_ message: G7GlucoseMessage, receivedAt: Date) -> Output {
+    func handleGlucose(_ message: some G7GlucoseReport, receivedAt: Date) -> Output {
         var output = Output()
         if isUnsupportedSensor {
             output.state = .failed(G7FailureReason.unsupportedSensor)
@@ -239,8 +267,18 @@ final class G7ReadingPipeline {
     func flushBackfill() -> Output {
         var output = Output()
         var outOfOrder = 0
+        var republished = 0
         for timestamp in backfillBatch.keys.sorted() {
-            guard let reading = backfillBatch[timestamp], !isPublished(timestamp) else { continue }
+            guard let reading = backfillBatch[timestamp] else { continue }
+            if let earlier = publishedMark(at: timestamp) {
+                // m1: published before, possibly never stored. Only above the floor, and only with the
+                // date it was first published with (an anchor change since would re-date it).
+                guard mayRepublish(timestamp), earlier.date == reading.date else { continue }
+                publishedThisConnection.insert(timestamp)
+                republished += 1
+                output.readings.append(reading)
+                continue
+            }
             guard fitsPublishedOrder(timestamp: timestamp, date: reading.date) else {
                 outOfOrder += 1
                 continue
@@ -249,6 +287,9 @@ final class G7ReadingPipeline {
             output.readings.append(reading)
         }
         backfillBatch.removeAll()
+        if republished > 0 {
+            log("backfill: \(republished) record(s) above the stored floor published again (m1)")
+        }
         if outOfOrder > 0 {
             log("backfill: \(outOfOrder) record(s) would be dated out of sensor-time order (phone clock changed); not published")
             output.state = .failed(G7FailureReason.sensorClockMismatch)
@@ -358,7 +399,7 @@ final class G7ReadingPipeline {
         log("session ended (\(end.rawValue)): reported at sensor times \(first.sensorClock) and \(sensorClock)")
     }
 
-    private func liveReading(from message: G7GlucoseMessage, start: Date, session: SensorSession, now: Date) -> LiveOutcome {
+    private func liveReading(from message: some G7GlucoseReport, start: Date, session: SensorSession, now: Date) -> LiveOutcome {
         guard message.algorithmState.category == .ok else {
             log("glucose: state \(message.algorithmState.name); not published")
             return .withheld(surfacedReason: nil)
@@ -376,7 +417,7 @@ final class G7ReadingPipeline {
             return .withheld(surfacedReason: nil)
         }
         guard let timestamp = message.readingSensorTimestamp else {
-            log("glucose: age \(message.age) exceeds sensor clock \(message.sensorClock); not published")
+            log("glucose: age \(message.readingAge) exceeds sensor clock \(message.sensorClock); not published")
             return .withheld(surfacedReason: nil)
         }
         guard !isPublished(timestamp) else {
@@ -415,7 +456,8 @@ final class G7ReadingPipeline {
             return
         }
         let timestamp = message.sensorTimestamp
-        guard !isPublished(timestamp), backfillBatch[timestamp] == nil else { return }
+        guard backfillBatch[timestamp] == nil else { return }
+        if isPublished(timestamp), !mayRepublish(timestamp) { return }
         let reading = makeReading(value: value, trendRate: message.trendRate, timestamp: timestamp, start: start, isBackfill: true)
         if let valid = validated(reading, session: session, now: now) {
             backfillBatch[timestamp] = valid
@@ -456,8 +498,24 @@ final class G7ReadingPipeline {
     }
 
     private func isPublished(_ timestamp: UInt32) -> Bool {
+        publishedMark(at: timestamp) != nil
+    }
+
+    private func publishedMark(at timestamp: UInt32) -> G7ReadingMark? {
         let index = insertionIndex(for: timestamp)
-        return index < published.count && published[index].sensorTimestamp == timestamp
+        guard index < published.count, published[index].sensorTimestamp == timestamp else { return nil }
+        return published[index]
+    }
+
+    /// m1: an already-published record may be published again when the app has not stored it, but
+    /// not in the connection that first published it.
+    private func mayRepublish(_ timestamp: UInt32) -> Bool {
+        guard !publishedThisConnection.contains(timestamp) else { return false }
+        switch backfillFloor {
+        case nil: return false
+        case .nothingStored: return true
+        case .storedThrough(let stored): return timestamp > stored
+        }
     }
 
     /// S3 monotonic: `date` lies strictly between the dates of the published neighbours in sensor time.
@@ -469,6 +527,7 @@ final class G7ReadingPipeline {
     }
 
     private func record(_ mark: G7ReadingMark) {
+        publishedThisConnection.insert(mark.sensorTimestamp)
         let index = insertionIndex(for: mark.sensorTimestamp)
         guard index == published.count || published[index].sensorTimestamp != mark.sensorTimestamp else { return }
         published.insert(mark, at: index)

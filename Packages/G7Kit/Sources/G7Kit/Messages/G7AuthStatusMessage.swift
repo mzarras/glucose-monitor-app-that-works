@@ -6,6 +6,9 @@
 //  Copyright © 2015 Nathan Racklyeft. All rights reserved.
 //
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/AuthChallengeRxMessage.swift @ 7.1.0 (0370937)
+// CGMBLEKit lineage: CGMBLEKit/Messages/AuthChallengeRxMessage.swift (LoopKit CGMBLEKit, formerly xDripG5;
+//   MIT, Packages/G7Kit/licenses/CGMBLEKit-LICENSE), reached through xDrip4iOS;
+//   compared with loopandlearn/CGMBLEKit @ 98fae79 (Trio submodule).
 // Changes: renamed; reads [UInt8].
 
 import Foundation

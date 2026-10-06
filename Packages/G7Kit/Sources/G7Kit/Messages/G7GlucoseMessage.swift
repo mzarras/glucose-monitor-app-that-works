@@ -6,7 +6,7 @@
 //  Copyright © 2024 Johan Degraeve. All rights reserved.
 //
 // Ported from xDrip4iOS xDrip/BluetoothTransmitter/CGM/Dexcom/Generic/DexcomG7GlucoseDataRxMessage.swift @ 7.1.0 (0370937)
-// Changes: see "Sensor changes" below. The coexistence `0x31` message is not ported (primary only).
+// Changes: see "Sensor changes" below. The coexistence `0x31` message is in G7CoexistenceMessages.swift.
 
 import Foundation
 
