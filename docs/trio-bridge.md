@@ -8,7 +8,8 @@ No Trio patch is needed. In Trio, select **Settings → Devices → CGM → Add 
 **Settings → Services → Nightscout → Upload → Upload Glucose** off so only this app uploads CGM
 readings to Nightscout. LOW and HIGH reach Trio as 39 and 401 (Michael's decision, PROGRESS.md D21; see
 [LOW and HIGH](#low-and-high-s4)); 40/400 are never written for a flag. Trio must be given the heartbeat keys
-to loop in the background on DASH/Dana/Medtrum ([When Trio reads](#when-trio-reads), Phase 2 must-do).
+to loop in the background on DASH/Dana/Medtrum ([When Trio reads](#when-trio-reads)); the app publishes them
+(`TrioCoordinator.updateHeartbeat`), except in listen mode (D45), where the Trio handoff is off.
 
 ## Sources
 

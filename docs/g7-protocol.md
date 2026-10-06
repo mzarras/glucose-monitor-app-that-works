@@ -827,7 +827,8 @@ package or folder behind `CGMSource`; nothing G7-specific leaks into GlucoseCore
    the prompt returns at the next wake (§2.4 error codes).
 2. Timestamps: app reading times match the receiver within seconds; a backfilled reading after a
    30-min walk-away lands exactly on the previously missing times (§5.1).
-3. **Capture a real LOW and a real HIGH packet** (export diagnostics) and confirm they show as
+3. **Capture a real LOW and a real HIGH packet**: turn on Settings › Diagnostics › "Record raw glucose
+   packets" (D47), then Export diagnostics, and confirm they show as
    LOW/HIGH, not a number, before relying on HIGH → 401 in closed loop (§5.3, D31).
 4. Receiver (slot 1) and app (slot 2) both keep receiving for 24 h — tests the slot hypothesis (§9).
 5. Calibration: accepted within one or two wakes; the following display-only value is not shown as a
