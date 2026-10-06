@@ -63,6 +63,29 @@ struct ExpiryReminderPlan: Sendable, Equatable, Codable {
     /// `AlertKind.rawValue` → status. No entry: nothing pending (turned off, or its date unknown).
     var reminders: [String: ExpiryReminderStatus] = [:]
 
+    init(expiresAt: Date? = nil, graceEndsAt: Date? = nil) {
+        self.expiresAt = expiresAt
+        self.graceEndsAt = graceEndsAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case expiresAt, graceEndsAt, reminders
+    }
+
+    /// Lossy, entry by entry, like the rest of the snapshot: a status written by a newer build that
+    /// this one cannot read drops that one entry, not the plan (the planner then treats the reminder
+    /// as never scheduled: at worst it is posted once more — loud, never lost).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        expiresAt = (try? c.decodeIfPresent(Date.self, forKey: .expiresAt)) ?? nil
+        graceEndsAt = (try? c.decodeIfPresent(Date.self, forKey: .graceEndsAt)) ?? nil
+        if let stored = try? c.nestedContainer(keyedBy: AlertEngineSnapshot.AnyKey.self, forKey: .reminders) {
+            for key in stored.allKeys {
+                if let status = try? stored.decode(ExpiryReminderStatus.self, forKey: key) { reminders[key.stringValue] = status }
+            }
+        }
+    }
+
     /// A grace period ending this long after an expiry still belongs to that session (G7: 12 h).
     static let maximumGracePeriod: TimeInterval = 24 * 3600
     /// Same-session dates that moved by more than this are adopted (D43 review m4); less is jitter.

@@ -46,6 +46,9 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
     var knownSession: SensorSession?
     /// The current session's expiry reminders (D43, AlertEngine+ExpiryReminders.swift).
     var expiryPlan: ExpiryReminderPlan?
+    /// The time zone pending notifications were last built in (`configuration.calendar`). When the
+    /// phone's zone changes, they are rebuilt: their quiet-hours decisions and clock times are stale.
+    var timeZoneIdentifier: String?
 
     init(start: Date) {
         missedReadingsReference = start
@@ -58,10 +61,10 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case episodes, latestLiveReading, lastValidReadingDate, missedReadingsReference
         case repeatSeries, latestNow, latestUptime, settledSensorState, lastReportedSensorState, bridgeStatus, storageHealth
-        case announcedSessionDates, knownSession, expiryPlan
+        case announcedSessionDates, knownSession, expiryPlan, timeZoneIdentifier
     }
 
-    private struct AnyKey: CodingKey {
+    struct AnyKey: CodingKey {
         let stringValue: String
         var intValue: Int? { nil }
         init(stringValue: String) { self.stringValue = stringValue }
@@ -92,6 +95,7 @@ public struct AlertEngineSnapshot: Sendable, Equatable, Codable {
         announcedSessionDates = (try? c.decodeIfPresent([String: Date].self, forKey: .announcedSessionDates)) ?? [:]
         knownSession = (try? c.decodeIfPresent(SensorSession.self, forKey: .knownSession)) ?? nil
         expiryPlan = (try? c.decodeIfPresent(ExpiryReminderPlan.self, forKey: .expiryPlan)) ?? nil
+        timeZoneIdentifier = (try? c.decodeIfPresent(String.self, forKey: .timeZoneIdentifier)) ?? nil
     }
 
     public func encoded() -> Data? {

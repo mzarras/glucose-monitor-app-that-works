@@ -127,7 +127,7 @@ final class ClockFaultTests: XCTestCase {
         h.user(.snooze(.urgentLow, minutes: 30))
         h.clock.advance(minutes: 120)
         h.session = session(shiftedBy: 0)
-        XCTAssertEqual(h.mgdl(50).fired, [.urgentLow])
+        XCTAssertEqual(h.mgdl(50).due, [.urgentLow], "the snooze ended (its alarm rang at +30, D44): it sounds on its grid")
     }
 
     func test_clockJumpForward_staleValueIsNotEvaluatedAndMissedReadingsFires() {

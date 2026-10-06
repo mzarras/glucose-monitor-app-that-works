@@ -30,7 +30,8 @@ extension AlertEngine {
 
     /// Snoozes an active alert. S7: urgent low is clamped to at most 30 minutes here, whatever
     /// the caller asked for; every other alert to `AlertLimits.snoozeMinutes`. The cancel removes
-    /// all of the alert's notifications, pending repeats and alarms (the user has seen it).
+    /// all of the alert's notifications, pending repeats and alarms (the user has seen it). For
+    /// urgent low, evaluation then schedules the snooze-end alarm and its repeat grid (D44).
     private mutating func snooze(_ kind: AlertKind, minutes: Int, now: Date) -> [AlertAction] {
         let range = kind == .urgentLow ? AlertLimits.urgentLowSnoozeMinutes : AlertLimits.snoozeMinutes
         let clamped = AlertLimits.clamp(minutes, to: range)
@@ -64,10 +65,14 @@ extension AlertEngine {
     /// that is due or ringing.
     mutating func reconcileAfterLaunch(now: Date) -> [AlertAction] {
         var actions: [AlertAction] = []
-        if case .firing(let firing) = episode(.urgentLow) {
+        switch episode(.urgentLow) {
+        case .firing(let firing):
             actions += resetSeriesAfterLaunch(.urgentLow, now: now)
             actions += planUrgentLowRepeats(anchor: firing.since, now: now)
-        } else {
+        case .snoozed:
+            // D44: evaluation plans the snooze-end alarm and its grid again from the restored snooze.
+            actions += resetSeriesAfterLaunch(.urgentLow, now: now)
+        case .armed, .delaying:
             forgetSeries(.urgentLow)
             actions.append(.cancelScheduled(.urgentLow))
         }
