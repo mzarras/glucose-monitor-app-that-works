@@ -31,7 +31,9 @@ final class SystemAlarmTests: XCTestCase {
         await h.service.start()
         await h.reading(.mgdl(50))
         await h.service.send(.user(.acknowledge(.urgentLow)))
-        XCTAssertTrue(alarms.scheduled.isEmpty)
+        XCTAssertEqual(alarms.repeatAlarms.map(\.fireDate).min(), Fixtures.t0.addingTimeInterval(minutes(30)),
+                       "the repeat alarms are cancelled; the snooze-end alarm and its grid are new (D44)")
+        XCTAssertNil(alarms.scheduled[SystemAlarmIDs.immediate])
 
         h.clock.advance(minutes: 31)
         await h.reading(.mgdl(50))
@@ -112,7 +114,8 @@ final class SystemAlarmTests: XCTestCase {
 
         await bridge.stopTapped()
         XCTAssertEqual(h.service.phase(of: .urgentLow), .snoozed(until: Fixtures.t0.addingTimeInterval(minutes(30))), "Stop = acknowledge")
-        XCTAssertTrue(alarms.scheduled.isEmpty, "the remaining repeat alarms are cancelled")
+        XCTAssertTrue(alarms.scheduled.values.allSatisfy { $0.fireDate >= Fixtures.t0.addingTimeInterval(minutes(30)) },
+                      "the remaining repeat alarms are cancelled; the snooze-end alarm (≤ 30 min) replaces them (D44)")
 
         h.clock.advance(minutes: 31)
         await h.reading(.mgdl(50))

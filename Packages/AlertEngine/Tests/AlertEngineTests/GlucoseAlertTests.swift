@@ -36,7 +36,8 @@ final class GlucoseAlertTests: XCTestCase {
         XCTAssertEqual(h.mgdl(49).due, [.urgentLow])
 
         let ack = h.user(.acknowledge(.urgentLow))
-        XCTAssertEqual(ack, [.cancel(.urgentLow)], "acknowledge removes notifications, pending repeats and the sound")
+        XCTAssertEqual(ack.first, .cancel(.urgentLow), "acknowledge removes notifications, pending repeats and the sound")
+        XCTAssertEqual(ack.scheduled(.urgentLow)?.first, h.now.addingTimeInterval(minutes(30)), "and schedules the snooze-end alarm (D44)")
         XCTAssertEqual(h.phase(.urgentLow), .snoozed(until: h.now.addingTimeInterval(minutes(30))))
         h.clock.advance(minutes: 5)
         XCTAssertEqual(h.mgdl(48).ignoringMissedReadings, [], "acknowledged: no more repeats")
@@ -70,19 +71,25 @@ final class GlucoseAlertTests: XCTestCase {
         XCTAssertEqual(h.mgdl(50).fired, [])
         h.clock.advance(minutes: 1)
         let refire = h.mgdl(50)
-        XCTAssertEqual(refire.fired, [.urgentLow])
-        XCTAssertNotNil(refire.scheduled(.urgentLow), "a new sounding schedules new repeats")
+        XCTAssertEqual(refire.due, [.urgentLow], "the snooze-end alarm is this sounding (D44): one alarm, not two")
+        XCTAssertEqual(refire.fired, [])
+        XCTAssertEqual(h.phase(.urgentLow), .firing(since: Fixtures.t0.addingTimeInterval(minutes(30))))
+        XCTAssertEqual(h.pendingDates(.urgentLow).last, Fixtures.t0.addingTimeInterval(minutes(90)), "its repeat grid: an hour ahead")
     }
 
-    func test_S1_snoozeExpiryNeverRefiresOnAStaleValue() {
+    /// D44 (Michael): urgent low re-alarms at snooze end even without a new reading. S1 still holds:
+    /// the 52 is never presented as current — the text says the snooze ended and gives the last
+    /// value with its time.
+    func test_S1_snoozeEndReAlarmsOnAStaleValueWithoutPresentingItAsCurrent() {
         let h = EngineHarness()
         h.mgdl(52)
         h.user(.acknowledge(.urgentLow))
         let expired = h.advance(minutes: 31)
-        XCTAssertEqual(expired.fired, [], "the 52 is 31 minutes old: not evaluated")
-        XCTAssertEqual(h.phase(.urgentLow), .snoozed(until: Fixtures.t0.addingTimeInterval(minutes(30))))
-        XCTAssertEqual(h.phase(.missedReadings), .firing(since: Fixtures.t0.addingTimeInterval(minutes(15))), "S5 covers the gap")
-        XCTAssertEqual(h.mgdl(50).fired, [.urgentLow], "a fresh low reading fires at once")
+        XCTAssertEqual(expired.fired, [], "not posted as a fresh low")
+        XCTAssertTrue(expired.due.contains(.urgentLow), "the pending snooze-end alarm, sounded while awake")
+        XCTAssertEqual(expired.dueNotice(.urgentLow)?.body, "Snooze ended. Last reading 52 mg/dL at 12:00 PM. Check your glucose.")
+        XCTAssertEqual(h.phase(.urgentLow), .firing(since: Fixtures.t0.addingTimeInterval(minutes(30))))
+        XCTAssertEqual(h.phase(.missedReadings), .firing(since: Fixtures.t0.addingTimeInterval(minutes(15))), "S5 covers the gap too")
     }
 
     func test_hysteresisBandHoldsAndRecoveryClears() {
@@ -410,9 +417,11 @@ final class GlucoseAlertTests: XCTestCase {
         h.user(.snooze(.urgentLow, minutes: 240))
         XCTAssertEqual(h.phase(.urgentLow), .snoozed(until: h.now.addingTimeInterval(minutes(30))))
         h.clock.advance(minutes: 29)
-        XCTAssertEqual(h.mgdl(50).fired, [])
+        let before = h.mgdl(50)
+        XCTAssertEqual(before.fired, [])
+        XCTAssertEqual(before.due, [])
         h.clock.advance(minutes: 1)
-        XCTAssertEqual(h.mgdl(50).fired, [.urgentLow])
+        XCTAssertEqual(h.mgdl(50).due, [.urgentLow], "sounds again at 30 minutes, not 240")
     }
 
     func test_S7_resnoozingCannotExtendPast30MinutesFromNow() {

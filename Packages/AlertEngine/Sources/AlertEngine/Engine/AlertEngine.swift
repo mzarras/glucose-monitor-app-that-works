@@ -5,6 +5,7 @@
 // Split across files by concern:
 //   AlertEngine.swift                  inputs, the per-alert state machine, glucose alerts
 //   AlertEngine+MissedReadings.swift   the pre-scheduled missed-readings alert (S5)
+//   AlertEngine+UrgentLowSnooze.swift  urgent low re-alarms at snooze end (D44)
 //   AlertEngine+Sensor.swift           sensor state, the warm-up announcement
 //   AlertEngine+ExpiryReminders.swift  the pre-scheduled sensor expiry reminders (D43)
 //   AlertEngine+User.swift             acknowledge / snooze / settings changes / launch
@@ -181,6 +182,7 @@ public struct AlertEngine: Sendable {
         let current = currentReading(at: now)
 
         actions += step(.urgentLow, GlucoseConditions.atOrBelow(current, threshold: settings.urgentLow.thresholdMgdl), now: now)
+        actions += planUrgentLowSnoozeEnd(now: now)
         let urgentLowActive = episode(.urgentLow).isActive
         actions += step(.urgentLowSoon, GlucoseConditions.urgentLowSoon(
             current, urgentLowThreshold: settings.urgentLow.thresholdMgdl, urgentLowActive: urgentLowActive), now: now)
@@ -234,9 +236,13 @@ public struct AlertEngine: Sendable {
             return repeatIfDue(kind, firing, condition: condition, now: now)
 
         case (.snoozed(let snooze), .met):
-            return now >= snooze.until ? fire(kind, now: now) : []
-        case (.snoozed, .holding):
-            return []
+            guard now >= snooze.until else { return [] }
+            return kind == .urgentLow ? endUrgentLowSnooze(snooze, current: true, now: now) : fire(kind, now: now)
+        case (.snoozed(let snooze), .holding):
+            // D44: urgent low re-alarms at snooze end without a new reading, unless the latest
+            // reading was above the threshold. Every other alert waits for a current reading.
+            guard kind == .urgentLow, now >= snooze.until, urgentLowSnoozeEndWanted else { return [] }
+            return endUrgentLowSnooze(snooze, current: false, now: now)
         }
     }
 
@@ -247,7 +253,7 @@ public struct AlertEngine: Sendable {
         return [.cancel(kind)]
     }
 
-    private mutating func fire(_ kind: AlertKind, now: Date) -> [AlertAction] {
+    mutating func fire(_ kind: AlertKind, now: Date) -> [AlertAction] {
         if kind == .sensorExpired { return fireSensorExpired(now: now) }
         setEpisode(kind, .firing(AlertFiring(since: now, lastSoundedAt: now)))
         var actions: [AlertAction] = [.fire(makeNotice(kind, fireDate: nil, now: now))]
@@ -323,7 +329,8 @@ public struct AlertEngine: Sendable {
         kind == .high ? TimeInterval(settings.high.delayMinutes * 60) : 0
     }
 
-    func makeNotice(_ kind: AlertKind, fireDate: Date?, now: Date, isRepeat: Bool = false, slot: Int? = nil) -> AlertNotice {
+    /// - Parameter snoozeEnd: urgent low re-alarming at snooze end without a current reading (D44).
+    func makeNotice(_ kind: AlertKind, fireDate: Date?, now: Date, isRepeat: Bool = false, slot: Int? = nil, snoozeEnd: Bool = false) -> AlertNotice {
         let deliveredAt = fireDate ?? now
         // S7: quiet hours never silence urgent low.
         let silenced = kind != .urgentLow && settings.quietHours.contains(deliveredAt, calendar: configuration.calendar)
@@ -337,6 +344,7 @@ public struct AlertEngine: Sendable {
             storageHealth: snapshot.storageHealth,
             calendar: configuration.calendar,
             locale: configuration.locale,
+            isSnoozeEnd: kind == .urgentLow && (snoozeEnd || (fireDate != nil && urgentLowIsSnoozed)),
             deliveredAt: deliveredAt,
             sessionExpiresAt: snapshot.expiryPlan?.expiresAt,
             graceEndsAt: snapshot.expiryPlan?.graceEndsAt

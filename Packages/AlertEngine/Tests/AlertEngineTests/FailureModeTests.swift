@@ -170,8 +170,9 @@ final class FailureModeTests: XCTestCase {
         h.clock.set(Fixtures.t0.addingTimeInterval(minutes(45)))   // 5 real minutes later, the clock jumped 40 forward
         var engine = AlertEngine(settings: .defaults, configuration: Fixtures.configuration, restoring: stored, now: h.now, uptime: h.clock.uptime)
         let reading = Fixtures.reading(.mgdl(50), at: h.now)
-        XCTAssertEqual(engine.handle(.reading(reading, session: Fixtures.session), at: h.now, uptime: h.clock.uptime).fired, [.urgentLow],
-                       "errs loud: the snooze is over by the wall clock")
+        let actions = engine.handle(.reading(reading, session: Fixtures.session), at: h.now, uptime: h.clock.uptime)
+        XCTAssertEqual(actions.due, [.urgentLow], "the snooze is over by the wall clock: it sounds now (D44: as its snooze-end alarm)")
+        XCTAssertEqual(engine.phase(of: .urgentLow), .firing(since: Fixtures.t0.addingTimeInterval(minutes(30))))
     }
 
     func test_S5_missedReadingsAfterAKillAndRebootSoundsAtRelaunch() async throws {
