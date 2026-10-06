@@ -172,6 +172,9 @@ final class FakeCentral: G7CentralDriving {
 
     func scanForSensors() { scanCount += 1 }
     func stopScanning() { stopScanCount += 1 }
+    /// Unconditional stop + scan (the CoreBluetooth central does not consult `isScanning`).
+    var restartCount = 0
+    func restartScan() { restartCount += 1 }
 
     func schedule(after delay: TimeInterval, _ action: @escaping () -> Void) {
         scheduled.append((delay, action))

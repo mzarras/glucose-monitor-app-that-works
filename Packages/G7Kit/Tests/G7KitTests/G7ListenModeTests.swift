@@ -464,28 +464,62 @@ final class G7ListenModeTests: XCTestCase {
     }
 
     /// Review N1, suspended: while the Dexcom app holds the link the backoff applies and the scan is
-    /// restarted; when the link drops, the sensor's next advertisement (a new discovery, which wakes
-    /// the app) ends the backoff and arms the pending connection — no timer needed.
+    /// restarted (unconditionally); when the link drops, the sensor's next advertisement (a new
+    /// discovery, which wakes the app) ends the backoff and arms the pending connection — no timer.
     func test_S5_backoffEndsWhenTheDexcomLinkDrops() throws {
         let harness = makeHarness()
         try harness.controller.start(pairingCode: nil)
         harness.wake(frames: [Fixture.tenDayExtendedVersion, harness.dexcomGlucose(120)])
         harness.central.connected = [G7ConnectedSensor(name: "Dexcom4F", identifier: harness.identifier)]
         harness.central.scheduled = []
-        let scans = harness.central.scanCount
+        let restarts = harness.central.restartCount
         let connects = harness.central.connectRequests.count
         harness.controller.didDisconnect(peripheralIdentifier: harness.identifier) // attach failed on its link
         XCTAssertEqual(harness.central.scheduled.map(\.delay), [30])
         XCTAssertEqual(harness.central.connectRequests.count, connects)
-        XCTAssertGreaterThan(harness.central.scanCount, scans, "a fresh scan is running during the backoff")
-        harness.controller.didDiscover(name: "DXCM4F", identifier: harness.identifier) // still connected: stale
-        XCTAssertEqual(harness.central.connectRequests.count, connects)
+        XCTAssertEqual(harness.central.restartCount, restarts + 1, "the scan is restarted for the next advertisement")
 
         harness.central.connected = [] // the Dexcom app's wake ended
         harness.controller.didDiscover(name: "DXCM4F", identifier: harness.identifier) // next advertisement
         XCTAssertEqual(Array(harness.central.connectRequests.dropFirst(connects)), [harness.identifier], "pending connect armed")
         harness.central.fireScheduled() // a stale backoff timer does nothing more
         XCTAssertEqual(harness.central.connectRequests.count, connects + 1)
+    }
+
+    /// Review N1b, the race: the Dexcom app's own pending connection completes on the advertisement
+    /// before this suspended app handles the discovery, so the sensor is already system-connected.
+    /// The discovery still ends the backoff and attaches exactly once; a repeated discovery in the
+    /// same scan session does not attach again; if that attach fails, the scan is restarted again.
+    func test_S5_discoveryDuringBackoffAttachesOnceEvenIfTheDexcomLinkIsUp() throws {
+        let harness = makeHarness()
+        try harness.controller.start(pairingCode: nil)
+        harness.wake(frames: [Fixture.tenDayExtendedVersion, harness.dexcomGlucose(120)])
+        let dexcomLink = [G7ConnectedSensor(name: "Dexcom4F", identifier: harness.identifier)]
+        harness.central.connected = dexcomLink
+        harness.central.scheduled = []
+        harness.controller.didDisconnect(peripheralIdentifier: harness.identifier) // backoff, Dexcom app holds the link
+        XCTAssertEqual(harness.central.scheduled.map(\.delay), [30])
+
+        // Suspended; next sensor wake: the Dexcom app reconnected first, then the discovery is handled.
+        let connects = harness.central.connectRequests.count
+        harness.controller.didDiscover(name: "DXCM4F", identifier: harness.identifier)
+        XCTAssertEqual(Array(harness.central.connectRequests.dropFirst(connects)), [harness.identifier], "exactly one attach")
+        harness.controller.didDiscover(name: "DXCM4F", identifier: harness.identifier) // repeated in the same session
+        XCTAssertEqual(harness.central.connectRequests.count, connects + 1, "no second attach")
+
+        // That attach fails before a cycle (discovery failed on the Dexcom app's link).
+        let restarts = harness.central.restartCount
+        harness.central.scheduled = []
+        harness.controller.didDisconnect(peripheralIdentifier: harness.identifier)
+        XCTAssertEqual(harness.central.restartCount, restarts + 1, "scan restarted again")
+        XCTAssertEqual(harness.central.scheduled.map(\.delay), [60], "backoff continues")
+        XCTAssertEqual(harness.central.connectRequests.count, connects + 1)
+
+        // And when it succeeds instead, readings resume.
+        harness.central.connected = []
+        harness.clock.advance(300)
+        harness.wake(frames: [harness.dexcomGlucose(121)])
+        XCTAssertEqual(harness.readings.map(\.value), [.mgdl(120), .mgdl(121)])
     }
 
     /// Review N1, suspended: Bluetooth off and on during a backoff re-arms the pending connection.
