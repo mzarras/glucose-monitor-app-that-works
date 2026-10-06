@@ -111,19 +111,7 @@ struct AlertListRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("alerts.row.\(row.kind.rawValue)")
-            if let playsSound = row.playsSound, row.kind.section == .expiryReminders {
-                // D43: each expiry reminder's own Sound switch (24 h is off by default).
-                VStack(spacing: 2) {
-                    Text(verbatim: "SOUND").monoLabel(size: 9).foregroundStyle(Theme.muted)
-                    Toggle(isOn: Binding(get: { playsSound }, set: { actions.edit(.playsSound(row.kind, $0)) })) {
-                        Text(verbatim: "\(row.kind.title): sound")
-                    }
-                    .labelsHidden()
-                    .disabled(!row.effectiveIsEnabled)
-                }
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("alerts.sound.\(row.kind.rawValue)")
-            }
+
             if row.kind.canBeDisabled {
                 Toggle(isOn: Binding(get: { row.isEnabled }, set: { actions.edit(.enabled(row.kind, $0)) })) {
                     Text(verbatim: row.kind.title)
@@ -237,6 +225,7 @@ struct AlertDetailView: View {
                         }
                     }
                     .frame(minHeight: Layout.minTarget)
+                    .accessibilityIdentifier("alerts.detail.sound")
                     Hairline()
                 }
                 soundOnSilent
