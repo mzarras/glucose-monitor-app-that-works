@@ -188,8 +188,11 @@ final class TrioCoordinator {
 
     /// The user turned the bridge off: remove this app's readings and the heartbeat keys from
     /// Trio's App Group (docs/trio-bridge.md "Heartbeat wiring").
-    func removeEverythingFromTrio() async {
-        guard let bridge, !summary.offWhileListening else { return }
+    /// - Parameter enteringListenMode: review m1 — the switch to listen mode clears what this app
+    ///   wrote (the handoff is already off then); otherwise nothing is touched while listening.
+    func removeEverythingFromTrio(enteringListenMode: Bool = false) async {
+        guard let bridge, enteringListenMode || !summary.offWhileListening else { return }
+        if enteringListenMode { log("entering listen mode: removing this app's readings and heartbeat keys from Trio's App Group") }
         do throws(TrioBridgeError) {
             try await bridge.clear()
         } catch {

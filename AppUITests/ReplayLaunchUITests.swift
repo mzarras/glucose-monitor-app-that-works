@@ -37,6 +37,17 @@ final class ReplayLaunchUITests: XCTestCase {
         app.descendants(matching: .any)[identifier].firstMatch
     }
 
+    /// Waits until the element exists and can be tapped, then taps it. A freshly launched app on a
+    /// loaded simulator can drop a tap that lands before its first screen settles (P3b flake: the
+    /// first "Get started" tap lost).
+    private func tapWhenReady(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(element.waitForExistence(timeout: timeout), "\(element)", file: file, line: line)
+        let deadline = Date().addingTimeInterval(timeout)
+        while !element.isHittable, Date() < deadline { Thread.sleep(forTimeInterval: 0.2) }
+        XCTAssertTrue(element.isHittable, "\(element) never became tappable", file: file, line: line)
+        element.tap()
+    }
+
     /// Waits until the element exists and its accessibility label satisfies `condition`.
     @discardableResult
     private func waitForLabel(_ element: XCUIElement, _ description: String, _ condition: (String) -> Bool) -> String {
@@ -159,7 +170,7 @@ final class ReplayLaunchUITests: XCTestCase {
         let app = launch(scenario: "steady", minute: 60, extra: ["-tab", "alerts"])
         let urgentLow = element(app, "alerts.row.urgentLow")
         XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout))
-        urgentLow.tap()
+        tapWhenReady(urgentLow)
         XCTAssertTrue(app.staticTexts["Urgent low"].waitForExistence(timeout: timeout))
         XCTAssertFalse(element(app, "alerts.detail.sound").exists, "S7: no Sound switch for urgent low")
         app.navigationBars.buttons.firstMatch.tap()
@@ -210,11 +221,11 @@ final class ReplayLaunchUITests: XCTestCase {
         XCTAssertTrue(element(app, "onboarding.welcome.start").waitForExistence(timeout: timeout), "onboarding's first step")
         let setUpLater = element(app, "onboarding.dismiss")
         XCTAssertTrue(setUpLater.waitForExistence(timeout: timeout), "every onboarding step offers Set up later")
-        setUpLater.tap()
+        tapWhenReady(setUpLater)
         waitForLabel(element(app, "now.hero.message"), "Now: no sensor set up (D45: the choice first)") { $0.contains("No sensor set up") }
         let pair = element(app, "now.hero.action")
         XCTAssertTrue(pair.waitForExistence(timeout: timeout))
-        pair.tap()
+        tapWhenReady(pair)
         XCTAssertTrue(element(app, "settings.sensor.page").waitForExistence(timeout: timeout), "Settings › Sensor")
         XCTAssertFalse(element(app, "onboarding.step").exists, "not the full-screen onboarding")
         XCTAssertTrue(app.buttons["Trends"].exists && app.buttons["Settings"].exists, "the tab bar is there")
@@ -232,7 +243,7 @@ final class ReplayLaunchUITests: XCTestCase {
     /// Scrolls until the element is on screen.
     private func reveal(_ app: XCUIApplication, _ element: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: timeout), element.debugDescription)
-        for _ in 0..<8 where !element.isHittable { app.swipeUp(velocity: .slow) }
+        for _ in 0..<16 where !element.isHittable { app.swipeUp() }
     }
 
     private func assertSharingSwitches(_ app: XCUIApplication, enabled: Bool) {
@@ -248,7 +259,7 @@ final class ReplayLaunchUITests: XCTestCase {
     /// Listening step; afterwards Settings shows the mode and the sharing switches are off and disabled.
     func test_listenModeInOnboarding() throws {
         let app = launchApp(["-resetOnboardingFlag", "-onboarding"])
-        element(app, "onboarding.welcome.start").tap()
+        tapWhenReady(element(app, "onboarding.welcome.start"))
         XCTAssertTrue(element(app, "connection.listen").waitForExistence(timeout: timeout), "the connection step")
         try saveScreenshot("listen-onboarding-connection")
         element(app, "connection.listen").tap()
@@ -289,10 +300,10 @@ final class ReplayLaunchUITests: XCTestCase {
         let app = launchApp(["-tab", "settings"])
         // A fresh simulator offers onboarding first (no sensor): leave it.
         let setUpLater = element(app, "onboarding.dismiss")
-        if setUpLater.waitForExistence(timeout: 5) { setUpLater.tap() }
+        if setUpLater.waitForExistence(timeout: 5) { tapWhenReady(setUpLater) }
         let sensorRow = element(app, "settings.sensor")
         XCTAssertTrue(sensorRow.waitForExistence(timeout: timeout))
-        sensorRow.tap()
+        tapWhenReady(sensorRow)
         let listen = element(app, "connection.listen")
         reveal(app, listen)
         listen.tap()
@@ -314,7 +325,7 @@ final class ReplayLaunchUITests: XCTestCase {
         app.navigationBars.buttons.firstMatch.tap()
 
         // Back to pairing.
-        sensorRow.tap()
+        tapWhenReady(sensorRow)
         let pair = element(app, "connection.pair")
         reveal(app, pair)
         pair.tap()
@@ -336,7 +347,7 @@ final class ReplayLaunchUITests: XCTestCase {
         let app = launch(scenario: "steady", minute: 60, extra: ["-tab", "settings"])
         let sensorRow = element(app, "settings.sensor")
         XCTAssertTrue(sensorRow.waitForExistence(timeout: timeout))
-        sensorRow.tap()
+        tapWhenReady(sensorRow)
         let listen = element(app, "connection.listen")
         reveal(app, listen)
         listen.tap()
@@ -354,7 +365,7 @@ final class ReplayLaunchUITests: XCTestCase {
     /// no code field until "Pair this app" is chosen and confirmed.
     func test_firstRunMakesThePersonChooseBeforeAnyCodeField() throws {
         let app = launchApp(["-resetOnboardingFlag", "-onboarding"])
-        element(app, "onboarding.welcome.start").tap()
+        tapWhenReady(element(app, "onboarding.welcome.start"))
         let listen = element(app, "connection.listen")
         let pair = element(app, "connection.pair")
         XCTAssertTrue(listen.waitForExistence(timeout: timeout), "the connection step comes first")
@@ -386,7 +397,7 @@ final class ReplayLaunchUITests: XCTestCase {
         try saveScreenshot("first-run-pairing-warning")
 
         // Choosing Pair (above) was recorded: the hero now offers pairing.
-        element(app, "onboarding.dismiss").tap()
+        tapWhenReady(element(app, "onboarding.dismiss"))
         waitForLabel(element(app, "now.hero.message"), "Now after choosing Pair") { $0.contains("No sensor paired") }
         app.terminate()
 
@@ -395,13 +406,13 @@ final class ReplayLaunchUITests: XCTestCase {
         let fresh = launchApp(["-resetOnboardingFlag"])
         let setUpLater = element(fresh, "onboarding.dismiss")
         XCTAssertTrue(setUpLater.waitForExistence(timeout: timeout))
-        setUpLater.tap()
+        tapWhenReady(setUpLater)
         try checkSettingsChoiceOnAFreshInstall(fresh)
     }
 
     private func checkSettingsChoiceOnAFreshInstall(_ app: XCUIApplication) throws {
         waitForLabel(element(app, "now.hero.message"), "Now: no sensor set up") { $0.contains("No sensor set up") }
-        element(app, "now.hero.action").tap()
+        tapWhenReady(element(app, "now.hero.action"))
         XCTAssertTrue(element(app, "settings.sensor.page").waitForExistence(timeout: timeout))
         let settingsPair = element(app, "connection.pair")
         XCTAssertTrue(settingsPair.waitForExistence(timeout: timeout))

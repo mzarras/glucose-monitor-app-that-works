@@ -1,4 +1,4 @@
-# Sensor (working name)
+# glucose
 
 An open-source iOS app that connects directly to a **Dexcom G7 10-day sensor** as its primary
 (authenticating) Bluetooth device. It stores and shows the readings, runs its own alerts, hands
@@ -12,7 +12,7 @@ Build from source only. GPL-3.0.
 > readings that don't match how you feel with a fingerstick meter.
 
 **Status:** under construction (`PROGRESS.md`). The automated gates pass; the app has **not yet been
-validated with a live sensor** (`docs/setup.md` §5). "Sensor" is a working name.
+validated with a live sensor** (`docs/setup.md` §5). The app is called "glucose" (D52); "Sensor" is the working name of the project, its targets and packages.
 
 ## What it is, and what it isn't
 

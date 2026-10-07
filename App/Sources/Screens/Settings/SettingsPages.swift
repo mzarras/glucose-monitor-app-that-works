@@ -22,6 +22,8 @@ struct SensorSettingsView: View {
     /// D45: a switch on its way, and why the last one didn't happen.
     var connectionSwitchingTo: SensorConnectionMode? = nil
     var connectionFeedback: String? = nil
+    /// `AppServices.connectionSettingProblem`: why the choice is asked for again.
+    var connectionSettingProblem: String? = nil
     @State private var confirmingStop = false
     @State private var confirmingForget = false
     @State private var confirmingMode: SensorConnectionMode?
@@ -63,7 +65,13 @@ struct SensorSettingsView: View {
                 }
                 if let connection, connection.mode == nil {
                     // Not chosen yet: the choice comes first, before anything about pairing.
-                    ExplanationNote(text: ConnectionModeText.chooseFirst)
+                    if let connectionSettingProblem {
+                        // P3b nit: asked again because the saved setting can't be used — say why.
+                        WarningNote(text: "\(ConnectionSettingProblem(connectionSettingProblem).explanation) \(ConnectionModeText.chooseAgain)")
+                            .accessibilityIdentifier("settings.sensor.chooseAgain")
+                    } else {
+                        ExplanationNote(text: ConnectionModeText.chooseFirst)
+                    }
                     connectionSection(connection)
                 } else {
                     if listening {
@@ -82,12 +90,12 @@ struct SensorSettingsView: View {
     }
 
     /// D45 while listening: the sensor's failure, if any, and where to act instead of each
-    /// pairing-only action (this app sends nothing to the sensor).
+    /// pairing-only action (this app never pairs, calibrates or controls the sensor).
     @ViewBuilder
     private var listeningSection: some View {
         if case .failed(let failure) = sensor.state {
             // S5: the failure stays on the page, in words for listening where it is one of those.
-            FieldMessage(text: ListenModeRules.failure(failure, listening: true)?.detail ?? failure.message)
+            FieldMessage(text: ListenModeRules.listeningDetail(failure))
         }
         VStack(alignment: .leading, spacing: 6) {
             ExplanationNote(text: ConnectionModeText.calibrationWhileListening)

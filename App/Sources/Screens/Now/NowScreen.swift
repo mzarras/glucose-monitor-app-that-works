@@ -186,7 +186,7 @@ struct NowContent: View {
     private func stateLine(_ display: GlucoseDisplayState) -> some View {
         let line = ListenModeRules.stateLine(
             StateLine.make(display, sensorState: state.sensorState, now: now, context: context, sensorStateKnown: state.sensorStateKnown),
-            display: display, listening: isListening)
+            display: display, listening: isListening, chosen: state.connectionChosen)
         return HStack(spacing: 8) {
             Circle()
                 .fill(dotStyle(line.dot))

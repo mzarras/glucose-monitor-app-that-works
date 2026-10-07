@@ -1,6 +1,6 @@
 # Setup, build, and on-device validation
 
-How to sign, build and install Sensor (working name) on an iPhone, configure it next to Trio,
+How to sign, build and install glucose (the app; working name of the project "Sensor") on an iPhone, configure it next to Trio,
 Nightscout and Dexcom Share, and validate it with a real sensor before relying on it.
 Decisions are cited as D1…D51 (`PROGRESS.md`); the plan in §5 is HANDOFF §11 in the order D46 sets,
 with every on-device check from the other docs merged in.
@@ -311,9 +311,10 @@ keep uploads paused (D20), and in §5 uploads stay off until Part B. While liste
 are off whatever their switches say (D45): Trio keeps uploading CGM readings to Nightscout.
 
 1. In Nightscout › Admin Tools: **Roles › Add new role**, e.g. `sensor-uploader`, permissions
-   `api:entries:create`. **Subjects › Add new subject**, e.g. `Sensor`, roles
-   `readable, sensor-uploader` (`readable` gives the read access the history import needs).
-   Nightscout's default roles can't create entries except `admin`.
+   `api:entries:read,api:entries:create` (the app only calls `/api/v1/entries`: read for the history
+   import, create for uploads). **Subjects › Add new subject**, e.g. `glucose`, role `sensor-uploader`.
+   (`readable` also works but grants read access to everything on the site.) Nightscout's default
+   roles can't create entries except `admin`.
 2. In this app: Settings › Sharing › Nightscout: **Site URL** (`https://` only; plain `http` is
    refused except for loopback hosts) and **Access token** (that subject's token) › Save. The token
    goes to the Keychain and is sent in the `api-secret` header, never in a URL. Never paste it
@@ -812,7 +813,7 @@ Repeat step 3L's items that apply to both modes if anything changed; in addition
 
 - [ ] **Tell followers before switching**; send them `docs/following.md`.
 - [ ] **Each reading appears once in Nightscout within a minute.**
-  - Expect: device "Sensor" (the display name); no second entry from Trio.
+  - Expect: device "glucose" (the display name); no second entry from Trio.
   - Record: lag for ten readings; duplicate count.
 - [ ] **Offline queue.**
   - Do: Wi-Fi and cellular off for 15 minutes, then on.
@@ -927,8 +928,9 @@ accepts this phone": expected, don't Pair again); in this app, Settings › Sens
 
 ## 6. Renaming the app
 
-"Sensor" is a working name (D1). Rename **before you install it on the phone**, and in any case
-before the first pairing. Keep "Dexcom" out of the name and bundle ID (trademark, HANDOFF §1.1).
+The app is called "glucose" (D52; `APP_DISPLAY_NAME`); "Sensor" stays the working name of the project,
+targets and packages, and the bundle ID stays `com.mzarras.sensor`. To rename it again, do it **before you
+install it on the phone**, and in any case before the first pairing. Keep "Dexcom" out of the name and bundle ID (trademark, HANDOFF §1.1).
 
 **Display name only** (`APP_DISPLAY_NAME` in `Config/Base.xcconfig`; or override it locally in
 `Config/Signing.xcconfig`, which is included last). This loses nothing. It changes the home-screen

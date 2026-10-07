@@ -264,7 +264,7 @@ final class ListenModeWiringTests: XCTestCase {
         let pairAgain = NowHero.message(title: "Pair the sensor again", detail: rejected.message, action: .pairAgain)
         guard case .message(_, let detail, let action) = ListenModeRules.hero(pairAgain, display: failedDisplay, listening: true) else { return XCTFail() }
         XCTAssertNil(action)
-        XCTAssertTrue(detail.hasSuffix(ConnectionModeText.sensorProblemWhileListening))
+        XCTAssertEqual(detail, ListenModeRules.failure(rejected, listening: true)?.detail, "listen wording, never \"pair again\" (P3 review m3)")
         let calibrateHero = NowHero.message(title: "Calibrate", detail: "The sensor asks for a fingerstick.", action: .calibrate)
         guard case .message(_, let calibrateDetail, let calibrate) = ListenModeRules.hero(calibrateHero, display: .calibrationNeeded(last: nil), listening: true) else { return XCTFail() }
         XCTAssertNil(calibrate)
@@ -314,5 +314,200 @@ final class ListenModeWiringTests: XCTestCase {
         XCTAssertEqual(CalibrationRules.availability(state, now: Fixtures.referenceNow), .available)
         state.listening = true
         XCTAssertEqual(CalibrationRules.availability(state, now: Fixtures.referenceNow), .unavailable(reason: ConnectionModeText.calibrationWhileListening))
+    }
+
+    // MARK: - Phase 3 review follow-ups (p3b)
+
+    /// m1: onboarding always confirms a switch away from listening (the facade's mode), whether or
+    /// not a sensor is stored; a switch from pairing to listening asks only when a sensor is stored.
+    func test_onboardingConfirmsLeavingListening() {
+        var state = OnboardingState.initial
+        state.currentConnectionMode = .listen
+        state.connectionSwitchNeedsConfirmation = false // hasStoredSensor is always false while listening
+        XCTAssertTrue(state.continueNeedsConfirmation(for: .pair))
+        XCTAssertFalse(state.continueNeedsConfirmation(for: .listen), "no switch")
+        state.currentConnectionMode = .pair
+        XCTAssertFalse(state.continueNeedsConfirmation(for: .listen))
+        XCTAssertFalse(state.continueNeedsConfirmation(for: .pair))
+        state.connectionSwitchNeedsConfirmation = true
+        XCTAssertTrue(state.continueNeedsConfirmation(for: .listen), "a stored pairing would be replaced")
+        XCTAssertTrue(ConnectionModeText.switchMessage(to: .pair).hasPrefix(ConnectionModeText.pairingTakeoverWarning))
+    }
+
+    /// m1: once a mode is chosen, nothing paired or followed raises a calm banner, so it never looks
+    /// like monitoring is running; nothing before a choice, and nothing while a sensor is followed.
+    func test_notConnectedBanner() async {
+        let services = PreviewAppServices(sensorState: .notPaired)
+        let model = launch(services)
+        XCTAssertFalse(model.now.notConnected, "not chosen yet: the hero offers the choice")
+        model.setConnectionMode(.pair) // records the choice (already pairing mode)
+        await model.settle()
+        XCTAssertTrue(model.now.notConnected)
+        let banner = model.now.banners(now: t0).first { $0.kind == .notConnected }
+        XCTAssertEqual(banner?.title, "Not connected to a sensor")
+        XCTAssertEqual(banner?.severity, .warning, "calm")
+        XCTAssertTrue(banner?.detail.contains("No sensor is paired") == true)
+
+        // Listening, nothing followed yet (no followed serial, no session).
+        model.setConnectionMode(.listen)
+        await model.settle()
+        _ = await eventually { model.now.connection?.mode == .listen }
+        XCTAssertEqual(services.sensorState, .searching)
+        XCTAssertTrue(model.now.notConnected)
+        XCTAssertTrue(model.now.banners(now: t0).first { $0.kind == .notConnected }?.detail.contains("Not following a sensor yet") == true)
+        // A followed sensor clears it.
+        services.storedSensorSerial = "DXCM01-1A2B3C4D"
+        services.sensorState = activeSensor
+        model.apply(.sensor)
+        XCTAssertFalse(model.now.notConnected)
+        XCTAssertNil(model.now.banners(now: t0).first { $0.kind == .notConnected })
+    }
+
+    /// m3: no failure reachable in listen mode tells a listening person to pair; credentials
+    /// unavailable is "waiting for the phone to unlock".
+    func test_noListenFailureSaysToPair() {
+        let reasons: [SensorFailure] = [
+            G7FailureReason.credentialsUnavailable, G7FailureReason.listenSessionLengthUnknown, G7FailureReason.listenNoAuthenticatedConnection,
+            G7FailureReason.listenConnectionRejected, G7FailureReason.sensorClockMismatch, G7FailureReason.noGlucoseValue,
+            G7FailureReason.unsupportedSensor, G7FailureReason.sensorFailed, G7FailureReason.sessionStopped,
+            // Primary-only today; covered anyway.
+            G7FailureReason.savedKeyRejected, G7FailureReason.pairingCodeNeeded, G7FailureReason.bondRemovedBySensor,
+            G7FailureReason.bluetoothPairingNotCompleted, G7FailureReason.otherAppRejected, G7FailureReason.authenticationFailed,
+        ]
+        let session = SensorSession(serial: "DXCM01", start: t0.addingTimeInterval(-86_400), warmUpEndsAt: t0.addingTimeInterval(-84_600),
+                                    expiresAt: t0.addingTimeInterval(9 * 86_400), gracePeriodEndsAt: t0.addingTimeInterval(9.5 * 86_400))
+        for failure in reasons {
+            let state = SensorState.failed(failure)
+            var texts = AppBanners.make(sensorState: state, latestLiveReadingDate: t0, health: healthy, now: t0, listening: true)
+                .flatMap { [$0.title, $0.detail, $0.actionTitle ?? ""] }
+            texts.append(ListenModeRules.listeningDetail(failure))
+            texts.append(SensorStatusText.row(state, session: session, now: t0, listening: true))
+            let display = GlucoseDisplayState.classify(latest: nil, sensorState: state, now: t0)
+            texts.append(ListenModeRules.stateLine(StateLine.make(display, sensorState: state, now: t0), display: display, listening: true).text)
+            if case .message(let title, let detail, let action) = ListenModeRules.hero(NowHero.make(display, now: t0), display: display, listening: true) {
+                texts += [title, detail]
+                XCTAssertNil(action, "\(failure.kind): no pairing or replacing button while listening")
+            }
+            for text in texts {
+                XCTAssertFalse(text.range(of: #"\bpair"#, options: [.regularExpression, .caseInsensitive]) != nil && !text.contains("nothing needs pairing"),
+                               "\(failure.kind): \"\(text)\" tells a listening person to pair")
+            }
+            let banners = AppBanners.make(sensorState: state, latestLiveReadingDate: t0, health: healthy, now: t0, listening: true)
+            XCTAssertFalse(banners.contains { $0.action == .pairSensor || $0.action == .pairAgain }, "\(failure.kind)")
+        }
+        XCTAssertEqual(ListenModeRules.failure(G7FailureReason.credentialsUnavailable, listening: true)?.detail,
+                       "Waiting for the phone to unlock — readings resume after you unlock it.")
+        XCTAssertTrue(AppBanners.make(sensorState: .failed(G7FailureReason.savedKeyRejected), latestLiveReadingDate: t0, health: healthy, now: t0,
+                                      listening: true).contains { $0.severity == .critical }, "a lost connection still fails loud (S5)")
+    }
+
+    /// m4: while listening, calibration banners point to the Dexcom app with no button, and an ended
+    /// sensor says to start the new one in the Dexcom app (no "Replace sensor" button).
+    func test_listeningBannersPointToTheDexcomApp() {
+        for state in [SensorState.calibrationNeeded(code: 1), .calibrationError(code: 2)] {
+            let banner = AppBanners.make(sensorState: state, latestLiveReadingDate: t0, health: healthy, now: t0, listening: true)
+                .first { $0.kind == .calibrationNeeded }
+            XCTAssertNil(banner?.action, "\(state)")
+            XCTAssertTrue(banner?.detail.hasSuffix("Calibrate in the Dexcom app.") == true, "\(state)")
+            XCTAssertEqual(AppBanners.make(sensorState: state, latestLiveReadingDate: t0, health: healthy, now: t0).first { $0.kind == .calibrationNeeded }?.action,
+                           .openCalibration, "pairing mode keeps the button")
+        }
+        let remembered = AppBanners.make(sensorState: activeSensor, latestLiveReadingDate: t0, health: healthy, now: t0, sensorNeedsCalibration: true, listening: true)
+        XCTAssertNil(remembered.first { $0.kind == .calibrationNeeded }?.action)
+
+        let ended = AppBanners.make(sensorState: .failed(G7FailureReason.sensorFailed), latestLiveReadingDate: t0, health: healthy, now: t0, listening: true)
+            .first { $0.kind == .sensorNeedsReplacement }
+        XCTAssertNotEqual(ended?.actionTitle, "Replace sensor")
+        XCTAssertTrue(ended?.detail.contains("Start the new sensor in the Dexcom app") == true)
+        let expired = AppBanners.make(sensorState: .expired, latestLiveReadingDate: t0, health: healthy, now: t0, listening: true).first { $0.kind == .sensorExpired }
+        XCTAssertTrue(expired?.detail.contains("Start the new sensor in the Dexcom app") == true)
+    }
+
+    /// m2: the listen copy says exactly what may be sent.
+    func test_listenCopySaysWhatMayBeSent() {
+        XCTAssertTrue(ConnectionModeText.explanation(.listen).contains("one read-only question for the session length (the same one Trio asks)"))
+        XCTAssertFalse(ConnectionModeText.calibrationWhileListening.contains("sends nothing"))
+    }
+
+    /// n5, n4: the state line matches the hero before a choice; the last onboarding step says
+    /// "Warming up" only while the sensor is.
+    func test_stateLineAndLastStepWords() {
+        let line = StateLine(text: "NO SENSOR PAIRED", dot: .muted)
+        XCTAssertEqual(ListenModeRules.stateLine(line, display: .notPaired, listening: false, chosen: false).text, "NO SENSOR SET UP")
+        XCTAssertEqual(ListenModeRules.stateLine(line, display: .notPaired, listening: false, chosen: true).text, "NO SENSOR PAIRED")
+        XCTAssertEqual(OnboardingText.lastStep(sensorState: .warmingUp(endsAt: t0.addingTimeInterval(600)), listening: true, now: t0).title, "Warming up")
+        let midSession = OnboardingText.lastStep(sensorState: activeSensor, listening: true, now: t0)
+        XCTAssertEqual(midSession.title, "All set")
+        XCTAssertNil(midSession.waiting)
+        XCTAssertTrue(midSession.lead.contains("keeps listening"))
+        XCTAssertEqual(OnboardingText.lastStep(sensorState: .searching, listening: false, now: t0).waiting, "Waiting for the first reading.")
+    }
+
+    // MARK: - P3b review: unresolved connection setting
+
+    private static let unreadable = "SensorConnection.json could not be read: dataCorrupted"
+    private static let refused = "The saved connection setting does not match the stored sensor connection (delete refused)"
+    private static let failedSave = "The connection mode could not be changed and the previous setting could not be saved back (disk full)"
+
+    /// p1: while the setting is unresolved, the source's "credentials unavailable" banner is not
+    /// shown (it would say "pair again" or "waiting for the phone to unlock"); the setting banner
+    /// explains it, in either mode.
+    func test_settingProblemSuppressesTheCredentialsBanner() {
+        var health = healthy
+        health.connectionSettingProblem = Self.unreadable
+        let state = SensorState.failed(G7FailureReason.credentialsUnavailable)
+        for listening in [false, true] {
+            let banners = AppBanners.make(sensorState: state, latestLiveReadingDate: t0, health: health, now: t0, listening: listening)
+            XCTAssertEqual(banners.map(\.kind), [.connectionSettingUnreadable], "listening: \(listening)")
+            XCTAssertFalse(banners.contains { $0.detail.contains("pair the sensor again") || $0.title.contains("unlock") })
+            let unresolvedFree = AppBanners.make(sensorState: state, latestLiveReadingDate: t0, health: healthy, now: t0, listening: listening)
+            XCTAssertTrue(unresolvedFree.contains { $0.kind == .sensorInterrupted }, "without the problem the credentials banner shows (S5)")
+        }
+        // Other sensor problems still show.
+        let other = AppBanners.make(sensorState: .bluetoothUnavailable(.poweredOff), latestLiveReadingDate: t0, health: health, now: t0)
+        XCTAssertTrue(other.contains { $0.kind == .bluetoothOff })
+    }
+
+    /// Nit: the setting banner names the cause.
+    func test_settingProblemBannerNamesTheCause() {
+        let cases: [(String, String)] = [
+            (Self.unreadable, "Connection setting couldn't be read"),
+            (Self.refused, "Connection setting doesn't match the sensor"),
+            (Self.failedSave, "Connection setting couldn't be saved"),
+            ("something new", "Connection setting can't be used"),
+        ]
+        for (problem, title) in cases {
+            var health = healthy
+            health.connectionSettingProblem = problem
+            let banner = AppBanners.make(sensorState: .notPaired, latestLiveReadingDate: nil, health: health, now: t0).first { $0.kind == .connectionSettingUnreadable }
+            XCTAssertEqual(banner?.title, title)
+            XCTAssertTrue(banner?.detail.hasPrefix(ConnectionSettingProblem(problem).explanation) == true)
+            XCTAssertTrue(banner?.detail.contains(problem) == true, "the services' words, for a bug report")
+        }
+    }
+
+    /// p2: onboarding's Continue goes to the services even for the mode shown, and always asks
+    /// first, while the setting is unresolved; Settings asks again and says why; packet recording
+    /// says a change lasts only until a restart.
+    func test_unresolvedSettingInOnboardingAndSettings() async {
+        let services = PreviewAppServices(sensorState: .failed(G7FailureReason.credentialsUnavailable))
+        services.connectionSettingProblem = Self.unreadable
+        let model = launch(services, onboardingCompleted: false)
+        model.presentOnboarding(at: .connection)
+        XCTAssertEqual(model.onboarding?.connectionSettingUnresolved, true)
+        XCTAssertEqual(model.onboarding?.continueNeedsConfirmation(for: .pair), true, "always confirmed, even for the mode shown")
+        XCTAssertEqual(model.settings.connection, ConnectionModeState(mode: nil), "Settings asks again")
+        XCTAssertEqual(model.settings.connectionSettingProblem, Self.unreadable)
+        XCTAssertEqual(model.settings.packetRecording?.unresolved, true)
+
+        model.chooseOnboardingConnection(.pair) // the mode the facade reports
+        model.continueFromConnectionStep()
+        await model.settle()
+        XCTAssertTrue(services.calls.contains("setConnectionMode(pair)"), "the services rewrite the setting and start the connection")
+        XCTAssertNil(services.connectionSettingProblem)
+        _ = await eventually { model.settings.connectionSettingProblem == nil }
+        XCTAssertEqual(model.settings.connection?.mode, .pair)
+        XCTAssertEqual(model.settings.packetRecording?.unresolved, false)
+        XCTAssertEqual(model.onboarding?.step, .importHistory)
     }
 }

@@ -119,6 +119,9 @@ struct ServiceHealth: Equatable, Sendable {
     var storage: StoreAvailability = .open
     /// iOS Bluetooth permission for this app.
     var bluetoothAuthorization: BluetoothAuthorization = .notDetermined
+    /// Review m2/m3 (`AppServices.connectionSettingProblem`): the sensor is not connected until the
+    /// person chooses Listen or Pair again.
+    var connectionSettingProblem: String? = nil
 
     /// Nothing configured, nothing wrong (used before Phase 2 wiring and in Release until then).
     static let unconfigured = ServiceHealth(
