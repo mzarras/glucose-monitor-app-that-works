@@ -10,7 +10,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | 1 — Parallel build | done (2026-09-23): all 7 workstreams merged into `integration`; gates 1–3 PASS |
 | 2 — Integration | **done (2026-10-06)**: Phase 2 + follow-ups (D43) merged into `integration`; all reviews PASS; all six §10 gates pass; **`main` = 4cce67f** (first merge since bootstrap) |
 | 3 — Hardening | **done (2026-10-06)**: audit + failure-mode pass + listen mode (D45–D51) merged (b38429b); all reviews PASS; gates 1–4 PASS on 3e11c21 (docs-only after) |
-| 4 — Device build | **done (2026-10-06)**: Release build of `main` ae2517c (zero warnings, Apple Development signing, team 375U565T3N, both App Groups, no DEBUG/replay code) installed on Michael's iPhone 15 Pro with `devicectl` and launched (app + widget extension running). Phase 3b follow-ups (review minors) in progress for the next install. |
+| 4 — Device build | **done (2026-10-06)**: Release of `main` 9365a50 (Phase 3b: name "glucose", icon A, review follow-ups) installed over the first install (data kept) and launched on Michael's iPhone 15 Pro. Earlier install: ae2517c. Next: p3c-services f22b75f (n1/n2, GlucoseStats timing) awaiting review. |
 
 ### Workstreams (Phase 1)
 
