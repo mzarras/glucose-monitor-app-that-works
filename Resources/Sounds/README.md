@@ -1,6 +1,6 @@
 # Alert sounds
 
-Eight original alert sounds for Sensor (HANDOFF §5 "Sounds").
+Eight original alert sounds for Sensor (HANDOFF §5 "Sounds"), and one silent file for vibrate-only alerts.
 
 ## Provenance
 
@@ -49,6 +49,13 @@ same app-bundle root (PROGRESS.md D13).
 | Doorbell (`alert-doorbell`) | two-note ding-dong (E5 C5) | sensor warm-up done, expiring, grace period | 2.60 s |
 | Warble (`alert-warble`) | low two-tone trill (F4/A4), three bursts | sensor failed/error/expired, Bluetooth, Trio bridge | 3.35 s |
 
+Plus one silent file, `alert-vibrate.caf` (1.00 s of digital silence, IMA4 CAF, same format): the
+notification sound of vibrate-only alerts (PROGRESS.md D53). iOS has no vibrate-only option for a
+local notification; it plays the vibration that goes with a notification sound, as Settings →
+Sounds & Haptics → Haptics allows, so a silent sound gives the vibration and no sound. That iOS
+vibrates for a silent custom sound in both ring and silent mode is a device check
+(docs/alerts.md §10). It is not one of the pickable sounds.
+
 SHA-256 (as printed by `generate_sounds.py --check`):
 
 | File | SHA-256 |
@@ -69,6 +76,7 @@ SHA-256 (as printed by `generate_sounds.py --check`):
 | `alert-doorbell.caf` | `f019359757febf5e8f93a8b1367707d0481722f02380ba8db06cfc9f07c43ad8` |
 | `alert-warble.wav` | `2e7335077d7a48b66dd5722b9450bd794861b9382745c86b950f4ba0aae8b029` |
 | `alert-warble.caf` | `e1099c6e4aa34c583e9eef6bb62427306b6f492feebd71a8fa7d6e1163ee6325` |
+| `alert-vibrate.caf` | `925c50300504a3f7518e8c1df72000e8d38e5497a58cc2783bfe7ef94cd36368` |
 
 ## Design rule
 

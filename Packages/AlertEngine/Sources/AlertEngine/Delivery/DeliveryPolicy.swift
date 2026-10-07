@@ -22,8 +22,13 @@
 //                                      on; vibrates on silent. The documented gap (D17).
 // With "Sound on silent" off: Time Sensitive with the sound (respects the switch).
 // Quiet hours: passive, no sound, no in-app sound — never for urgent low.
-// Sound turned off (an announcement, D43: the 24-hour expiry reminder by default): active, no sound,
-// no in-app sound — a visible notification. Never for urgent low (S7).
+// Style silent (an announcement, D43: the 24-hour expiry reminder by default): active, no sound, no
+// in-app sound — a visible notification. Never for urgent low (S7).
+// Style vibrate only (D53, D54): Time Sensitive, never Critical, whatever "Sound on silent" says
+// (hidden for vibrate only); the notification carries the silent `alert-vibrate.caf`, so iOS plays
+// only the vibration that goes with a notification sound; whenever the notification fires while the
+// app is awake, the app vibrates once (`inAppHaptic`) and never activates its audio session. Quiet
+// hours still make it passive with no vibration from the app. Never for urgent low (S7).
 // Urgent low always counts as "Sound on silent" on and is never silenced (S7). Only urgent low
 // uses system alarms (D26).
 //
@@ -68,6 +73,16 @@ public struct InAppSound: Sendable, Equatable {
     public let loopSeconds: TimeInterval
 }
 
+extension NotificationSoundChoice {
+    /// Whether it makes a sound at all: not for `.none` or the silent vibrate-only file (D53).
+    public var isAudible: Bool {
+        switch self {
+        case .none: return false
+        case .named(let fileName), .critical(let fileName, _): return fileName != AlertSoundCatalog.vibrateFileName
+        }
+    }
+}
+
 public struct DeliveryDecision: Sendable, Equatable {
     public let interruption: NotificationInterruption
     public let notificationSound: NotificationSoundChoice
@@ -75,22 +90,25 @@ public struct DeliveryDecision: Sendable, Equatable {
     public let inAppSound: InAppSound?
     /// Also schedule a system alarm (AlarmKit) playing this bundled file. `nil`: no alarm.
     public let systemAlarmSoundFileName: String?
+    /// Vibrate now from the app (D53 vibrate only, awake): in place of `inAppSound`.
+    public let inAppHaptic: Bool
 
     public init(interruption: NotificationInterruption, notificationSound: NotificationSoundChoice,
-                inAppSound: InAppSound?, systemAlarmSoundFileName: String? = nil) {
+                inAppSound: InAppSound?, systemAlarmSoundFileName: String? = nil, inAppHaptic: Bool = false) {
         self.interruption = interruption
         self.notificationSound = notificationSound
         self.inAppSound = inAppSound
         self.systemAlarmSoundFileName = systemAlarmSoundFileName
+        self.inAppHaptic = inAppHaptic
     }
 
     /// Orders decisions by how reliably they are heard with the phone on silent: 3 rings on silent
     /// even while suspended (Critical Alert, system alarm), 2 while awake (in-app sound), 1 only
-    /// with the ringer on, 0 silent.
+    /// with the ringer on, 0 not audible at all (silent, or vibrate only).
     public var loudness: Int {
-        if interruption == .critical || systemAlarmSoundFileName != nil { return 3 }
+        if (interruption == .critical && notificationSound.isAudible) || systemAlarmSoundFileName != nil { return 3 }
         if inAppSound != nil { return 2 }
-        if interruption == .timeSensitive && notificationSound != .none { return 1 }
+        if interruption == .timeSensitive && notificationSound.isAudible { return 1 }
         return 0
     }
 }
@@ -113,11 +131,22 @@ public enum DeliveryPolicy {
         let silenced = notice.isSilenced && !isUrgent
         let fileName = AlertSoundCatalog.fileName(notice.sound)
 
+        // S7 again: urgent low's style is always `.sound`, whatever the notice says.
+        let style = isUrgent ? .sound : notice.style
+
         if silenced {
             return DeliveryDecision(interruption: .passive, notificationSound: .none, inAppSound: nil)
         }
-        if !notice.playsSound && !isUrgent {
+        switch style {
+        case .silent:
             return DeliveryDecision(interruption: .active, notificationSound: .none, inAppSound: nil)
+        case .vibrateOnly:
+            // D54: "Sound on silent" (hidden for vibrate only) plays no part. Time Sensitive, never
+            // Critical; an awake app vibrates whenever the notification fires.
+            return DeliveryDecision(interruption: .timeSensitive, notificationSound: .named(fileName: AlertSoundCatalog.vibrateFileName),
+                                    inAppSound: nil, inAppHaptic: timing == .now)
+        case .sound:
+            break
         }
         if soundsOnSilent && criticalAlertsEnabled {
             return DeliveryDecision(

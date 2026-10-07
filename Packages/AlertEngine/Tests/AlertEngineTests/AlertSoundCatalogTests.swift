@@ -93,5 +93,23 @@ final class AlertSoundCatalogTests: XCTestCase {
         let fontNames = (try? FileManager.default.contentsOfDirectory(atPath: fonts.path)) ?? []
         XCTAssertTrue(Set(fontNames).isDisjoint(with: AlertSoundCatalog.all.map(\.fileName)))
         XCTAssertTrue(Set(fontNames).isDisjoint(with: AlertSoundCatalog.all.map { AlertSoundCatalog.alarmFileName($0.id) }))
+        XCTAssertFalse(fontNames.contains(AlertSoundCatalog.vibrateFileName))
+    }
+
+    /// D53: the vibrate-only notification sound is a short IMA4 CAF of digital silence, accepted by
+    /// UNNotificationSound (IMA/ADPCM in caf, < 30 s), and not a pickable sound.
+    func test_vibrateOnlySoundIsShortDigitalSilence() throws {
+        let file = try AVAudioFile(forReading: soundsDirectory.appendingPathComponent(AlertSoundCatalog.vibrateFileName))
+        XCTAssertEqual(file.fileFormat.streamDescription.pointee.mFormatID, kAudioFormatAppleIMA4)
+        XCTAssertEqual(file.fileFormat.channelCount, 1)
+        let seconds = Double(file.length) / file.fileFormat.sampleRate
+        XCTAssertGreaterThan(seconds, 0.5)
+        XCTAssertLessThan(seconds, 30)
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buffer)
+        let samples = UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength))
+        XCTAssertEqual(samples.count, Int(file.length))
+        XCTAssertTrue(samples.allSatisfy { $0 == 0 }, "digital silence, as Apple's decoder reads it")
+        XCTAssertFalse(AlertSoundCatalog.all.contains { $0.fileName == AlertSoundCatalog.vibrateFileName || AlertSoundCatalog.alarmFileName($0.id) == AlertSoundCatalog.vibrateFileName })
     }
 }

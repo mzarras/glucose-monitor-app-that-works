@@ -260,6 +260,9 @@ enum PairingError: Error, Sendable, Equatable {
     /// D45: pairing does not exist in listen mode (the Dexcom app owns the sensor); switch to
     /// pairing mode first (`setConnectionMode(.pair)`).
     case notAvailableInListenMode
+    /// Review n2: pairing while the connection setting was unresolved records pairing mode first;
+    /// that failed (the message says why), so nothing was paired. Choose again in Settings › Sensor.
+    case connectionSettingUnresolved(String)
 }
 
 /// Why `setConnectionMode(_:)` did not switch (D45). Nothing changed in every case.

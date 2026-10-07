@@ -107,6 +107,13 @@ final class FakeAudioPlayer: AlertAudioPlaying {
     func finish() { isPlaying = false }
 }
 
+/// Counts vibrations (D53 vibrate-only alerts while awake).
+@MainActor
+final class FakeAlertHaptics: AlertHaptics {
+    private(set) var vibrations = 0
+    func vibrate() { vibrations += 1 }
+}
+
 final class RecordingDiagnosticLog: DiagnosticLog, @unchecked Sendable {
     // @unchecked: test-only; every access is serialised by the lock.
     private let lock = NSLock()

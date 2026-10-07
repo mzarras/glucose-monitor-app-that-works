@@ -217,7 +217,7 @@ final class AlertSettingsTests: XCTestCase {
         s.sensorWarmUpComplete = EventAlertSettings(isEnabled: false, sound: .summit, soundsOnSilent: true)
         s.sensorExpiringIn24Hours.isEnabled = false
         s.sensorExpiringIn24Hours.playsSound = true
-        s.sensorExpiringIn12Hours = EventAlertSettings(isEnabled: false, sound: .sonar, soundsOnSilent: true, playsSound: false)
+        s.sensorExpiringIn12Hours = EventAlertSettings(isEnabled: false, sound: .sonar, soundsOnSilent: true, style: .silent)
         s.sensorExpiringIn2Hours.sound = .tide
         s.sensorGracePeriod.soundsOnSilent = true
         s.sensorFailed = StatusAlertSettings(isEnabled: false, sound: .sonar, soundsOnSilent: false, snoozeMinutes: 15)
