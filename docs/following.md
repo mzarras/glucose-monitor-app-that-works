@@ -59,8 +59,8 @@ If you rely on alarms, use LoopFollow (option 2); keep Dexcom Follow as a backup
 
 ## For Michael: configuration
 
-**Exactly one app uploads CGM readings to Nightscout: glucose.** Turn off glucose (CGM) upload in
-Trio; Trio keeps uploading its own data (loop status, treatments). How to do that in Trio and why
+**Exactly one app uploads CGM readings to Nightscout: this app (glucose).** Once it is paired (not
+while listening), turn off Trio's "Upload Glucose" (its CGM upload); Trio keeps uploading its own data (loop status, treatments). How to do that in Trio and why
 is in [docs/trio-bridge.md → Nightscout uploads](trio-bridge.md#nightscout-uploads). Nightscout
 only merges two uploads of a reading if their timestamps match to the millisecond
 (`sysTime` + `type`, cgm-remote-monitor `lib/server/entries.js:238-248`), so two uploaders would
