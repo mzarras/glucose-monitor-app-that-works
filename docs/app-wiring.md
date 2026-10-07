@@ -172,12 +172,16 @@ two unlabelled switches on a row invited turning a reminder off instead of mutin
 announcements (it replaces D43's Sound switch; the 24 h reminder is Silent by default); "Sensor
 expired" is a condition alert, so never Silent. Urgent low (`[.sound]`, S7) shows no choice, only
 "Urgent low always sounds (it can't be set to vibrate)." The sound picker and "Sound on silent" show
-only for Sound; Vibrate only says "Vibrates without sound. Easy to miss while asleep." Edits are
-`AlertEdit.style` → `setStyle(_:for:)` (the engine refuses what isn't allowed), all through
-`AlertStyleAdapter`. The list subtitle reads "vibrate only", "no sound", or the sound's name and
-"sounds on silent". "Set all to vibrate except urgent low" (top of the screen, confirmed;
-`AlertEdit.vibrateAllExceptUrgentLow`) turns every alert on Sound but urgent low to Vibrate only;
-Silent announcements stay silent, each alert can be set back on its page, defaults are unchanged.
+only for Sound; Vibrate only says "Vibrates without sound. Whether it vibrates depends on Settings ›
+Sounds & Haptics › Haptics. Easy to miss while asleep." (D54), and never mentions "Sound on silent",
+which the engine ignores for it (D54). Edits are `AlertEdit.style` → `setStyle(_:for:)` (the engine
+refuses what isn't allowed), all through `AlertStyleAdapter`. The list subtitle reads "vibrate only",
+"no sound", or the sound's name and "sounds on silent". "Set all to vibrate except urgent low and
+Low" (top of the screen; `AlertEdit.vibrateAllExceptUrgentLowAndLow`) turns every alert on Sound
+except urgent low (S7) and Low (Michael, D54) to Vibrate only, whether on or off
+(`AlertsMapping.vibrateAllKinds`, also `AlertsViewState.vibrateAllKinds`); its confirmation names
+every alert it changes and says that alerts off now will vibrate if turned on later. Silent
+announcements stay silent, each alert can be set back on its page, defaults are unchanged.
 DEBUG `-silenceAlertAudio` also passes `NoAlertHaptics` (no vibration). Screenshots:
 `alerts-expiry-reminders-*.png`, `alerts-expiry-24h-*.png` (`test_alertsShowTheSensorExpiryReminders`),
 `alerts-low-vibrate-only-*.png`, `alerts-list-vibrate-only-*.png` (`test_lowCanVibrateOnly`), with

@@ -16,11 +16,13 @@ final class SilentAlertAudioTests: XCTestCase {
         XCTAssertTrue(silenced.audio is SilentAlertAudioPlayer)
         XCTAssertTrue(silenced.notificationCenter is SilentNotificationCenter)
         XCTAssertTrue(silenced.alarms is SilentSystemAlarms)
+        XCTAssertTrue(silenced.haptics is NoAlertHaptics, "D53: no vibration either")
 
         let normal = AppEnvironment.makeAlertPorts(arguments: ["Sensor"], diagnostics: NullDiagnosticLog())
         XCTAssertTrue(normal.audio is PlaybackAlertAudioPlayer)
         XCTAssertTrue(normal.notificationCenter is UserNotificationCenterAdapter)
         XCTAssertTrue(normal.alarms is SystemAlarmAdapter)
+        XCTAssertNil(normal.haptics, "nil: AlertService uses the system vibration (SystemAlertHaptics)")
     }
 
     func test_silentPlayerPlaysNothingButReportsSuccess() {

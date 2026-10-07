@@ -1,6 +1,6 @@
 // Alerts screen (HANDOFF §5, §7.3.3, PROGRESS D17, D27, D53): every alert with its threshold, style
 // (sound / vibrate only / silent), sound-on-silent and on/off; quiet hours; per-alert detail with the
-// style choice, sound picker and preview; "Set all to vibrate except urgent low".
+// style choice, sound picker and preview; "Set all to vibrate except urgent low and Low" (D54).
 // Ranges come from AlertEngine's `AlertLimits` (via the rows' `allowed`, `AlertKind.snoozeRange`).
 //
 // S7: urgent low shows "Always on" instead of a toggle, has no style choice (always sound), its
@@ -86,19 +86,20 @@ struct AlertsContent: View {
         .padding(.bottom, 24)
     }
 
-    /// D53: one tap (confirmed) turns every sounding alert but urgent low to vibrate only; each can
-    /// be changed back on its page. Offered while any alert would change.
+    /// D53/D54: one tap (confirmed) turns every alert on Sound but urgent low and Low to vibrate
+    /// only; the confirmation names each one, and each can be changed back on its page. Offered while
+    /// any alert would change.
     @ViewBuilder
     private var vibrateAll: some View {
-        if state.rows.contains(where: { $0.kind != .urgentLow && $0.allowedStyles.contains(.vibrateOnly) && $0.style == .sound }) {
+        if !state.vibrateAllKinds.isEmpty {
             Button(AlertsText.vibrateAllButton) { confirmingVibrateAll = true }
                 .buttonStyle(LinkButtonStyle())
                 .frame(minHeight: Layout.minTarget)
                 .accessibilityIdentifier("alerts.vibrateAll")
                 .confirmationDialog(AlertsText.vibrateAllTitle, isPresented: $confirmingVibrateAll, titleVisibility: .visible) {
-                    Button(AlertsText.vibrateAllConfirm) { actions.edit(.vibrateAllExceptUrgentLow) }
+                    Button(AlertsText.vibrateAllConfirm) { actions.edit(.vibrateAllExceptUrgentLowAndLow) }
                 } message: {
-                    Text(verbatim: AlertsText.vibrateAllMessage)
+                    Text(verbatim: AlertsText.vibrateAllMessage(state.vibrateAllKinds))
                 }
         }
     }
