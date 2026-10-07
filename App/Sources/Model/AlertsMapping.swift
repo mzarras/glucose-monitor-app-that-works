@@ -24,9 +24,36 @@ enum AlertEdit: Equatable, Sendable {
     case delay(AlertKind, Int)
     /// Urgent low: repeat interval, minutes.
     case repeatInterval(AlertKind, Int)
-    /// D43: a one-off announcement's sound on or off (the engine refuses it for every other alert).
-    case playsSound(AlertKind, Bool)
+    /// D53: Sound / Vibrate only / Silent (one-off events). Refused for urgent low (S7).
+    case style(AlertKind, AlertStyleChoice)
+    /// D53 convenience: every alert that sounds, except urgent low, to vibrate only. Silent
+    /// announcements stay silent; urgent low is never touched (S7).
+    case vibrateAllExceptUrgentLow
     case quietHours(QuietHours)
+}
+
+/// D53: the alert style through AlertEngine — the only code that reads or writes it. Until WS4's
+/// `AlertStyle` (`style(_:)`, `setStyle(_:for:)`, `allowedStyles(for:)`) lands it reads the D43
+/// `playsSound` (Silent) and cannot store Vibrate only; wiring replaces these three functions.
+enum AlertStyleAdapter {
+    static func style(_ kind: AlertKind, in settings: AlertSettings) -> AlertStyleChoice {
+        kind.isEventAlert && !settings.playsSound(kind) ? .silent : .sound
+    }
+
+    /// Empty for urgent low (S7: always sound, no control).
+    static func allowedStyles(_ kind: AlertKind) -> [AlertStyleChoice] {
+        guard kind != .urgentLow else { return [] }
+        return kind.isEventAlert ? [.sound, .vibrateOnly, .silent] : [.sound, .vibrateOnly]
+    }
+
+    static func setStyle(_ style: AlertStyleChoice, for kind: AlertKind, in settings: inout AlertSettings) {
+        guard allowedStyles(kind).contains(style) else { return }
+        switch style {
+        case .sound: settings.setPlaysSound(true, for: kind)
+        case .silent: settings.setPlaysSound(false, for: kind)
+        case .vibrateOnly: break // stored once WS4's setStyle lands
+        }
+    }
 }
 
 enum AlertsMapping {
@@ -49,8 +76,8 @@ enum AlertsMapping {
             snoozeMinutes: settings.snoozeMinutes(kind),
             delayMinutes: nil,
             repeatMinutes: nil,
-            // Only the one-off announcements can be silent (`setPlaysSound` refuses the rest, S7).
-            playsSound: kind.isEventAlert ? settings.playsSound(kind) : nil
+            style: AlertStyleAdapter.style(kind, in: settings),
+            allowedStyles: AlertStyleAdapter.allowedStyles(kind)
         )
         switch kind {
         case .urgentLow:
@@ -108,8 +135,12 @@ enum AlertsMapping {
             if kind == .high { s.high.delayMinutes = minutes }
         case .repeatInterval(let kind, let minutes):
             if kind == .urgentLow { s.urgentLow.repeatMinutes = minutes }
-        case .playsSound(let kind, let on):
-            s.setPlaysSound(on, for: kind) // refuses everything but the one-off announcements
+        case .style(let kind, let style):
+            AlertStyleAdapter.setStyle(style, for: kind, in: &s) // refuses urgent low (S7)
+        case .vibrateAllExceptUrgentLow:
+            for kind in AlertKind.allCases where kind != .urgentLow && AlertStyleAdapter.style(kind, in: s) == .sound {
+                AlertStyleAdapter.setStyle(.vibrateOnly, for: kind, in: &s)
+            }
         case .quietHours(let quietHours):
             s.quietHours = quietHours
         }
