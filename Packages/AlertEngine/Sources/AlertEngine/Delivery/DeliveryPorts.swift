@@ -21,6 +21,31 @@ public protocol AlertNotificationCenter: AnyObject {
     func removeDelivered(identifiers: [String])
 }
 
+/// Vibrates the phone once (D53: an awake app's vibrate-only alert). Must not touch the audio session.
+@MainActor
+public protocol AlertHaptics: AnyObject {
+    func vibrate()
+}
+
+/// No vibration: the macOS host, and DEBUG `-silenceAlertAudio` runs.
+@MainActor
+public final class NoAlertHaptics: AlertHaptics {
+    public init() {}
+    public func vibrate() {}
+}
+
+public enum AlertHapticsDefault {
+    /// The system vibration on iOS (`SystemAlertHaptics`), nothing elsewhere.
+    @MainActor
+    public static func make() -> any AlertHaptics {
+        #if os(iOS)
+        return SystemAlertHaptics()
+        #else
+        return NoAlertHaptics()
+        #endif
+    }
+}
+
 @MainActor
 public protocol AlertAudioPlaying: AnyObject {
     /// Starts playing a bundled file through AVAudioSession `.playback` (audible with the ringer
