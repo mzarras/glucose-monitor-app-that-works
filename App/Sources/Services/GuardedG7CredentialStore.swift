@@ -12,6 +12,8 @@
 // "Forget sensor" / "Stop following this sensor", and choosing a mode again after a problem. A
 // refused deletion leaves the record as it was; G7Kit then reports the store as unavailable and the
 // services surface `connectionSettingProblem` and keep the source stopped until the person chooses.
+// A mode switch (`switchingMode`) keeps a stored record that already belongs to the new mode (review
+// n1): choosing the mode the pairing really is in must not cost the pairing.
 
 import Foundation
 import G7Kit
@@ -23,6 +25,9 @@ final class GuardedG7CredentialStore: G7CredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private var allowedDeletions = 0
     private var refusal: String?
+    /// While switching modes (`switchingMode`): a stored record of this kind (true: listen) is kept.
+    private var keepRecordOfKind: Bool?
+    private var kept: String?
 
     /// Thrown by `delete()` outside `allowingDeletion(_:)`.
     struct DeletionNotRequested: Error, CustomStringConvertible {
@@ -39,6 +44,13 @@ final class GuardedG7CredentialStore: G7CredentialStore, @unchecked Sendable {
     func save(_ record: G7PairingRecord) throws { try inner.save(record) }
 
     func delete() throws {
+        if let keep = lock.withLock({ keepRecordOfKind }), let stored = try inner.load(), stored.isListenRecord == keep {
+            // Review n1: the stored pairing already belongs to the mode being switched to (the source
+            // was created in the other mode because the setting was wrong): G7Kit's setMode would
+            // drop it, but it is exactly what the new mode loads next.
+            lock.withLock { kept = "kept the \(keep ? "listen-mode" : "pairing-mode") record of \(stored.serial ?? "no sensor yet") through the mode switch" }
+            return
+        }
         guard lock.withLock({ allowedDeletions > 0 }) else {
             let stored = try? inner.load()
             let kind = stored.map { $0.isListenRecord ? "listen-mode" : "pairing-mode" } ?? "stored"
@@ -56,6 +68,23 @@ final class GuardedG7CredentialStore: G7CredentialStore, @unchecked Sendable {
         defer { lock.withLock { allowedDeletions -= 1 } }
         return try await body()
     }
+
+    /// Runs a mode switch (`G7CGMSource.setMode`, which always deletes the stored record): deletions
+    /// are allowed, except of a stored record that already belongs to the mode switched to, which is
+    /// kept so the new mode resumes it (review n1). In a consistent state the stored record always
+    /// belongs to the old mode and is deleted as G7Kit intends.
+    @MainActor
+    func switchingMode<T>(toListen listening: Bool, _ body: @MainActor () async throws -> T) async rethrows -> T {
+        lock.withLock {
+            keepRecordOfKind = listening
+            kept = nil
+        }
+        defer { lock.withLock { keepRecordOfKind = nil } }
+        return try await allowingDeletion(body)
+    }
+
+    /// What the last `switchingMode` kept (nil: nothing).
+    var keptOnSwitch: String? { lock.withLock { kept } }
 
     /// The latest refused deletion (nil: none since `clearRefusal()`).
     var refusedDeletion: String? { lock.withLock { refusal } }

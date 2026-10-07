@@ -7,7 +7,7 @@ import GlucoseCore
 /// numbers are printed so they can be recorded in docs/statistics.md.
 ///
 /// What is asserted: the **thread CPU time** of the timed call (`CLOCK_THREAD_CPUTIME_ID`), best of
-/// 7 runs, measured on a dedicated thread with `.userInteractive` QoS so the scheduler prefers a
+/// 7 runs (repeated up to 5 times while over budget, `timedWithinBudget`), measured on a dedicated thread with `.userInteractive` QoS so the scheduler prefers a
 /// performance core. Wall-clock time also counts time the thread spends waiting for a core, and this
 /// project runs many builds and test suites in parallel on one machine, so wall clock made the gate
 /// flaky (one run measured 77–95 ms wall for ~21 ms of work). CPU time counts only the work. Wall
@@ -72,6 +72,24 @@ final class PerformanceTests: XCTestCase {
         return (measurement.timing!, measurement.result!, measurement.qualityOfService)
     }
 
+    /// Gate fragility (Phase 3b review): under heavy machine load even thread CPU time rises (the
+    /// thread can land on an efficiency core, caches are shared), and one loaded measurement measured
+    /// 104 ms for ~60 ms of work. A measurement over `budget` is therefore repeated, up to `attempts`
+    /// times, keeping the best; a real regression is over budget every time.
+    private func timedWithinBudget<Result: Sendable>(
+        _ budget: Double, attempts: Int = 5, _ body: @escaping @Sendable () -> Result
+    ) -> (timing: Timing, result: Result, qualityOfService: qos_class_t) {
+        var best = timed(body)
+        var attempt = 1
+        while best.timing.cpuBest >= budget, attempt < attempts {
+            attempt += 1
+            let next = timed(body)
+            if next.timing.cpuBest < best.timing.cpuBest { best = next }
+        }
+        if attempt > 1 { print("GlucoseStats: measured \(attempt) times (over budget under load)") }
+        return best
+    }
+
     private func report(_ label: String, _ timing: Timing) {
         print(String(format: "GlucoseStats %@: CPU best %.2f ms, median %.2f ms; wall best %.2f ms, median %.2f ms (7 runs, userInteractive thread)",
                      label, timing.cpuBest, timing.cpuMedian, timing.wallBest, timing.wallMedian))
@@ -82,7 +100,7 @@ final class PerformanceTests: XCTestCase {
         XCTAssertEqual(readings.count, 25_920)
         let interval = DateInterval(start: Fixture.day0, duration: 90 * Fixture.day)
 
-        let measured = timed {
+        let measured = timedWithinBudget(Self.hostBudgetMilliseconds) {
             GlucoseStatistics.compute(readings: readings, interval: interval, options: Fixture.newYorkOptions)
         }
         report("90-day compute", measured.timing)
@@ -98,7 +116,7 @@ final class PerformanceTests: XCTestCase {
         let readings = Fixture.ninetyDays() + Fixture.ninetyDays(from: Fixture.day0.addingTimeInterval(90 * Fixture.day))
         let now = Fixture.day0.addingTimeInterval(180 * Fixture.day - 1)
 
-        let measured = timed {
+        let measured = timedWithinBudget(2 * Self.hostBudgetMilliseconds) {
             GlucoseStatistics.compare(readings: readings, period: .ninetyDays, now: now, options: Fixture.utcOptions)
         }
         report("90-day comparison (2 × 90 days)", measured.timing)

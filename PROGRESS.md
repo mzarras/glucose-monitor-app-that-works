@@ -10,7 +10,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | 1 — Parallel build | done (2026-09-23): all 7 workstreams merged into `integration`; gates 1–3 PASS |
 | 2 — Integration | **done (2026-10-06)**: Phase 2 + follow-ups (D43) merged into `integration`; all reviews PASS; all six §10 gates pass; **`main` = 4cce67f** (first merge since bootstrap) |
 | 3 — Hardening | **done (2026-10-06)**: audit + failure-mode pass + listen mode (D45–D51) merged (b38429b); all reviews PASS; gates 1–4 PASS on 3e11c21 (docs-only after) |
-| 4 — Device build | **done (2026-10-06)**: Release build of `main` ae2517c (zero warnings, Apple Development signing, team 375U565T3N, both App Groups, no DEBUG/replay code) installed on Michael's iPhone 15 Pro with `devicectl` and launched (app + widget extension running). Phase 3b follow-ups (review minors) in progress for the next install. |
+| 4 — Device build | **done (2026-10-06)**: Release of `main` 9365a50 (Phase 3b: name "glucose", icon A, review follow-ups) installed over the first install (data kept) and launched on Michael's iPhone 15 Pro. Earlier install: ae2517c. Next: p3c-services f22b75f (n1/n2, GlucoseStats timing) awaiting review. |
 
 ### Workstreams (Phase 1)
 
@@ -86,6 +86,8 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D50 | **Amends D49(1):** in listen mode Write_Control is subscribed **only after an observed authenticated + bonded `05`** (as xDrip4iOS 7.1.0 and G7SensorKit do); the status-0 `0x4E` proof path is removed. A missed `05` loses that wake (visible through missed readings). Listen mode attaches only to peripherals named `DXCM`/`Dexcom` + 2 characters and retries only the followed sensor. D49(2) (one `52` per connection from the second proven wake) stands. | P3 G7Kit review B1: subscribing an encryption-required characteristic before the Dexcom app authenticates is something neither reference does; unknown effect on the treatment sensor's link, and the benefit is nil (the current Dexcom app uses `0x31`/`0x25`, not `0x4E`). |
 | D51 | **Urgent low hands over to Low at snooze end.** When an acknowledged urgent low's snooze ends and the latest reading is in the 5 mg/dL recovery band (56–60), the urgent-low episode stops holding the snooze: urgent low re-arms and the Low alert (≤ 70 by default) is evaluated normally, so it fires. Previously a band reading kept urgent low "snoozed" forever and Low silent. | P3 package review M1 (pre-existing): 50 acknowledged, then 58 for 90 min → nothing sounded. |
 | D52 | **App name "glucose"** (lower case, matching the Now screen's wordmark): `APP_DISPLAY_NAME = glucose`. The bundle ID stays `com.mzarras.sensor` (invisible to the user) so today's install keeps its data and listen-mode setup; targets, packages and the repo keep the working name. **App icon**: the Now screen's trend arrow (accent.forest `#2F6B4F`, `TrendArrowShape`) with "mg/dL" under it in IBM Plex Mono, ink `#1B1A17`, on the light background `#F4F1EA`. | Michael, 2026-10-06. |
+| D53 | **Vibrate-only alerts.** Every alert except urgent low gets an alert style: **Sound** (its named sound; "sound on silent" as before), **Vibrate only** (no audible sound: the notification carries a silent sound file so iOS plays its vibration, and an awake app vibrates instead of playing audio), and, for one-off events, **Silent** (banner only; the D43 `playsSound = false`). Urgent low stays Sound on the loudest path (S7). Defaults unchanged; Michael sets his own. Whether iOS vibrates for a silent notification sound in ring and silent mode is a §11 device check. | Michael, 2026-10-07: wants most notifications to vibrate, critical ones to sound. |
+| D54 | D53 refinements after review. (1) **"Set all to vibrate" keeps Low on Sound** as well as urgent low (Michael: Low keeps its sound); the dialog lists every alert it changes. (2) Vibrate-only **ignores the hidden "sound on silent"** setting: Time Sensitive where the alert is, never Critical; an awake app vibrates whenever the notification would (quiet hours still silence). (3) The UI and docs name iOS Settings › Sounds & Haptics › Haptics, which decides whether a vibrate-only notification vibrates; §11 check covers each Haptics option. | Michael, 2026-10-07 (keep Low on sound); D53 review m1–m3. |
 
 ## Discrepancies with HANDOFF (resolved)
 
@@ -156,6 +158,11 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Nightscout token (read + write), when ready — enter it in the app, not in chat or files.
 
 ## Phase log
+
+### 2026-10-07 — Vibrate-only alerts (D53/D54) and p3c services fixes
+- p4-stage cfeb31f = p3c-services f22b75f (n1 keep-on-switch, n2 pair resolves the setting, GlucoseStats best-of-5 timing) + p4-alerts 2310f37/05bcb18 + p4-app c5b95d6/059f737/1e65564.
+- Reviews: p3c services PASS (nits p1 pairAgain while unresolved, p2 "Pair again" guidance while unresolved, p3 theoretical keep window — backlog); D53 PASS (m1–m4 → D54) and D54 verification PASS. Gates: check.sh exit 0 on cfeb31f (reviewer run): app unit 290, S1 51, S2 93, S3 75, S4 51, S5 165, S6 40, S7 53, S8 5.
+- Device check open for Michael: docs/alerts.md check 11 (vibrate-only vibrates per Haptics option; foreground double vibration).
 
 ### 2026-10-06 — Phase 3 merged
 - Full audit (docs/safety-review.md) PASS with 18 minors, all resolved (§8 of that doc). Failure-mode pass across services, screens and AlertEngine (docs/failure-modes.md).

@@ -344,6 +344,7 @@ final class LiveAppServices: AppServices {
 
     func pair(code: String) async throws(PairingError) {
         guard !isReplaying else { throw .replayActive }
+        try await resolveConnectionSettingForPairing()
         do {
             try await g7.pair(code: code)
             g7Started = true
@@ -359,6 +360,7 @@ final class LiveAppServices: AppServices {
 
     func pairAgain(code: String) async throws(PairingError) {
         guard !isReplaying else { throw .replayActive }
+        try await resolveConnectionSettingForPairing()
         do {
             try await g7.pairAgain(code: code)
             g7Started = true

@@ -17,6 +17,9 @@ struct AlertPorts {
     /// Calendar and locale for quiet hours and notification text (the phone's by default).
     let configuration: AlertEngineConfiguration
     let diagnostics: any DiagnosticLog
+    /// The in-app vibration for vibrate-only alerts (D53); nil uses the system vibration
+    /// (`SystemAlertHaptics`). DEBUG `-silenceAlertAudio`: `NoAlertHaptics`.
+    var haptics: (any AlertHaptics)? = nil
 
     /// The production service: restores the persisted engine snapshot and persists every new one
     /// (acknowledgements and snoozes survive a relaunch). Call `start()` on it.
@@ -24,7 +27,7 @@ struct AlertPorts {
                                onSnapshot: @escaping @MainActor (AlertEngineSnapshot) -> Void) -> AlertService {
         AlertService(
             settings: settings, restoring: snapshot, configuration: configuration, clock: clock,
-            notificationCenter: notificationCenter, audio: audio, systemAlarms: alarms, diagnostics: diagnostics,
+            notificationCenter: notificationCenter, audio: audio, systemAlarms: alarms, haptics: haptics, diagnostics: diagnostics,
             onSnapshot: onSnapshot
         )
     }
@@ -37,7 +40,7 @@ struct AlertPorts {
         replayConfiguration.acceptsReplayReadings = true
         return AlertService(
             settings: settings, restoring: nil, configuration: replayConfiguration, clock: clock,
-            notificationCenter: notificationCenter, audio: audio, systemAlarms: alarms, diagnostics: diagnostics
+            notificationCenter: notificationCenter, audio: audio, systemAlarms: alarms, haptics: haptics, diagnostics: diagnostics
         )
     }
     #endif

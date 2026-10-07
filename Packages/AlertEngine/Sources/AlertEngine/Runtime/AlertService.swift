@@ -27,6 +27,8 @@ public final class AlertService {
     /// - Parameters:
     ///   - snapshot: what `onSnapshot` last delivered, or `nil` on first launch.
     ///   - systemAlarms: AlarmKit (iOS 26+) for urgent low (D26); `nil` to use the D17 path only.
+    ///   - haptics: the in-app vibration for vibrate-only alerts (D53); `nil` uses the system
+    ///     vibration on iOS. DEBUG `-silenceAlertAudio` runs pass `NoAlertHaptics()`.
     ///   - onSnapshot: called after every input with the engine state to persist.
     public init(
         settings: AlertSettings,
@@ -36,11 +38,13 @@ public final class AlertService {
         notificationCenter: AlertNotificationCenter,
         audio: AlertAudioPlaying,
         systemAlarms: SystemAlarmScheduling? = nil,
+        haptics: AlertHaptics? = nil,
         diagnostics: DiagnosticLog = NullDiagnosticLog(),
         onSnapshot: @escaping @MainActor (AlertEngineSnapshot) -> Void = { _ in }
     ) {
         self.engine = AlertEngine(settings: settings, configuration: configuration, restoring: snapshot, now: clock.now, uptime: clock.uptime)
-        self.executor = AlertDeliveryExecutor(center: notificationCenter, audio: audio, alarms: systemAlarms, diagnostics: diagnostics, clock: clock)
+        self.executor = AlertDeliveryExecutor(center: notificationCenter, audio: audio, alarms: systemAlarms, haptics: haptics,
+                                              diagnostics: diagnostics, clock: clock)
         self.clock = clock
         self.center = notificationCenter
         self.audio = audio

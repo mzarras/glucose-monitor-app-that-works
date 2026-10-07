@@ -8,6 +8,7 @@ import GlucoseCore
 public final class AlertDeliveryExecutor {
     private let center: AlertNotificationCenter
     private let audio: AlertAudioPlaying
+    private let haptics: AlertHaptics
     private let alarms: SystemAlarmScheduling?
     private let diagnostics: DiagnosticLog
     private let clock: AlertClock
@@ -33,12 +34,15 @@ public final class AlertDeliveryExecutor {
     /// the engine (D43 review B1). `AlertService` takes them after each batch.
     private var refusedReminders: [AlertNotice] = []
 
+    /// - Parameter haptics: the in-app vibration for vibrate-only alerts (D53); `nil` uses the
+    ///   system vibration on iOS (`AlertHapticsDefault.make()`).
     public init(
         center: AlertNotificationCenter, audio: AlertAudioPlaying, alarms: SystemAlarmScheduling? = nil,
-        diagnostics: DiagnosticLog, clock: AlertClock
+        haptics: AlertHaptics? = nil, diagnostics: DiagnosticLog, clock: AlertClock
     ) {
         self.center = center
         self.audio = audio
+        self.haptics = haptics ?? AlertHapticsDefault.make()
         self.alarms = alarms
         self.diagnostics = diagnostics
         self.clock = clock
@@ -75,9 +79,7 @@ public final class AlertDeliveryExecutor {
                 }
             }
             log("fire \(notice.kind.rawValue): \(Self.describe(decision))")
-            if let sound = decision.inAppSound {
-                playInApp(sound, for: notice.kind)
-            }
+            deliverInApp(decision, for: notice.kind)
             _ = await add(NotificationRequestBuilder.request(for: notice, decision: decision))
 
         case .playDueAlert(let notice):
@@ -88,24 +90,20 @@ public final class AlertDeliveryExecutor {
                 decision = decide(notice, .now, alarmsAvailable: false)
                 log("due \(notice.kind.rawValue): its alarm is missing; in-app sound instead")
             }
-            log("due \(notice.kind.rawValue): \(decision.inAppSound == nil ? "notification or alarm only" : "in-app sound")")
-            if let sound = decision.inAppSound {
-                playInApp(sound, for: notice.kind)
-            }
+            log("due \(notice.kind.rawValue): \(decision.inAppSound != nil ? "in-app sound" : decision.inAppHaptic ? "in-app vibration" : "notification or alarm only")")
+            deliverInApp(decision, for: notice.kind)
 
         case .ensurePosted(let notice, let soundIfPresent):
             let decision = decide(notice, .now)
             let request = NotificationRequestBuilder.request(for: notice, decision: decision)
             if await center.presentIdentifiers().contains(request.identifier) {
-                log("due \(notice.kind.rawValue): notification is out\(soundIfPresent && decision.inAppSound != nil ? "; in-app sound" : "")")
-                if soundIfPresent, let sound = decision.inAppSound {
-                    playInApp(sound, for: notice.kind)
+                log("due \(notice.kind.rawValue): notification is out\(soundIfPresent ? "; " + Self.describe(decision) : "")")
+                if soundIfPresent {
+                    deliverInApp(decision, for: notice.kind)
                 }
             } else {
                 log("due \(notice.kind.rawValue): notification MISSING (not added, or removed); posting now: \(Self.describe(decision))")
-                if let sound = decision.inAppSound {
-                    playInApp(sound, for: notice.kind)
-                }
+                deliverInApp(decision, for: notice.kind)
                 _ = await add(request)
             }
 
@@ -222,6 +220,17 @@ public final class AlertDeliveryExecutor {
         if allSucceeded { alarmScheduleFailure = nil }
     }
 
+    /// What the app itself does while awake: the `.playback` sound, or (vibrate only, D53) one
+    /// vibration — which never activates the audio session.
+    private func deliverInApp(_ decision: DeliveryDecision, for kind: AlertKind) {
+        if let sound = decision.inAppSound {
+            playInApp(sound, for: kind)
+        } else if decision.inAppHaptic {
+            haptics.vibrate()
+            log("in-app vibration for \(kind.rawValue)")
+        }
+    }
+
     private func playInApp(_ sound: InAppSound, for kind: AlertKind) {
         if let owner = soundOwner, audio.isPlaying, owner.priority < kind.priority {
             log("in-app sound kept for \(owner.rawValue); \(kind.rawValue) not played")
@@ -273,8 +282,11 @@ public final class AlertDeliveryExecutor {
         case .critical: level = "critical"
         }
         var parts = [level]
+        if case .named(let file) = decision.notificationSound, file == AlertSoundCatalog.vibrateFileName { parts.append("vibrate only") }
+        if case .critical(let file, _) = decision.notificationSound, file == AlertSoundCatalog.vibrateFileName { parts.append("vibrate only") }
         if decision.systemAlarmSoundFileName != nil { parts.append("system alarm") }
         if decision.inAppSound != nil { parts.append("in-app sound") }
+        if decision.inAppHaptic { parts.append("in-app vibration") }
         return parts.joined(separator: " + ")
     }
 }

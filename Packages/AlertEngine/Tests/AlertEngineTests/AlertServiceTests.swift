@@ -9,6 +9,7 @@ final class ServiceHarness {
     let clock: TestClock
     let center: FakeNotificationCenter
     let audio = FakeAudioPlayer()
+    let haptics = FakeAlertHaptics()
     let log = RecordingDiagnosticLog()
     let alarms: FakeSystemAlarms?
     private(set) var snapshots: [AlertEngineSnapshot] = []
@@ -23,7 +24,7 @@ final class ServiceHarness {
         self.alarms = alarms
         service = AlertService(
             settings: settings, restoring: snapshot, configuration: Fixtures.configuration, clock: self.clock,
-            notificationCenter: self.center, audio: audio, systemAlarms: alarms, diagnostics: log,
+            notificationCenter: self.center, audio: audio, systemAlarms: alarms, haptics: haptics, diagnostics: log,
             onSnapshot: { [weak self] in self?.snapshots.append($0) }
         )
     }

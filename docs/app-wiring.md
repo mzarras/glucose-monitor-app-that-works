@@ -164,14 +164,28 @@ Tests: `TrendsMappingTests`, `AppModelWiringTests.test_trendsFromTheStore`.
 Rows are AlertEngine's own `AlertKind`s (the app has no alert enum; D42 added "History isn't being
 saved", `storageFailing`, sound-on-silent off by default). D43: the five sensor expiry reminders
 (`AlertKind.sensorExpiryReminders`: 24 h, 12 h, 2 h, grace start, expired) are their own section,
-"Sensor expiry reminders", in the order they come due. Each row has one switch (on/off) and says
-"no sound" or the sound's name; the one-off announcements' Sound switch (`AlertSettings.playsSound` /
-`setPlaysSound`, `AlertEdit.playsSound`; 24 h off by default) is on the reminder's page, above "Sound
-on silent", which is disabled while Sound is off (review m8: two unlabelled switches on a row invited
-turning a reminder off instead of muting it). "Sensor expired" always sounds, and urgent low never
-gets a Sound switch (S7: its row has no `playsSound`, and the engine refuses the edit). Screenshots: `alerts-expiry-reminders-*.png`,
-`alerts-expiry-24h-*.png` (taken by `test_alertsShowTheSensorExpiryReminders` with
-`SENSOR_WRITE_SCREENSHOTS=1`). Rows are built from `alertSettings` by
+"Sensor expiry reminders", in the order they come due. Each row has one switch (on/off; review m8:
+two unlabelled switches on a row invited turning a reminder off instead of muting it).
+
+**Alert style (D53).** Each alert's page has an "Alert style" choice from AlertEngine's
+`allowedStyles(for:)`: Sound / Vibrate only for condition alerts, plus Silent for the one-off
+announcements (it replaces D43's Sound switch; the 24 h reminder is Silent by default); "Sensor
+expired" is a condition alert, so never Silent. Urgent low (`[.sound]`, S7) shows no choice, only
+"Urgent low always sounds (it can't be set to vibrate)." The sound picker and "Sound on silent" show
+only for Sound; Vibrate only says "Vibrates without sound. Whether it vibrates depends on Settings ›
+Sounds & Haptics › Haptics. Easy to miss while asleep." (D54), and never mentions "Sound on silent",
+which the engine ignores for it (D54). Edits are `AlertEdit.style` → `setStyle(_:for:)` (the engine
+refuses what isn't allowed), all through `AlertStyleAdapter`. The list subtitle reads "vibrate only",
+"no sound", or the sound's name and "sounds on silent". "Set all to vibrate except urgent low and
+Low" (top of the screen; `AlertEdit.vibrateAllExceptUrgentLowAndLow`) turns every alert on Sound
+except urgent low (S7) and Low (Michael, D54) to Vibrate only, whether on or off
+(`AlertsMapping.vibrateAllKinds`, also `AlertsViewState.vibrateAllKinds`); its confirmation names
+every alert it changes and says that alerts off now will vibrate if turned on later. Silent
+announcements stay silent, each alert can be set back on its page, defaults are unchanged.
+DEBUG `-silenceAlertAudio` also passes `NoAlertHaptics` (no vibration). Screenshots:
+`alerts-expiry-reminders-*.png`, `alerts-expiry-24h-*.png` (`test_alertsShowTheSensorExpiryReminders`),
+`alerts-low-vibrate-only-*.png`, `alerts-list-vibrate-only-*.png` (`test_lowCanVibrateOnly`), with
+`SENSOR_WRITE_SCREENSHOTS=1`. Rows are built from `alertSettings` by
 `AlertsMapping.make`; every range comes from `AlertLimits` (the Phase 1 screen's own Low 60–100 /
 High 120–400 / rate 2–5 clamps are gone). An edit is `AlertsMapping.apply(edit, to:)` — the
 settings types' clamping setters — then `updateAlertSettings`. Edits made before the facade

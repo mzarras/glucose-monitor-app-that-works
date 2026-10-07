@@ -163,7 +163,8 @@ final class ReplayLaunchUITests: XCTestCase {
 
     /// The Alerts tab groups the sensor expiry reminders (24 h, 12 h, 2 h, grace start, expired). Each
     /// row has one switch (on/off; review m8: no Sound switch in the list); an announcement's page has
-    /// the Sound switch (24 h off by default); urgent low's page has none (S7).
+    /// the alert style choice (D53; 24 h Silent by default); urgent low's page has none, only its
+    /// note (S7).
     /// With SENSOR_WRITE_SCREENSHOTS=1 (TEST_RUNNER_ prefix through xcodebuild) it also saves the
     /// list and the 24 h reminder's page to docs/screenshots, named with SENSOR_SCREENSHOT_SCHEME.
     func test_alertsShowTheSensorExpiryReminders() throws {
@@ -172,7 +173,8 @@ final class ReplayLaunchUITests: XCTestCase {
         XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout))
         tapWhenReady(urgentLow)
         XCTAssertTrue(app.staticTexts["Urgent low"].waitForExistence(timeout: timeout))
-        XCTAssertFalse(element(app, "alerts.detail.sound").exists, "S7: no Sound switch for urgent low")
+        XCTAssertFalse(element(app, "alerts.detail.style").exists, "S7: no style choice for urgent low")
+        XCTAssertTrue(app.staticTexts["Urgent low always sounds (it can't be set to vibrate)."].exists)
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout))
         let first = element(app, "alerts.row.sensorExpiringIn24Hours")
@@ -189,10 +191,35 @@ final class ReplayLaunchUITests: XCTestCase {
         try saveScreenshot("alerts-expiry-reminders")
         first.tap()
         XCTAssertTrue(app.staticTexts["Sensor expires in 24 h"].waitForExistence(timeout: timeout))
-        let sound = app.switches.matching(identifier: "alerts.detail.sound").firstMatch
-        XCTAssertTrue(sound.waitForExistence(timeout: timeout), "the Sound switch is on the reminder's page")
-        XCTAssertEqual(sound.value as? String, "0", "24 h: no sound by default")
+        let style = app.segmentedControls["alerts.detail.style"]
+        XCTAssertTrue(style.waitForExistence(timeout: timeout), "the style choice is on the reminder's page")
+        XCTAssertTrue(style.buttons["Silent"].isSelected, "24 h: no sound by default")
+        XCTAssertFalse(app.staticTexts["SOUND"].exists, "no sound picker while silent")
         try saveScreenshot("alerts-expiry-24h")
+    }
+
+    /// D53: Low set to vibrate only — the detail page hides the sound settings and explains it, the
+    /// list subtitle says "vibrate only"; back to Sound restores them.
+    func test_lowCanVibrateOnly() throws {
+        let app = launch(scenario: "steady", minute: 60, extra: ["-tab", "alerts"])
+        let low = element(app, "alerts.row.low")
+        tapWhenReady(low)
+        let style = app.segmentedControls["alerts.detail.style"]
+        XCTAssertTrue(style.waitForExistence(timeout: timeout))
+        XCTAssertTrue(style.buttons["Sound"].isSelected, "default: sound")
+        XCTAssertTrue(app.staticTexts["SOUND"].exists)
+        style.buttons["Vibrate only"].tap()
+        waitForLabel(element(app, "alerts.detail.styleNote"), "the vibrate-only note") { $0.hasPrefix("Vibrates without sound.") && $0.contains("Settings › Sounds & Haptics › Haptics") }
+        XCTAssertFalse(app.staticTexts["SOUND"].exists, "no sound picker for vibrate only")
+        XCTAssertFalse(app.switches["Sound on silent"].exists)
+        try saveScreenshot("alerts-low-vibrate-only")
+        app.navigationBars.buttons.firstMatch.tap()
+        waitForLabel(low, "the list says vibrate only") { $0.contains("vibrate only") }
+        try saveScreenshot("alerts-list-vibrate-only")
+        tapWhenReady(low)
+        XCTAssertTrue(style.waitForExistence(timeout: timeout))
+        style.buttons["Sound"].tap()
+        XCTAssertTrue(app.staticTexts["SOUND"].waitForExistence(timeout: timeout), "back to Sound: the picker returns")
     }
 
     /// Writes the screen to docs/screenshots when asked (see above).
