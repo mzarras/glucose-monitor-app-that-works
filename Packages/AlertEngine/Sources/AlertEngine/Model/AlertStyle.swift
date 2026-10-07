@@ -7,8 +7,9 @@ public enum AlertStyle: String, Sendable, Equatable, Hashable, Codable, CaseIter
     case sound
     /// No audible sound. The notification carries a silent sound file
     /// (`AlertSoundCatalog.vibrateFileName`), so iOS plays the vibration that goes with a
-    /// notification sound (governed by Settings → Sounds & Haptics → Haptics); an awake app
-    /// vibrates instead of playing audio. Interruption levels and repeats are as for `.sound`.
+    /// notification sound (governed by Settings › Sounds & Haptics › Haptics); an awake app
+    /// vibrates once whenever the notification fires. Time Sensitive, never Critical; "Sound on
+    /// silent" plays no part (D54). Repeats vibrate too; quiet hours still silence it.
     case vibrateOnly
     /// One-off announcements only: the banner, no sound, no vibration (D43's sound switch off).
     case silent
