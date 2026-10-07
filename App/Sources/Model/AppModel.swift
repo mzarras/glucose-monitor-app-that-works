@@ -204,14 +204,12 @@ final class AppModel {
         #endif
         refreshConnection()
         settings.appearance = preferences.appearance
-        // Phase 3: the tab and Trends period from before the app was killed (an explicit `-tab`
-        // launch argument wins).
+        // Phase 3: the Trends period from before the app was killed. A cold launch always opens Now
+        // (P3 review m6: a notification or widget tap must land on the current reading), unless a
+        // `-tab` launch argument picks another tab.
         if let period = preferences.trendsPeriod, period != trends.period, !trendsComputed {
             trends = .empty(period: period)
             trendsStale = true
-        }
-        if !launchArguments.contains("-tab"), let tab = preferences.selectedTab {
-            selectTab(tab)
         }
         // The stored need, or one seen since launch, kept or cleared by the state now (review minor 4).
         let needsCalibration = CalibrationNeed.update(previous: preferences.sensorNeedsCalibration || now.sensorNeedsCalibration,
@@ -524,6 +522,7 @@ final class AppModel {
             onboarding.sensorState = state
             onboarding.currentConnectionMode = services.connectionMode
             onboarding.connectionSwitchNeedsConfirmation = hasStoredSensor
+            onboarding.connectionSettingUnresolved = services.connectionSettingProblem != nil
             onboarding.pairing = OnboardingMapping.pairing(current: onboarding.pairing, sensorState: state,
                                                            sawConnectionStep: pairingSawConnectionStep)
             // An existing sensor showed up before the person started onboarding (e.g. after an
@@ -548,11 +547,21 @@ final class AppModel {
         if preferencesLoaded, let preferences, !preferences.connectionModeChosen, mode == .listen || hasStoredSensor {
             preferences.connectionModeChosen = true
         }
-        let chosen = preferencesLoaded && preferences?.connectionModeChosen == true
+        // Review m2/m3: an untrusted setting is no choice: Settings asks again.
+        let chosen = preferencesLoaded && preferences?.connectionModeChosen == true && services.connectionSettingProblem == nil
         now.connection = ConnectionModeState(mode: mode)
         now.connectionChosen = chosen
+        // Nothing paired (pairing: the state says so) or followed (listening: no followed serial once
+        // the stored record has been read), after a choice: say so (S5 spirit — never look like
+        // monitoring is running).
+        let nothingConnected = mode == .listen
+            ? services.storedSensorKnown && services.storedSensorSerial == nil && services.sensorSession == nil
+            : services.sensorState == .notPaired
+        now.notConnected = chosen && sensorStateKnown && nothingConnected
         settings.connection = ConnectionModeState(mode: chosen ? mode : nil)
-        settings.packetRecording = PacketRecordingState(isOn: services.recordsRawGlucosePackets)
+        settings.connectionSettingProblem = services.connectionSettingProblem
+        settings.packetRecording = PacketRecordingState(isOn: services.recordsRawGlucosePackets,
+                                                        unresolved: services.connectionSettingProblem != nil)
         calibration.listening = mode == .listen
     }
 
@@ -571,6 +580,7 @@ final class AppModel {
             delivery: services.alertDelivery, forceQuitGap: services.forceQuitGap, storage: services.storage,
             bluetooth: services.bluetoothAuthorization, now: time
         )
+        health.connectionSettingProblem = services.connectionSettingProblem
         // Keep the "since" of a problem that is already showing, so the banner doesn't move.
         if case .failing(_, let message) = health.trio, case .failing(let since, let shownMessage) = now.health.trio, message == shownMessage {
             health.trio = .failing(since: since, message: message)
@@ -591,6 +601,7 @@ final class AppModel {
             state.connection = ConnectionModeState(mode: nil)
             state.currentConnectionMode = mode
             state.connectionSwitchNeedsConfirmation = services.hasStoredSensor
+            state.connectionSettingUnresolved = services.connectionSettingProblem != nil
             state.shareUploadEnabled = mode == .pair
         }
         onboarding = state
@@ -663,7 +674,6 @@ final class AppModel {
 
     func selectTab(_ tab: AppTab) {
         selectedTab = tab
-        if preferencesLoaded { preferences?.selectedTab = tab }
         if tab == .trends, trendsStale { refreshTrends() }
     }
 

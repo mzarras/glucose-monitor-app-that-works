@@ -48,6 +48,9 @@ struct NowViewState: Equatable, Sendable {
     /// D45: the person has chosen listen or pair; until then "No sensor paired" offers to set up
     /// the sensor (the choice), not to pair.
     var connectionChosen: Bool = true
+    /// D45: a connection is chosen but no sensor is paired or followed (the calm "Not connected to a
+    /// sensor" banner).
+    var notConnected: Bool = false
 
     /// The DEBUG/REPLAY banner. Computed, not stored, so no code path can clear it in a DEBUG
     /// build; nil in Release.
@@ -56,7 +59,7 @@ struct NowViewState: Equatable, Sendable {
     func banners(now: Date, context: DisplayContext = .current) -> [AppBanner] {
         AppBanners.make(sensorState: sensorState, latestLiveReadingDate: latestLiveReading?.date, health: health, now: now,
                         clockMismatchLatched: isClockMismatchLatched, sensorNeedsCalibration: sensorNeedsCalibration,
-                        listening: connection?.isListening == true, context: context)
+                        listening: connection?.isListening == true, notConnected: notConnected, context: context)
     }
 
     func display(now: Date) -> GlucoseDisplayState {

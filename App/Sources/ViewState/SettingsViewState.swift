@@ -40,6 +40,8 @@ struct SettingsViewState: Equatable, Sendable {
     var connection: ConnectionModeState? = nil
     /// D45: a switch to this mode is on its way (the choices wait for it).
     var connectionSwitchingTo: SensorConnectionMode? = nil
+    /// `AppServices.connectionSettingProblem`: why Settings › Sensor asks for the choice again.
+    var connectionSettingProblem: String? = nil
     /// D47: Settings › Diagnostics "Record raw glucose packets" (`recordsRawGlucosePackets`).
     var packetRecording: PacketRecordingState? = nil
 

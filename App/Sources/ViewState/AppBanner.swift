@@ -11,6 +11,8 @@ struct AppBanner: Equatable, Identifiable, Sendable {
         case missedReadings
         /// The reading database isn't open: readings are held in memory or can't be saved (S5).
         case storageUnavailable
+        /// Review m2/m3: the connection setting couldn't be read; the sensor isn't connected.
+        case connectionSettingUnreadable
         case bluetoothOff
         case bluetoothUnauthorized
         case bluetoothUnavailable
@@ -23,6 +25,9 @@ struct AppBanner: Equatable, Identifiable, Sendable {
         case sensorProblem
         /// D36: transient; readings may be withheld for a while.
         case sensorInterrupted
+        /// D45: a connection is chosen but no sensor is paired (pairing) or followed (listening), so
+        /// nothing is being monitored. Calm (warning), but never absent.
+        case notConnected
         /// D36: the sensor withholds readings until calibrated (or rejected a calibration).
         case calibrationNeeded
         case sensorExpired
@@ -97,6 +102,7 @@ enum AppBanners {
         clockMismatchLatched: Bool = false,
         sensorNeedsCalibration: Bool = false,
         listening: Bool = false,
+        notConnected: Bool = false,
         context: DisplayContext = .current
     ) -> [AppBanner] {
         var banners: [AppBanner] = []
@@ -104,17 +110,34 @@ enum AppBanners {
         // Review minor 4: a transient failure after "calibration needed" (e.g. the phone clock)
         // must not hide that the sensor still needs calibrating.
         if sensorNeedsCalibration, !isCalibrationState(sensorState) {
-            banners.append(AppBanner(
-                kind: .calibrationNeeded, severity: .critical,
+            banners.append(calibrationBanner(
                 title: "Calibrate the sensor",
                 detail: "The sensor still needs a fingerstick calibration before it sends readings.",
-                action: .openCalibration, actionTitle: "Calibrate"))
+                listening: listening))
+        }
+
+        // D45: chosen, but nothing paired or followed — never looks like monitoring is running.
+        if notConnected {
+            banners.append(AppBanner(
+                kind: .notConnected, severity: .warning,
+                title: "Not connected to a sensor",
+                detail: listening
+                    ? "Not following a sensor yet: waiting for the Dexcom app's connection to one. No readings or alerts until then."
+                    : "No sensor is paired, so there are no readings or alerts. Pair a sensor in Settings \u{203A} Sensor.",
+                action: .openSensorSettings, actionTitle: "Sensor"))
         }
 
         if let banner = missedReadings(sensorState: sensorState, latest: latestLiveReadingDate, now: now, clockMismatchLatched: clockMismatchLatched, context: context) {
             banners.append(banner)
         }
-        banners += sensorBanners(sensorState, now: now, listening: listening, context: context)
+        // P3b review p1: while the connection setting is unresolved, the critical setting banner
+        // explains why the sensor connection is down; the source's "credentials unavailable" banner
+        // would contradict it ("pair again" / "waiting for the phone to unlock").
+        if health.connectionSettingProblem != nil, case .failed(let failure) = sensorState, failure.kind == .credentialsUnavailable {
+            // the setting banner covers it
+        } else {
+            banners += sensorBanners(sensorState, now: now, listening: listening, context: context)
+        }
 
         switch health.trio {
         case .failing(let since, let message):
@@ -215,6 +238,15 @@ enum AppBanners {
                 action: nil, actionTitle: nil))
         case .opening, .open:
             break
+        }
+
+        if let problem = health.connectionSettingProblem {
+            let cause = ConnectionSettingProblem(problem)
+            banners.append(AppBanner(
+                kind: .connectionSettingUnreadable, severity: .critical,
+                title: cause.title,
+                detail: "\(cause.explanation) Choose Listen or Pair again in Settings › Sensor. Until then this app doesn't connect to the sensor. (\(problem))",
+                action: .openSensorSettings, actionTitle: "Open Settings"))
         }
 
         switch health.bluetoothAuthorization {
@@ -342,6 +374,15 @@ enum AppBanners {
     }
 
     /// - Parameter listening: D45 listen mode: its transient failures in their own words.
+    /// A calibration banner: "Calibrate" opens the flow when pairing; while listening (D45) the
+    /// Dexcom app calibrates, so the banner says so and has no button.
+    private static func calibrationBanner(title: String, detail: String, listening: Bool) -> AppBanner {
+        AppBanner(
+            kind: .calibrationNeeded, severity: .critical, title: title,
+            detail: listening ? "\(detail) Calibrate in the Dexcom app." : detail,
+            action: listening ? nil : .openCalibration, actionTitle: listening ? nil : "Calibrate")
+    }
+
     private static func sensorBanners(_ state: SensorState, now: Date, listening: Bool, context: DisplayContext) -> [AppBanner] {
         switch state {
         case .bluetoothUnavailable(.poweredOff):
@@ -377,19 +418,22 @@ enum AppBanners {
         case .failed(let failure):
             // D45: a listen-mode failure stays up (S5) with words for listening.
             if let text = ListenModeRules.failure(failure, listening: listening) {
+                // The severity still comes from the kind (S5).
                 return [AppBanner(
-                    kind: .sensorInterrupted, severity: .warning,
+                    kind: failure.raisesSensorAlert ? .sensorProblem : .sensorInterrupted,
+                    severity: failure.raisesSensorAlert ? .critical : .warning,
                     title: text.title,
                     detail: text.detail,
                     action: .openSensorSettings, actionTitle: "Sensor")]
             }
             // Decisions from the kind, words from the source (D36).
             if failure.requiresSensorReplacement {
+                // D45: while listening the new sensor starts in the Dexcom app.
                 return [AppBanner(
                     kind: .sensorNeedsReplacement, severity: .critical,
                     title: "Replace the sensor",
-                    detail: failure.message,
-                    action: .pairSensor, actionTitle: "Replace sensor")]
+                    detail: listening ? ListenModeRules.endedSensorDetail(failure.message) : failure.message,
+                    action: listening ? .openSensorSettings : .pairSensor, actionTitle: listening ? "Sensor" : "Replace sensor")]
             }
             if failure.requiresPairing {
                 return [AppBanner(
@@ -420,29 +464,31 @@ enum AppBanners {
                 detail: failure.message,
                 action: .openSensorSettings, actionTitle: "Sensor")]
         case .calibrationNeeded:
-            return [AppBanner(
-                kind: .calibrationNeeded, severity: .critical,
+            return [calibrationBanner(
                 title: "Calibrate the sensor",
                 detail: "The sensor withholds readings until it gets a fingerstick calibration.",
-                action: .openCalibration, actionTitle: "Calibrate")]
+                listening: listening)]
         case .calibrationError:
-            return [AppBanner(
-                kind: .calibrationNeeded, severity: .critical,
+            return [calibrationBanner(
                 title: "Calibration not accepted",
-                detail: "The sensor couldn't use the last calibration and withholds readings. Enter a new fingerstick.",
-                action: .openCalibration, actionTitle: "Calibrate")]
+                detail: listening
+                    ? "The sensor couldn't use the last calibration and withholds readings."
+                    : "The sensor couldn't use the last calibration and withholds readings. Enter a new fingerstick.",
+                listening: listening)]
         case .expired:
             return [AppBanner(
                 kind: .sensorExpired, severity: .critical,
                 title: "Sensor expired",
-                detail: "No more readings from this sensor. Start a new one.",
+                detail: listening
+                    ? ListenModeRules.endedSensorDetail("No more readings from this sensor.")
+                    : "No more readings from this sensor. Start a new one.",
                 action: .openSensorSettings, actionTitle: "Sensor")]
         case .gracePeriod(let endsAt):
             if now >= endsAt {
                 return [AppBanner(
                     kind: .sensorExpired, severity: .critical,
                     title: "Sensor expired",
-                    detail: "The grace period ended. Start a new sensor.",
+                    detail: listening ? ListenModeRules.endedSensorDetail("The grace period ended.") : "The grace period ended. Start a new sensor.",
                     action: .openSensorSettings, actionTitle: "Sensor")]
             }
             // D43 review m7: the time left is the Now screen's live countdown; the banner says when.

@@ -55,7 +55,7 @@ final class AlertTextTests: XCTestCase {
         XCTAssertEqual(AlertText.body(.bluetoothUnavailable, context: context(reported: .bluetoothUnavailable(.resetting)), isRepeat: false),
                        "Bluetooth is restarting.")
         XCTAssertEqual(AlertText.body(.trioBridge, context: context(bridge: .healthy), isRepeat: false), "Trio is not receiving readings.")
-        XCTAssertEqual(AlertText.body(.sensorExpired, context: context(), isRepeat: false), "The session has ended. No readings until a new sensor is paired.")
+        XCTAssertEqual(AlertText.body(.sensorExpired, context: context(), isRepeat: false), "The session has ended. No readings until a new sensor is started.")
         XCTAssertEqual(AlertText.body(.sensorWarmUpComplete, context: context(), isRepeat: false), "Warm-up is complete. Readings are starting.")
         XCTAssertEqual(AlertText.body(.calibrationNeeded, context: context(), isRepeat: false), "The sensor needs a calibration.")
         XCTAssertEqual(AlertText.body(.storageFailing, context: context(), isRepeat: false),

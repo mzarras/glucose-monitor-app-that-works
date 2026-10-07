@@ -3,7 +3,7 @@
 // Values below are safe defaults that let the project build unsigned (the §10 gates use
 // CODE_SIGNING_ALLOWED=NO for generic/platform=iOS builds).
 
-APP_DISPLAY_NAME = Sensor
+APP_DISPLAY_NAME = glucose
 
 DEVELOPMENT_TEAM =
 BUNDLE_ID_PREFIX = org.example.sensor
