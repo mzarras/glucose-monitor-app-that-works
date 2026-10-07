@@ -276,6 +276,9 @@ enum OnboardingMapping {
         case .noSensorToPairAgain:
             // Surfaced, never retried as a new pairing behind the person's back (review N2).
             return "No sensor is stored on this phone to pair again. Pair it as a new sensor with the code on its applicator."
+        case .connectionSettingUnresolved(let message):
+            // Review n2 (Integrator A; B to word).
+            return "The connection setting couldn't be saved (\(message)), so nothing was paired. Choose Listen or Pair again in Settings › Sensor."
         case .notAvailableInListenMode:
             // D45: pairing does not exist while listening.
             return ConnectionModeText.pairingWhileListening

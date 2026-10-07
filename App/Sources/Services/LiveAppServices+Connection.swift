@@ -22,6 +22,31 @@ extension LiveAppServices {
     /// Switches the mode, or — while `connectionSettingProblem` is set — records the person's choice
     /// again (even the mode the source happens to be in) and starts the source in it.
     func setConnectionMode(_ mode: SensorConnectionMode) async throws(ConnectionModeError) {
+        try await applyConnectionMode(mode, startingTheSource: true)
+    }
+
+    /// Review n2: a pairing while the setting is unresolved is the person's choice of pairing mode:
+    /// the setting is recorded (the file rewritten, the problem cleared) before the pairing starts.
+    /// The pairing itself then starts the source.
+    func resolveConnectionSettingForPairing() async throws(PairingError) {
+        guard connectionSettingProblem != nil else { return }
+        do throws(ConnectionModeError) {
+            try await applyConnectionMode(.pair, startingTheSource: false)
+        } catch {
+            throw .connectionSettingUnresolved(Self.describe(error))
+        }
+        log(.sensor, "pairing chosen while the connection setting was unresolved: pairing mode recorded")
+    }
+
+    static func describe(_ error: ConnectionModeError) -> String {
+        switch error {
+        case .replayActive: return "a replay run is active"
+        case .couldNotSave(let message): return "the setting could not be saved: \(message)"
+        case .credentialStoreFailed(let message): return "the sensor connection could not be changed: \(message)"
+        }
+    }
+
+    private func applyConnectionMode(_ mode: SensorConnectionMode, startingTheSource: Bool) async throws(ConnectionModeError) {
         guard !isReplaying else { throw .replayActive }
         let resolving = connectionSettingProblem != nil
         guard resolving || mode != connectionSettings.mode else { return }
@@ -43,7 +68,14 @@ extension LiveAppServices {
         let sourceMode = await g7.mode
         do {
             if sourceMode != next.g7Mode {
-                try await allowingDeletion { try await g7.setMode(next.g7Mode) }
+                // Review n1: a stored pairing that already belongs to the chosen mode is kept (the
+                // source was created in the other mode because the setting was wrong).
+                if let credentialGuard {
+                    try await credentialGuard.switchingMode(toListen: mode == .listen) { try await g7.setMode(next.g7Mode) }
+                    if let kept = credentialGuard.keptOnSwitch { log(.sensor, kept) }
+                } else {
+                    try await g7.setMode(next.g7Mode)
+                }
             }
         } catch {
             log(.sensor, "connection mode not changed: \(error)")
@@ -85,8 +117,9 @@ extension LiveAppServices {
         await applyUploadConfiguration()
         // Listen mode starts with no code; pairing mode waits for `pair(code:)` — except when the
         // person chose again after a problem: the source was never started, and a stored pairing of
-        // this mode resumes (one of the other mode is dropped: the person's choice).
-        if mode == .listen || resolving {
+        // this mode resumes (one of the other mode is dropped: the person's choice). A pairing that
+        // resolves the setting (n2) starts the source itself.
+        if startingTheSource, mode == .listen || resolving {
             await allowingDeletion { await startG7() }
         }
         await refreshStoredSensor()
