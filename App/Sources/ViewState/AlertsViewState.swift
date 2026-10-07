@@ -149,6 +149,9 @@ struct AlertsViewState: Equatable, Sendable {
     var sounds: [AlertSound]
     /// AlertEngine's quiet hours (D27: everything except urgent low).
     var quietHours: QuietHours
+    /// D54: the alerts "Set all to vibrate except urgent low and Low" would change, in screen order
+    /// (`AlertsMapping.vibrateAllKinds`, the same rule the edit applies). Empty hides the action.
+    var vibrateAllKinds: [AlertKind] = []
 
     func row(_ kind: AlertKind) -> AlertRow? { rows.first { $0.kind == kind } }
 
@@ -225,7 +228,7 @@ enum AlertsText {
     static func styleNote(_ style: AlertStyle) -> String? {
         switch style {
         case .sound: return nil
-        case .vibrateOnly: return "Vibrates without sound. Easy to miss while asleep."
+        case .vibrateOnly: return "Vibrates without sound. Whether it vibrates depends on Settings › Sounds & Haptics › Haptics. Easy to miss while asleep."
         case .silent: return "The notification appears without sound or vibration."
         }
     }
@@ -234,7 +237,8 @@ enum AlertsText {
     static let urgentLowStyleNote = "Urgent low always sounds (it can't be set to vibrate)."
 
     /// The Alerts list subtitle's sound part: "vibrate only", "no sound", or the sound name with
-    /// "sounds on silent".
+    /// "sounds on silent". Vibrate only never mentions sound on silent: the engine ignores it there
+    /// (D54).
     static func soundSummary(_ row: AlertRow, soundName: String) -> [String] {
         switch row.style {
         case .vibrateOnly: return ["vibrate only"]
@@ -243,11 +247,17 @@ enum AlertsText {
         }
     }
 
-    /// D53 convenience ("most of my notifications to vibrate, except for the critical ones").
-    static let vibrateAllButton = "Set all to vibrate except urgent low"
+    /// D53/D54 convenience ("most of my notifications to vibrate, except for the critical ones";
+    /// Michael: Low keeps its sound too).
+    static let vibrateAllButton = "Set all to vibrate except urgent low and Low"
     static let vibrateAllTitle = "Vibrate instead of sound?"
-    static let vibrateAllMessage = "Every alert that plays a sound, except urgent low, will vibrate without sound. Urgent low keeps sounding. Change any alert back on its page."
     static let vibrateAllConfirm = "Set to vibrate"
+
+    /// D54: the confirmation names every alert the action changes (`AlertsMapping.vibrateAllKinds`).
+    static func vibrateAllMessage(_ kinds: [AlertKind]) -> String {
+        let names = kinds.map(\.title).joined(separator: ", ")
+        return "These alerts will vibrate without sound: \(names). Urgent low and Low keep their sound. Alerts that are off now will vibrate if you turn them on later. Change any alert back on its page."
+    }
 
     /// "Sound on silent" row detail (D17).
     static let soundOnSilentNote = "Plays the alarm with the ringer switch off while the app is running. Otherwise the alert follows the ringer switch."

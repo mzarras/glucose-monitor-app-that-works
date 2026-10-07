@@ -209,7 +209,7 @@ final class ReplayLaunchUITests: XCTestCase {
         XCTAssertTrue(style.buttons["Sound"].isSelected, "default: sound")
         XCTAssertTrue(app.staticTexts["SOUND"].exists)
         style.buttons["Vibrate only"].tap()
-        waitForLabel(element(app, "alerts.detail.styleNote"), "the vibrate-only note") { $0 == "Vibrates without sound. Easy to miss while asleep." }
+        waitForLabel(element(app, "alerts.detail.styleNote"), "the vibrate-only note") { $0.hasPrefix("Vibrates without sound.") && $0.contains("Settings › Sounds & Haptics › Haptics") }
         XCTAssertFalse(app.staticTexts["SOUND"].exists, "no sound picker for vibrate only")
         XCTAssertFalse(app.switches["Sound on silent"].exists)
         try saveScreenshot("alerts-low-vibrate-only")

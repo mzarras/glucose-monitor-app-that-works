@@ -26,9 +26,10 @@ enum AlertEdit: Equatable, Sendable {
     case repeatInterval(AlertKind, Int)
     /// D53: Sound / Vibrate only / Silent (one-off events). Refused for urgent low (S7).
     case style(AlertKind, AlertStyle)
-    /// D53 convenience: every alert that sounds, except urgent low, to vibrate only. Silent
-    /// announcements stay silent; urgent low is never touched (S7).
-    case vibrateAllExceptUrgentLow
+    /// D53/D54 convenience: every alert on Sound except urgent low and Low to vibrate only
+    /// (`AlertsMapping.vibrateAllKinds`). Silent announcements stay silent; urgent low is never
+    /// touched (S7); Low keeps its sound (Michael, D54).
+    case vibrateAllExceptUrgentLowAndLow
     case quietHours(QuietHours)
 }
 
@@ -55,7 +56,8 @@ enum AlertsMapping {
         AlertsViewState(
             rows: AlertKind.allCases.map { row($0, settings) },
             sounds: AlertSoundCatalog.all.map { AlertSound(id: $0.id, name: $0.displayName, character: $0.character) },
-            quietHours: settings.quietHours
+            quietHours: settings.quietHours,
+            vibrateAllKinds: vibrateAllKinds(settings)
         )
     }
 
@@ -130,14 +132,24 @@ enum AlertsMapping {
             if kind == .urgentLow { s.urgentLow.repeatMinutes = minutes }
         case .style(let kind, let style):
             AlertStyleAdapter.setStyle(style, for: kind, in: &s) // refuses urgent low (S7)
-        case .vibrateAllExceptUrgentLow:
-            for kind in AlertKind.allCases where kind != .urgentLow && AlertStyleAdapter.style(kind, in: s) == .sound {
+        case .vibrateAllExceptUrgentLowAndLow:
+            for kind in vibrateAllKinds(s) {
                 AlertStyleAdapter.setStyle(.vibrateOnly, for: kind, in: &s)
             }
         case .quietHours(let quietHours):
             s.quietHours = quietHours
         }
         return s
+    }
+
+    /// The alerts "Set all to vibrate except urgent low and Low" changes, in screen order: every
+    /// alert on Sound that may vibrate, whether on or off, except urgent low (S7) and Low (D54).
+    static func vibrateAllKinds(_ settings: AlertSettings) -> [AlertKind] {
+        AlertKind.allCases.filter { kind in
+            kind != .urgentLow && kind != .low
+                && AlertStyleAdapter.style(kind, in: settings) == .sound
+                && AlertStyleAdapter.allowedStyles(kind).contains(.vibrateOnly)
+        }
     }
 
     /// Each settings type clamps its own snooze (urgent low 1–30, S7). One-off announcements have none.

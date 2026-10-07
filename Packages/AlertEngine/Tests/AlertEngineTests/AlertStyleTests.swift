@@ -135,26 +135,42 @@ final class AlertStyleTests: XCTestCase {
         DeliveryPolicy.decide(for: n, criticalAlertsEnabled: critical, systemAlarmsAvailable: false, timing: timing)
     }
 
-    func test_vibrateOnlyKeepsTheInterruptionLevelAndVibratesInsteadOfSounding() {
-        XCTAssertEqual(decide(notice(style: .vibrateOnly), .now),
-                       DeliveryDecision(interruption: .timeSensitive, notificationSound: .named(fileName: vibrate), inAppSound: nil, inAppHaptic: true),
-                       "awake with sound on silent: the in-app path vibrates, no audio")
-        XCTAssertEqual(decide(notice(style: .vibrateOnly), .scheduled),
-                       DeliveryDecision(interruption: .timeSensitive, notificationSound: .named(fileName: vibrate), inAppSound: nil),
-                       "pending: the silent sound, so iOS vibrates")
-        XCTAssertEqual(decide(notice(style: .vibrateOnly, soundsOnSilent: false), .now),
-                       DeliveryDecision(interruption: .timeSensitive, notificationSound: .named(fileName: vibrate), inAppSound: nil),
-                       "sound on silent off: the notification's own vibration only")
-        XCTAssertEqual(decide(notice(style: .vibrateOnly), critical: true, .now),
-                       DeliveryDecision(interruption: .critical, notificationSound: .critical(fileName: vibrate, volume: 1.0), inAppSound: nil),
-                       "the same level as the sound style would get")
-        XCTAssertEqual(decide(notice(style: .vibrateOnly, silenced: true), .now),
-                       DeliveryDecision(interruption: .passive, notificationSound: .none, inAppSound: nil), "quiet hours still silence it")
+    func test_vibrateOnlyIsTimeSensitiveAndVibratesWheneverAwakeWhateverSoundOnSilentSays() {
+        // D54: "Sound on silent" (hidden for vibrate only) plays no part.
+        for soundsOnSilent in [true, false] {
+            for critical in [false, true] {
+                XCTAssertEqual(decide(notice(style: .vibrateOnly, soundsOnSilent: soundsOnSilent), critical: critical, .now),
+                               DeliveryDecision(interruption: .timeSensitive, notificationSound: .named(fileName: vibrate), inAppSound: nil, inAppHaptic: true),
+                               "sound on silent \(soundsOnSilent), critical \(critical): Time Sensitive, never Critical; awake: one vibration, no audio")
+                XCTAssertEqual(decide(notice(style: .vibrateOnly, soundsOnSilent: soundsOnSilent), critical: critical, .scheduled),
+                               DeliveryDecision(interruption: .timeSensitive, notificationSound: .named(fileName: vibrate), inAppSound: nil),
+                               "pending: the silent sound, so iOS vibrates")
+                XCTAssertEqual(decide(notice(style: .vibrateOnly, soundsOnSilent: soundsOnSilent, silenced: true), critical: critical, .now),
+                               DeliveryDecision(interruption: .passive, notificationSound: .none, inAppSound: nil), "quiet hours: passive, no vibration")
+            }
+        }
         XCTAssertEqual(decide(notice(.sensorGracePeriod, style: .silent), .now),
                        DeliveryDecision(interruption: .active, notificationSound: .none, inAppSound: nil), "silent: the banner only")
         XCTAssertEqual(decide(notice(style: .sound), .now),
                        DeliveryDecision(interruption: .timeSensitive, notificationSound: .named(fileName: "alert-dusk.wav"),
                                         inAppSound: InAppSound(fileName: "alert-dusk.wav", loopSeconds: 0)), "sound: as before")
+        XCTAssertEqual(decide(notice(style: .sound), critical: true, .now).interruption, .critical, "sound with Critical granted: as before")
+    }
+
+    func test_aVibrateOnlyAlertWithSoundOnSilentOffStillVibratesInTheApp() async {
+        var settings = AlertSettings.defaults
+        settings.fallingFast.isEnabled = true      // Sound on silent is off by default for the rate alerts
+        settings.setStyle(.vibrateOnly, for: .fallingFast)
+        XCTAssertFalse(settings.soundsOnSilent(.fallingFast))
+        let h = ServiceHarness(settings: settings)
+        h.center.permissions.criticalAlerts = .enabled   // and Critical granted: still Time Sensitive
+        await h.service.start()
+        await h.service.send(.reading(Fixtures.reading(.mgdl(150), at: h.clock.now, rate: -4), session: Fixtures.session))
+        let posted = h.center.posted.last { $0.userInfo[AlertNotificationIDs.userInfoKind] == "fallingFast" }
+        XCTAssertEqual(posted?.interruption, .timeSensitive, "never Critical")
+        XCTAssertEqual(posted?.sound, .named(fileName: vibrate))
+        XCTAssertEqual(h.haptics.vibrations, 1)
+        XCTAssertTrue(h.audio.plays.isEmpty)
     }
 
     // MARK: The service, per style
