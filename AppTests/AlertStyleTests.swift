@@ -22,10 +22,11 @@ final class AlertStyleTests: XCTestCase {
     /// S7: urgent low has no style control and no style edit changes it.
     func test_urgentLowHasNoStyleControl() {
         let row = AlertsMapping.row(.urgentLow, .defaults)
-        XCTAssertEqual(row.allowedStyles, [])
+        XCTAssertEqual(row.allowedStyles, [.sound])
+        XCTAssertFalse(row.hasStyleChoice)
         XCTAssertEqual(row.style, .sound)
         XCTAssertTrue(row.showsSoundSettings)
-        for style in AlertStyleChoice.allCases {
+        for style in AlertStyle.allCases {
             XCTAssertEqual(AlertsMapping.apply(.style(.urgentLow, style), to: .defaults), .defaults, "\(style)")
         }
         XCTAssertEqual(AlertsText.urgentLowStyleNote, "Urgent low always sounds (it can't be set to vibrate).")

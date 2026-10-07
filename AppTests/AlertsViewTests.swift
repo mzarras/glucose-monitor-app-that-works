@@ -148,7 +148,8 @@ final class AlertsViewTests: XCTestCase {
             XCTAssertEqual(state.row(kind)?.allowedStyles, [.sound, .vibrateOnly, .silent], "\(kind): one-off events can be silent")
         }
         XCTAssertEqual(state.row(.sensorExpired)?.allowedStyles, [.sound, .vibrateOnly], "expired is never silent")
-        XCTAssertEqual(state.row(.urgentLow)?.allowedStyles, [], "S7: urgent low has no style control")
+        XCTAssertEqual(state.row(.urgentLow)?.allowedStyles, [.sound], "S7: urgent low has no style choice")
+        XCTAssertEqual(state.row(.urgentLow)?.hasStyleChoice, false)
         XCTAssertEqual(state.row(.urgentLow)?.style, .sound)
         for kind in AlertKind.allCases where !kind.isEventAlert && kind != .urgentLow {
             XCTAssertEqual(state.row(kind)?.allowedStyles, [.sound, .vibrateOnly], "\(kind)")
@@ -163,7 +164,7 @@ final class AlertsViewTests: XCTestCase {
         XCTAssertFalse(s.playsSound(.sensorExpiringIn12Hours))
         XCTAssertFalse(s.isEnabled(.sensorExpiringIn12Hours))
         // S7: a style edit for urgent low changes nothing; Silent is refused for condition alerts.
-        for style in AlertStyleChoice.allCases {
+        for style in AlertStyle.allCases {
             XCTAssertEqual(AlertsMapping.apply(.style(.urgentLow, style), to: .defaults), .defaults, "\(style)")
         }
         XCTAssertEqual(AlertsMapping.apply(.style(.sensorExpired, .silent), to: .defaults), .defaults)

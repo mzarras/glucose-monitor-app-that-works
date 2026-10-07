@@ -25,34 +25,27 @@ enum AlertEdit: Equatable, Sendable {
     /// Urgent low: repeat interval, minutes.
     case repeatInterval(AlertKind, Int)
     /// D53: Sound / Vibrate only / Silent (one-off events). Refused for urgent low (S7).
-    case style(AlertKind, AlertStyleChoice)
+    case style(AlertKind, AlertStyle)
     /// D53 convenience: every alert that sounds, except urgent low, to vibrate only. Silent
     /// announcements stay silent; urgent low is never touched (S7).
     case vibrateAllExceptUrgentLow
     case quietHours(QuietHours)
 }
 
-/// D53: the alert style through AlertEngine — the only code that reads or writes it. Until WS4's
-/// `AlertStyle` (`style(_:)`, `setStyle(_:for:)`, `allowedStyles(for:)`) lands it reads the D43
-/// `playsSound` (Silent) and cannot store Vibrate only; wiring replaces these three functions.
+/// D53: the alert style through AlertEngine (`AlertSettings.style(_:)`, `setStyle(_:for:)`,
+/// `allowedStyles(for:)`) — the only code that reads or writes it. The engine refuses anything but
+/// `.sound` for urgent low (S7) and `.silent` for a condition alert.
 enum AlertStyleAdapter {
-    static func style(_ kind: AlertKind, in settings: AlertSettings) -> AlertStyleChoice {
-        kind.isEventAlert && !settings.playsSound(kind) ? .silent : .sound
+    static func style(_ kind: AlertKind, in settings: AlertSettings) -> AlertStyle {
+        settings.style(kind)
     }
 
-    /// Empty for urgent low (S7: always sound, no control).
-    static func allowedStyles(_ kind: AlertKind) -> [AlertStyleChoice] {
-        guard kind != .urgentLow else { return [] }
-        return kind.isEventAlert ? [.sound, .vibrateOnly, .silent] : [.sound, .vibrateOnly]
+    static func allowedStyles(_ kind: AlertKind) -> [AlertStyle] {
+        AlertSettings.allowedStyles(for: kind)
     }
 
-    static func setStyle(_ style: AlertStyleChoice, for kind: AlertKind, in settings: inout AlertSettings) {
-        guard allowedStyles(kind).contains(style) else { return }
-        switch style {
-        case .sound: settings.setPlaysSound(true, for: kind)
-        case .silent: settings.setPlaysSound(false, for: kind)
-        case .vibrateOnly: break // stored once WS4's setStyle lands
-        }
+    static func setStyle(_ style: AlertStyle, for kind: AlertKind, in settings: inout AlertSettings) {
+        settings.setStyle(style, for: kind)
     }
 }
 

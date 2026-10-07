@@ -90,7 +90,7 @@ struct AlertsContent: View {
     /// be changed back on its page. Offered while any alert would change.
     @ViewBuilder
     private var vibrateAll: some View {
-        if state.rows.contains(where: { $0.allowedStyles.contains(.vibrateOnly) && $0.style == .sound }) {
+        if state.rows.contains(where: { $0.kind != .urgentLow && $0.allowedStyles.contains(.vibrateOnly) && $0.style == .sound }) {
             Button(AlertsText.vibrateAllButton) { confirmingVibrateAll = true }
                 .buttonStyle(LinkButtonStyle())
                 .frame(minHeight: Layout.minTarget)
@@ -286,7 +286,7 @@ struct AlertDetailView: View {
     /// D53: Sound / Vibrate only (/ Silent for one-off events). Urgent low has none: a note (S7).
     @ViewBuilder
     private var styleSection: some View {
-        if row.allowedStyles.isEmpty {
+        if !row.hasStyleChoice {
             Text(verbatim: AlertsText.urgentLowStyleNote)
                 .font(Typography.body(size: 13))
                 .fixedSize(horizontal: false, vertical: true)
@@ -295,7 +295,7 @@ struct AlertDetailView: View {
             VStack(alignment: .leading, spacing: 8) {
                 SectionLabel("ALERT STYLE")
                 Picker(selection: Binding(get: { row.style }, set: { actions.edit(.style(row.kind, $0)) })) {
-                    ForEach(row.allowedStyles) { style in
+                    ForEach(row.allowedStyles, id: \.self) { style in
                         Text(verbatim: AlertsText.styleTitle(style)).tag(style)
                     }
                 } label: {

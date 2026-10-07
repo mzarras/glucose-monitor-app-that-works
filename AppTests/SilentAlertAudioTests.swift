@@ -36,7 +36,7 @@ final class SilentAlertAudioTests: XCTestCase {
     func test_silentNotificationMapsTheActiveLevel() {
         let notice = AlertNotice(
             kind: .sensorExpiringIn24Hours, title: "Sensor expires in 24 h", body: "At 8:15 PM tomorrow", sound: .doorbell,
-            soundsOnSilent: false, isSilenced: false, snoozeMinutes: nil, fireDate: nil, playsSound: false
+            soundsOnSilent: false, isSilenced: false, snoozeMinutes: nil, fireDate: nil, style: .silent
         )
         let decision = DeliveryPolicy.decide(for: notice, criticalAlertsEnabled: false, systemAlarmsAvailable: false, timing: .now)
         XCTAssertEqual(decision.interruption, .active)

@@ -103,9 +103,10 @@ struct AlertRow: Equatable, Identifiable, Sendable {
     var repeatMinutes: Int?
     /// D53: how the alert gets attention — its sound, a vibration without sound, or (one-off
     /// announcements) a silent notification. Urgent low is always `.sound` (S7).
-    var style: AlertStyleChoice = .sound
-    /// The styles the person may choose; empty for urgent low, which has no style control (S7).
-    var allowedStyles: [AlertStyleChoice] = []
+    var style: AlertStyle = .sound
+    /// AlertEngine's `allowedStyles(for:)`: `[.sound]` for urgent low (S7: no style control),
+    /// sound / vibrate only for condition alerts, all three for one-off announcements.
+    var allowedStyles: [AlertStyle] = [.sound]
 
     var id: AlertKind { kind }
 
@@ -114,17 +115,8 @@ struct AlertRow: Equatable, Identifiable, Sendable {
     var effectiveSoundOnSilent: Bool { kind.soundOnSilentIsFixed ? true : soundOnSilent }
     /// The sound picker and "Sound on silent" apply only when the alert plays its sound.
     var showsSoundSettings: Bool { style == .sound }
-}
-
-/// D53 alert style, the screen's side. Mirrors AlertEngine's `AlertStyle` (WS4: `.sound`,
-/// `.vibrateOnly`, `.silent` for one-off events); `AlertStyleAdapter` is the only place that talks to
-/// the engine about it.
-enum AlertStyleChoice: String, CaseIterable, Identifiable, Sendable {
-    case sound
-    case vibrateOnly
-    case silent
-
-    var id: String { rawValue }
+    /// A style control only where there is a choice (never for urgent low, S7).
+    var hasStyleChoice: Bool { allowedStyles.count > 1 }
 }
 
 struct AlertSound: Equatable, Identifiable, Sendable {
@@ -221,7 +213,7 @@ enum AlertsText {
     static let expiryRemindersNote = "Reminders before the sensor's session ends, when the grace period starts, and when it has expired. They arrive even while the app is in the background."
 
     /// D53: the alert style choice.
-    static func styleTitle(_ style: AlertStyleChoice) -> String {
+    static func styleTitle(_ style: AlertStyle) -> String {
         switch style {
         case .sound: return "Sound"
         case .vibrateOnly: return "Vibrate only"
@@ -230,7 +222,7 @@ enum AlertsText {
     }
 
     /// One line under the choice; nil for Sound (the sound settings follow).
-    static func styleNote(_ style: AlertStyleChoice) -> String? {
+    static func styleNote(_ style: AlertStyle) -> String? {
         switch style {
         case .sound: return nil
         case .vibrateOnly: return "Vibrates without sound. Easy to miss while asleep."

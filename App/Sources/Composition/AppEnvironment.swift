@@ -119,7 +119,7 @@ final class AppEnvironment {
 
     /// The alert service's delivery ports: UNUserNotificationCenter, the `.playback` audio player and
     /// AlarmKit with the app's Stop intent (docs/alerts.md §9). DEBUG: `-silenceAlertAudio` swaps in
-    /// silent versions (SilentAlertOutputs.swift) — same delivery, nothing audible.
+    /// silent versions (SilentAlertOutputs.swift) and no vibration — same delivery, nothing audible.
     static func makeAlertPorts(arguments: [String], diagnostics: any DiagnosticLog) -> AlertPorts {
         let notifications: any AlertNotificationCenter = UserNotificationCenterAdapter()
         let audio: any AlertAudioPlaying = PlaybackAlertAudioPlayer()
@@ -132,7 +132,8 @@ final class AppEnvironment {
             diagnostics.record(DiagnosticEvent(date: Date(), category: .alert, message: "alert audio silenced (\(SilentAlertAudio.launchArgument), DEBUG)"))
             return AlertPorts(
                 notificationCenter: SilentNotificationCenter(), audio: SilentAlertAudioPlayer(volumeSource: audio),
-                alarms: SilentSystemAlarms(real: alarms), configuration: AlertEngineConfiguration(), diagnostics: diagnostics
+                alarms: SilentSystemAlarms(real: alarms), configuration: AlertEngineConfiguration(), diagnostics: diagnostics,
+                haptics: NoAlertHaptics() // D53: no vibration either
             )
         }
         #endif
