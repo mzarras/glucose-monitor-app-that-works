@@ -159,6 +159,11 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 
 ## Phase log
 
+### 2026-10-07 — Vibrate-only alerts (D53/D54) and p3c services fixes
+- p4-stage cfeb31f = p3c-services f22b75f (n1 keep-on-switch, n2 pair resolves the setting, GlucoseStats best-of-5 timing) + p4-alerts 2310f37/05bcb18 + p4-app c5b95d6/059f737/1e65564.
+- Reviews: p3c services PASS (nits p1 pairAgain while unresolved, p2 "Pair again" guidance while unresolved, p3 theoretical keep window — backlog); D53 PASS (m1–m4 → D54) and D54 verification PASS. Gates: check.sh exit 0 on cfeb31f (reviewer run): app unit 290, S1 51, S2 93, S3 75, S4 51, S5 165, S6 40, S7 53, S8 5.
+- Device check open for Michael: docs/alerts.md check 11 (vibrate-only vibrates per Haptics option; foreground double vibration).
+
 ### 2026-10-06 — Phase 3 merged
 - Full audit (docs/safety-review.md) PASS with 18 minors, all resolved (§8 of that doc). Failure-mode pass across services, screens and AlertEngine (docs/failure-modes.md).
 - Michael's decisions: D44 (urgent low re-alarms at snooze end), D45/D46 (listen mode alongside the Dexcom app on the current sensor; primary on the next), D47 (raw packet recording). Orchestrator: D48–D51 (D50 after the G7Kit review blocker B1).
