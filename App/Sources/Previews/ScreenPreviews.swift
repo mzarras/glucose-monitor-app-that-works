@@ -74,6 +74,8 @@ private let previewNow = Date()
 #Preview("Alerts · list · light") { NavigationStack { PreviewScreen(scheme: .light) { AlertsContent(state: Fixtures.alerts, actions: .noop) } } }
 #Preview("Alerts · urgent low detail · light") { NavigationStack { AlertDetailView(row: Fixtures.alerts.row(.urgentLow)!, sounds: Fixtures.sounds, actions: .noop).environment(\.colorScheme, .light).preferredColorScheme(.light) } }
 #Preview("Alerts · high detail · light") { NavigationStack { AlertDetailView(row: Fixtures.alerts.row(.high)!, sounds: Fixtures.sounds, actions: .noop).environment(\.colorScheme, .light).preferredColorScheme(.light) } }
+#Preview("Alerts · low vibrate only · light") { NavigationStack { AlertDetailView(row: { var r = Fixtures.alerts.row(.low)!; r.style = .vibrateOnly; return r }(), sounds: Fixtures.sounds, actions: .noop).environment(\.colorScheme, .light).preferredColorScheme(.light) } }
+#Preview("Alerts · 24 h reminder silent · dark") { NavigationStack { AlertDetailView(row: Fixtures.alerts.row(.sensorExpiringIn24Hours)!, sounds: Fixtures.sounds, actions: .noop).environment(\.colorScheme, .dark).preferredColorScheme(.dark) } }
 #Preview("Alerts · list · dark") { NavigationStack { PreviewScreen(scheme: .dark) { AlertsContent(state: Fixtures.alerts, actions: .noop) } } }
 #Preview("Alerts · urgent low detail · dark") { NavigationStack { AlertDetailView(row: Fixtures.alerts.row(.urgentLow)!, sounds: Fixtures.sounds, actions: .noop).environment(\.colorScheme, .dark).preferredColorScheme(.dark) } }
 #Preview("Alerts · high detail · dark") { NavigationStack { AlertDetailView(row: Fixtures.alerts.row(.high)!, sounds: Fixtures.sounds, actions: .noop).environment(\.colorScheme, .dark).preferredColorScheme(.dark) } }

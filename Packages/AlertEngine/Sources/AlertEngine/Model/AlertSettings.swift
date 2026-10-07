@@ -153,21 +153,49 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         }
     }
 
-    /// `false`: the alert is posted as a visible notification with no sound (D43). Only the one-off
-    /// announcements can be silent; every other alert always plays its sound.
-    public func playsSound(_ kind: AlertKind) -> Bool {
-        eventSettings(kind)?.playsSound ?? true
+    /// The alert's style (D53): sound, vibrate only, or — one-off announcements only — silent.
+    /// Urgent low is always `.sound` (S7): there is no field to hold anything else.
+    public func style(_ kind: AlertKind) -> AlertStyle {
+        switch kind {
+        case .urgentLow: return .sound
+        case .urgentLowSoon: return urgentLowSoon.style
+        case .low: return low.style
+        case .high: return high.style
+        case .fallingFast: return fallingFast.style
+        case .risingFast: return risingFast.style
+        case .missedReadings: return missedReadings.style
+        case .sensorWarmUpComplete: return sensorWarmUpComplete.style
+        case .sensorExpiringIn24Hours: return sensorExpiringIn24Hours.style
+        case .sensorExpiringIn12Hours: return sensorExpiringIn12Hours.style
+        case .sensorExpiringIn2Hours: return sensorExpiringIn2Hours.style
+        case .sensorGracePeriod: return sensorGracePeriod.style
+        case .sensorFailed: return sensorFailed.style
+        case .sensorError: return sensorError.style
+        case .calibrationNeeded: return calibrationNeeded.style
+        case .sensorExpired: return sensorExpired.style
+        case .bluetoothUnavailable: return bluetoothUnavailable.style
+        case .trioBridge: return trioBridge.style
+        case .storageFailing: return storageFailing.style
+        }
     }
 
-    private func eventSettings(_ kind: AlertKind) -> EventAlertSettings? {
-        switch kind {
-        case .sensorWarmUpComplete: return sensorWarmUpComplete
-        case .sensorExpiringIn24Hours: return sensorExpiringIn24Hours
-        case .sensorExpiringIn12Hours: return sensorExpiringIn12Hours
-        case .sensorExpiringIn2Hours: return sensorExpiringIn2Hours
-        case .sensorGracePeriod: return sensorGracePeriod
-        default: return nil
-        }
+    /// The styles the Alerts screen may offer for `kind`: `[.sound]` for urgent low (S7); sound or
+    /// vibrate only for condition alerts; all three for one-off announcements.
+    public static func allowedStyles(for kind: AlertKind) -> [AlertStyle] {
+        if kind == .urgentLow { return AlertStyle.urgentLowStyles }
+        return kind.isEventAlert ? AlertStyle.eventStyles : AlertStyle.conditionStyles
+    }
+
+    /// Same as the static one, for call sites that hold settings.
+    public func allowedStyles(for kind: AlertKind) -> [AlertStyle] {
+        Self.allowedStyles(for: kind)
+    }
+
+    /// D43's sound switch, kept for the Alerts screen: `false` exactly when the style is `.silent`
+    /// (one-off announcements only). Every other alert "plays its sound" in this sense, a
+    /// vibrate-only one included.
+    public func playsSound(_ kind: AlertKind) -> Bool {
+        style(kind) != .silent
     }
 
     // MARK: Uniform write access for the Alerts list
@@ -250,19 +278,43 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         return true
     }
 
-    /// Turns a one-off announcement's sound on or off (D43). Returns `false`, and changes nothing,
-    /// for every other alert: they always play their sound.
+    /// Sets the alert's style (D53). Returns `false`, and changes nothing, for a style
+    /// `allowedStyles(for:)` does not offer — in particular anything but `.sound` for urgent low (S7).
     @discardableResult
-    public mutating func setPlaysSound(_ on: Bool, for kind: AlertKind) -> Bool {
+    public mutating func setStyle(_ style: AlertStyle, for kind: AlertKind) -> Bool {
+        guard Self.allowedStyles(for: kind).contains(style) else { return false }
         switch kind {
-        case .sensorWarmUpComplete: sensorWarmUpComplete.playsSound = on
-        case .sensorExpiringIn24Hours: sensorExpiringIn24Hours.playsSound = on
-        case .sensorExpiringIn12Hours: sensorExpiringIn12Hours.playsSound = on
-        case .sensorExpiringIn2Hours: sensorExpiringIn2Hours.playsSound = on
-        case .sensorGracePeriod: sensorGracePeriod.playsSound = on
-        default: return false
+        case .urgentLow: break   // always .sound
+        case .urgentLowSoon: urgentLowSoon.style = style
+        case .low: low.style = style
+        case .high: high.style = style
+        case .fallingFast: fallingFast.style = style
+        case .risingFast: risingFast.style = style
+        case .missedReadings: missedReadings.style = style
+        case .sensorWarmUpComplete: sensorWarmUpComplete.style = style
+        case .sensorExpiringIn24Hours: sensorExpiringIn24Hours.style = style
+        case .sensorExpiringIn12Hours: sensorExpiringIn12Hours.style = style
+        case .sensorExpiringIn2Hours: sensorExpiringIn2Hours.style = style
+        case .sensorGracePeriod: sensorGracePeriod.style = style
+        case .sensorFailed: sensorFailed.style = style
+        case .sensorError: sensorError.style = style
+        case .calibrationNeeded: calibrationNeeded.style = style
+        case .sensorExpired: sensorExpired.style = style
+        case .bluetoothUnavailable: bluetoothUnavailable.style = style
+        case .trioBridge: trioBridge.style = style
+        case .storageFailing: storageFailing.style = style
         }
         return true
+    }
+
+    /// D43's sound switch for one-off announcements, kept for the Alerts screen: off sets `.silent`;
+    /// on restores `.sound` from `.silent` (a vibrate-only style stays). Returns `false`, and
+    /// changes nothing, for every other alert.
+    @discardableResult
+    public mutating func setPlaysSound(_ on: Bool, for kind: AlertKind) -> Bool {
+        guard kind.isEventAlert else { return false }
+        let current = style(kind)
+        return setStyle(on ? (current == .silent ? .sound : current) : .silent, for: kind)
     }
 
     // MARK: Decoding (lossy, migration-safe)
@@ -278,7 +330,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
     /// synthesized `encode(to:)` uses.
     private enum FieldKey: String, CodingKey {
         case isEnabled, thresholdMgdl, delayMinutes, thresholdMgdlPerMinute, windowMinutes
-        case sound, soundsOnSilent, playsSound, snoozeMinutes, repeatMinutes
+        case sound, soundsOnSilent, style, playsSound, snoozeMinutes, repeatMinutes
         case startMinuteOfDay, endMinuteOfDay
     }
 
@@ -290,6 +342,18 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
         func value<T: Decodable>(_ key: FieldKey, or fallback: T) -> T {
             guard let container else { return fallback }
             return (try? container.decodeIfPresent(T.self, forKey: key)) ?? fallback
+        }
+
+        func optional<T: Decodable>(_ key: FieldKey, _ type: T.Type) -> T? {
+            guard let container else { return nil }
+            return (try? container.decodeIfPresent(T.self, forKey: key)) ?? nil
+        }
+
+        /// A stored style the alert allows; otherwise (missing, unknown — e.g. from a newer build —
+        /// or not allowed, such as `.silent` for a condition alert) the default.
+        func style(allowed: [AlertStyle], or fallback: AlertStyle) -> AlertStyle {
+            guard let stored = optional(.style, AlertStyle.self), allowed.contains(stored) else { return fallback }
+            return stored
         }
     }
 
@@ -318,6 +382,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
             isEnabled: s.value(.isEnabled, or: d.urgentLowSoon.isEnabled),
             sound: s.value(.sound, or: d.urgentLowSoon.sound),
             soundsOnSilent: s.value(.soundsOnSilent, or: d.urgentLowSoon.soundsOnSilent),
+            style: s.style(allowed: AlertStyle.conditionStyles, or: d.urgentLowSoon.style),
             snoozeMinutes: s.value(.snoozeMinutes, or: d.urgentLowSoon.snoozeMinutes)
         )
 
@@ -327,6 +392,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
             thresholdMgdl: l.value(.thresholdMgdl, or: d.low.thresholdMgdl),
             sound: l.value(.sound, or: d.low.sound),
             soundsOnSilent: l.value(.soundsOnSilent, or: d.low.soundsOnSilent),
+            style: l.style(allowed: AlertStyle.conditionStyles, or: d.low.style),
             snoozeMinutes: l.value(.snoozeMinutes, or: d.low.snoozeMinutes)
         )
 
@@ -337,6 +403,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
             delayMinutes: h.value(.delayMinutes, or: d.high.delayMinutes),
             sound: h.value(.sound, or: d.high.sound),
             soundsOnSilent: h.value(.soundsOnSilent, or: d.high.soundsOnSilent),
+            style: h.style(allowed: AlertStyle.conditionStyles, or: d.high.style),
             snoozeMinutes: h.value(.snoozeMinutes, or: d.high.snoozeMinutes)
         )
 
@@ -349,6 +416,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
             windowMinutes: m.value(.windowMinutes, or: d.missedReadings.windowMinutes),
             sound: m.value(.sound, or: d.missedReadings.sound),
             soundsOnSilent: m.value(.soundsOnSilent, or: d.missedReadings.soundsOnSilent),
+            style: m.style(allowed: AlertStyle.conditionStyles, or: d.missedReadings.style),
             snoozeMinutes: m.value(.snoozeMinutes, or: d.missedReadings.snoozeMinutes)
         )
 
@@ -379,6 +447,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
             thresholdMgdlPerMinute: f.value(.thresholdMgdlPerMinute, or: d.thresholdMgdlPerMinute),
             sound: f.value(.sound, or: d.sound),
             soundsOnSilent: f.value(.soundsOnSilent, or: d.soundsOnSilent),
+            style: f.style(allowed: AlertStyle.conditionStyles, or: d.style),
             snoozeMinutes: f.value(.snoozeMinutes, or: d.snoozeMinutes)
         )
     }
@@ -388,6 +457,7 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
             isEnabled: f.value(.isEnabled, or: d.isEnabled),
             sound: f.value(.sound, or: d.sound),
             soundsOnSilent: f.value(.soundsOnSilent, or: d.soundsOnSilent),
+            style: f.style(allowed: AlertStyle.conditionStyles, or: d.style),
             snoozeMinutes: f.value(.snoozeMinutes, or: d.snoozeMinutes)
         )
     }
@@ -397,10 +467,17 @@ public struct AlertSettings: Sendable, Equatable, Hashable, Codable {
             isEnabled: f.value(.isEnabled, or: d.isEnabled),
             sound: f.value(.sound, or: d.sound),
             soundsOnSilent: f.value(.soundsOnSilent, or: d.soundsOnSilent),
-            // Settings stored before D43 have no `playsSound`: the per-kind default applies, so the
-            // 24-hour reminder becomes silent there too.
-            playsSound: f.value(.playsSound, or: d.playsSound)
+            style: eventStyle(f, default: d.style)
         )
+    }
+
+    /// D53 migration: a stored `style` wins; otherwise D43's `playsSound` (false → `.silent`,
+    /// true → `.sound`); otherwise the per-kind default (settings from before D43: the 24-hour
+    /// reminder silent, the others sound).
+    private static func eventStyle(_ f: Fields, default d: AlertStyle) -> AlertStyle {
+        if f.optional(.style, AlertStyle.self) != nil { return f.style(allowed: AlertStyle.eventStyles, or: d) }
+        if let playsSound = f.optional(.playsSound, Bool.self) { return playsSound ? .sound : .silent }
+        return d
     }
 
     /// Decodes stored settings, or returns the defaults if `data` is not a JSON object at all.

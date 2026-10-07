@@ -23,13 +23,15 @@ public struct AlertNotice: Sendable, Equatable {
     /// notification and, for urgent low, the system alarm. `nil` for the immediate notification.
     /// A sensor expiry reminder (D43) always has its slot, pending or posted now.
     public let slot: Int?
-    /// `false`: a visible notification with no sound at all (an announcement whose sound the user
-    /// turned off, D43). Never false for urgent low (S7).
-    public let playsSound: Bool
+    /// Sound, vibrate only, or silent (D53; `.silent`: an announcement whose sound is off, D43).
+    /// Always `.sound` for urgent low (S7).
+    public let style: AlertStyle
+    /// `false` exactly for `.silent`.
+    public var playsSound: Bool { style != .silent }
 
     public init(
         kind: AlertKind, title: String, body: String, sound: AlertSoundID, soundsOnSilent: Bool,
-        isSilenced: Bool, snoozeMinutes: Int?, fireDate: Date?, slot: Int? = nil, playsSound: Bool = true
+        isSilenced: Bool, snoozeMinutes: Int?, fireDate: Date?, slot: Int? = nil, style: AlertStyle = .sound
     ) {
         self.kind = kind
         self.title = title
@@ -40,7 +42,7 @@ public struct AlertNotice: Sendable, Equatable {
         self.snoozeMinutes = snoozeMinutes
         self.fireDate = fireDate
         self.slot = slot
-        self.playsSound = playsSound
+        self.style = style
     }
 }
 

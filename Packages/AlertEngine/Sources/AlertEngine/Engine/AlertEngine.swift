@@ -364,7 +364,7 @@ public struct AlertEngine: Sendable {
             snoozeMinutes: settings.snoozeMinutes(kind),
             fireDate: fireDate,
             slot: slot,
-            playsSound: kind == .urgentLow || settings.playsSound(kind)
+            style: kind == .urgentLow ? .sound : settings.style(kind)   // S7: urgent low always sounds
         )
     }
 }

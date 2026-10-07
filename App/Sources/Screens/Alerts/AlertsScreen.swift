@@ -1,9 +1,10 @@
-// Alerts screen (HANDOFF §5, §7.3.3, PROGRESS D17, D27): every alert with its threshold, sound,
-// sound-on-silent and on/off; quiet hours; per-alert detail with sound picker and preview.
+// Alerts screen (HANDOFF §5, §7.3.3, PROGRESS D17, D27, D53): every alert with its threshold, style
+// (sound / vibrate only / silent), sound-on-silent and on/off; quiet hours; per-alert detail with the
+// style choice, sound picker and preview; "Set all to vibrate except urgent low".
 // Ranges come from AlertEngine's `AlertLimits` (via the rows' `allowed`, `AlertKind.snoozeRange`).
 //
-// S7: urgent low shows "Always on" instead of a toggle, its sound-on-silent is fixed on, and its
-// snooze choices stop at 30 minutes. AlertEngine enforces the same rules; this screen never offers
+// S7: urgent low shows "Always on" instead of a toggle, has no style choice (always sound), its
+// sound-on-silent is fixed on, and its snooze choices stop at 30 minutes. AlertEngine enforces the same rules; this screen never offers
 // the option in the first place.
 
 import AlertEngine
@@ -45,6 +46,7 @@ struct AlertsScreen: View {
 struct AlertsContent: View {
     let state: AlertsViewState
     let actions: AlertsActions
+    @State private var confirmingVibrateAll = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.sectionSpacing) {
@@ -57,6 +59,7 @@ struct AlertsContent: View {
                     .foregroundStyle(Theme.muted)
                 Hairline().padding(.top, 6)
             }
+            vibrateAll
             ForEach(AlertSection.allCases, id: \.self) { section in
                 let rows = state.rows(in: section)
                 if !rows.isEmpty {
@@ -81,6 +84,23 @@ struct AlertsContent: View {
         .padding(.horizontal, Layout.sideMargin)
         .padding(.top, 8)
         .padding(.bottom, 24)
+    }
+
+    /// D53: one tap (confirmed) turns every sounding alert but urgent low to vibrate only; each can
+    /// be changed back on its page. Offered while any alert would change.
+    @ViewBuilder
+    private var vibrateAll: some View {
+        if state.rows.contains(where: { $0.kind != .urgentLow && $0.allowedStyles.contains(.vibrateOnly) && $0.style == .sound }) {
+            Button(AlertsText.vibrateAllButton) { confirmingVibrateAll = true }
+                .buttonStyle(LinkButtonStyle())
+                .frame(minHeight: Layout.minTarget)
+                .accessibilityIdentifier("alerts.vibrateAll")
+                .confirmationDialog(AlertsText.vibrateAllTitle, isPresented: $confirmingVibrateAll, titleVisibility: .visible) {
+                    Button(AlertsText.vibrateAllConfirm) { actions.edit(.vibrateAllExceptUrgentLow) }
+                } message: {
+                    Text(verbatim: AlertsText.vibrateAllMessage)
+                }
+        }
     }
 }
 
@@ -129,17 +149,11 @@ struct AlertListRow: View {
         .padding(.vertical, 8)
     }
 
-    /// "≤ 70 mg/dL · Low chime · sounds on silent", "Doorbell · no sound"
+    /// "≤ 70 mg/dL · Low chime · sounds on silent", "≤ 70 mg/dL · vibrate only", "no sound"
     private var detail: String {
         var parts: [String] = []
         if let threshold = AlertsText.threshold(row.threshold) { parts.append(threshold) }
-        if row.playsSound == false {
-            parts.append("no sound")
-            if !row.effectiveIsEnabled { parts.append("off") }
-            return parts.joined(separator: " · ")
-        }
-        parts.append(soundName)
-        if row.effectiveSoundOnSilent { parts.append("sounds on silent") }
+        parts += AlertsText.soundSummary(row, soundName: soundName)
         if !row.effectiveIsEnabled { parts.append("off") }
         return parts.joined(separator: " · ")
     }
@@ -215,21 +229,12 @@ struct AlertDetailView: View {
                     thresholdEditor(threshold)
                     Hairline()
                 }
-                if let playsSound = row.playsSound {
-                    // D43: one-off announcements can be a notification without sound. Never offered
-                    // for urgent low (S7): its row has no `playsSound`.
-                    Toggle(isOn: Binding(get: { playsSound }, set: { actions.edit(.playsSound(row.kind, $0)) })) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: "Sound").font(Typography.body(size: 15, weight: .medium))
-                            Text(verbatim: AlertsText.playsSoundNote).font(Typography.body(size: 12)).foregroundStyle(Theme.muted)
-                        }
-                    }
-                    .frame(minHeight: Layout.minTarget)
-                    .accessibilityIdentifier("alerts.detail.sound")
+                styleSection
+                Hairline()
+                if row.showsSoundSettings {
+                    soundOnSilent
                     Hairline()
                 }
-                soundOnSilent
-                Hairline()
                 if let snooze = row.snoozeMinutes {
                     Picker(selection: Binding(get: { snooze }, set: { actions.edit(.snooze(row.kind, $0)) })) {
                         ForEach(AlertsText.snoozeOptions(for: row.kind, current: snooze), id: \.self) { minutes in
@@ -261,11 +266,13 @@ struct AlertDetailView: View {
                     .frame(minHeight: Layout.minTarget)
                     Hairline()
                 }
-                SectionLabel("SOUND")
-                SoundPicker(sounds: sounds, selectedID: row.soundID, select: { actions.edit(.sound(row.kind, $0)) },
-                            preview: { previewRefused = !actions.previewSound($0) })
-                if previewRefused {
-                    FieldMessage(text: "An alert is sounding, so the preview didn't play.")
+                if row.showsSoundSettings {
+                    SectionLabel("SOUND")
+                    SoundPicker(sounds: sounds, selectedID: row.soundID, select: { actions.edit(.sound(row.kind, $0)) },
+                                preview: { previewRefused = !actions.previewSound($0) })
+                    if previewRefused {
+                        FieldMessage(text: "An alert is sounding, so the preview didn't play.")
+                    }
                 }
             }
             .padding(.horizontal, Layout.sideMargin)
@@ -274,6 +281,37 @@ struct AlertDetailView: View {
         .editorialScreen()
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear { actions.stopSoundPreview() }
+    }
+
+    /// D53: Sound / Vibrate only (/ Silent for one-off events). Urgent low has none: a note (S7).
+    @ViewBuilder
+    private var styleSection: some View {
+        if !row.hasStyleChoice {
+            Text(verbatim: AlertsText.urgentLowStyleNote)
+                .font(Typography.body(size: 13))
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("alerts.detail.styleNote")
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("ALERT STYLE")
+                Picker(selection: Binding(get: { row.style }, set: { actions.edit(.style(row.kind, $0)) })) {
+                    ForEach(row.allowedStyles, id: \.self) { style in
+                        Text(verbatim: AlertsText.styleTitle(style)).tag(style)
+                    }
+                } label: {
+                    Text(verbatim: "Alert style")
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("alerts.detail.style")
+                if let note = AlertsText.styleNote(row.style) {
+                    Text(verbatim: note)
+                        .font(Typography.body(size: 12))
+                        .foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("alerts.detail.styleNote")
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -325,7 +363,6 @@ struct AlertDetailView: View {
                 }
             }
             .frame(minHeight: Layout.minTarget)
-            .disabled(row.playsSound == false) // no sound to play (D43)
         }
     }
 }
