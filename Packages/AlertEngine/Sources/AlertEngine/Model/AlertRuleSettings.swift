@@ -45,6 +45,10 @@ public struct UrgentLowSoonSettings: Sendable, Equatable, Hashable, Encodable {
     public var isEnabled: Bool
     public var sound: AlertSoundID
     public var soundsOnSilent: Bool
+    /// Sound or vibrate only (D53); `.silent` is refused (keeps the previous style).
+    public var style: AlertStyle {
+        didSet { if !AlertStyle.conditionStyles.contains(style) { style = oldValue } }
+    }
     public var snoozeMinutes: Int {
         didSet { snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes) }
     }
@@ -53,11 +57,13 @@ public struct UrgentLowSoonSettings: Sendable, Equatable, Hashable, Encodable {
         isEnabled: Bool = false,
         sound: AlertSoundID = AlertSoundCatalog.defaultSound(for: .urgentLowSoon),
         soundsOnSilent: Bool = true,
+        style: AlertStyle = .sound,
         snoozeMinutes: Int = AlertLimits.urgentLowSoonDefaultSnoozeMinutes
     ) {
         self.isEnabled = isEnabled
         self.sound = sound
         self.soundsOnSilent = soundsOnSilent
+        self.style = AlertStyle.conditionStyles.contains(style) ? style : .sound
         self.snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes)
     }
 }
@@ -70,6 +76,10 @@ public struct LowAlertSettings: Sendable, Equatable, Hashable, Encodable {
     }
     public var sound: AlertSoundID
     public var soundsOnSilent: Bool
+    /// Sound or vibrate only (D53); `.silent` is refused (keeps the previous style).
+    public var style: AlertStyle {
+        didSet { if !AlertStyle.conditionStyles.contains(style) { style = oldValue } }
+    }
     public var snoozeMinutes: Int {
         didSet { snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes) }
     }
@@ -79,12 +89,14 @@ public struct LowAlertSettings: Sendable, Equatable, Hashable, Encodable {
         thresholdMgdl: Int = AlertLimits.lowDefaultThresholdMgdl,
         sound: AlertSoundID = AlertSoundCatalog.defaultSound(for: .low),
         soundsOnSilent: Bool = true,
+        style: AlertStyle = .sound,
         snoozeMinutes: Int = AlertLimits.lowDefaultSnoozeMinutes
     ) {
         self.isEnabled = isEnabled
         self.thresholdMgdl = AlertLimits.clamp(thresholdMgdl, to: AlertLimits.lowThresholdMgdl)
         self.sound = sound
         self.soundsOnSilent = soundsOnSilent
+        self.style = AlertStyle.conditionStyles.contains(style) ? style : .sound
         self.snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes)
     }
 }
@@ -100,6 +112,10 @@ public struct HighAlertSettings: Sendable, Equatable, Hashable, Encodable {
     }
     public var sound: AlertSoundID
     public var soundsOnSilent: Bool
+    /// Sound or vibrate only (D53); `.silent` is refused (keeps the previous style).
+    public var style: AlertStyle {
+        didSet { if !AlertStyle.conditionStyles.contains(style) { style = oldValue } }
+    }
     public var snoozeMinutes: Int {
         didSet { snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes) }
     }
@@ -110,6 +126,7 @@ public struct HighAlertSettings: Sendable, Equatable, Hashable, Encodable {
         delayMinutes: Int = AlertLimits.highDefaultDelayMinutes,
         sound: AlertSoundID = AlertSoundCatalog.defaultSound(for: .high),
         soundsOnSilent: Bool = true,
+        style: AlertStyle = .sound,
         snoozeMinutes: Int = AlertLimits.highDefaultSnoozeMinutes
     ) {
         self.isEnabled = isEnabled
@@ -117,6 +134,7 @@ public struct HighAlertSettings: Sendable, Equatable, Hashable, Encodable {
         self.delayMinutes = AlertLimits.clamp(delayMinutes, to: AlertLimits.highDelayMinutes)
         self.sound = sound
         self.soundsOnSilent = soundsOnSilent
+        self.style = AlertStyle.conditionStyles.contains(style) ? style : .sound
         self.snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes)
     }
 }
@@ -130,6 +148,10 @@ public struct RateAlertSettings: Sendable, Equatable, Hashable, Encodable {
     }
     public var sound: AlertSoundID
     public var soundsOnSilent: Bool
+    /// Sound or vibrate only (D53); `.silent` is refused (keeps the previous style).
+    public var style: AlertStyle {
+        didSet { if !AlertStyle.conditionStyles.contains(style) { style = oldValue } }
+    }
     public var snoozeMinutes: Int {
         didSet { snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes) }
     }
@@ -139,12 +161,14 @@ public struct RateAlertSettings: Sendable, Equatable, Hashable, Encodable {
         thresholdMgdlPerMinute: Double = AlertLimits.rateDefaultThresholdMgdlPerMinute,
         sound: AlertSoundID = AlertSoundCatalog.defaultSound(for: .fallingFast),
         soundsOnSilent: Bool = false,
+        style: AlertStyle = .sound,
         snoozeMinutes: Int = AlertLimits.rateDefaultSnoozeMinutes
     ) {
         self.isEnabled = isEnabled
         self.thresholdMgdlPerMinute = AlertLimits.clamp(thresholdMgdlPerMinute, to: AlertLimits.rateThresholdMgdlPerMinute)
         self.sound = sound
         self.soundsOnSilent = soundsOnSilent
+        self.style = AlertStyle.conditionStyles.contains(style) ? style : .sound
         self.snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes)
     }
 }
@@ -159,6 +183,10 @@ public struct MissedReadingsSettings: Sendable, Equatable, Hashable, Encodable {
     public var sound: AlertSoundID
     /// Takes effect only while the app is awake; see docs/alerts.md "The suspended-app gap".
     public var soundsOnSilent: Bool
+    /// Sound or vibrate only (D53); `.silent` is refused (keeps the previous style).
+    public var style: AlertStyle {
+        didSet { if !AlertStyle.conditionStyles.contains(style) { style = oldValue } }
+    }
     public var snoozeMinutes: Int {
         didSet { snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes) }
     }
@@ -168,12 +196,14 @@ public struct MissedReadingsSettings: Sendable, Equatable, Hashable, Encodable {
         windowMinutes: Int = AlertLimits.missedReadingsDefaultWindowMinutes,
         sound: AlertSoundID = AlertSoundCatalog.defaultSound(for: .missedReadings),
         soundsOnSilent: Bool = true,
+        style: AlertStyle = .sound,
         snoozeMinutes: Int = AlertLimits.missedReadingsDefaultSnoozeMinutes
     ) {
         self.isEnabled = isEnabled
         self.windowMinutes = AlertLimits.clamp(windowMinutes, to: AlertLimits.missedReadingsWindowMinutes)
         self.sound = sound
         self.soundsOnSilent = soundsOnSilent
+        self.style = AlertStyle.conditionStyles.contains(style) ? style : .sound
         self.snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes)
     }
 }
@@ -185,15 +215,20 @@ public struct StatusAlertSettings: Sendable, Equatable, Hashable, Encodable {
     public var isEnabled: Bool
     public var sound: AlertSoundID
     public var soundsOnSilent: Bool
+    /// Sound or vibrate only (D53); `.silent` is refused (keeps the previous style).
+    public var style: AlertStyle {
+        didSet { if !AlertStyle.conditionStyles.contains(style) { style = oldValue } }
+    }
     /// Re-alert interval while the problem persists, and the Acknowledge/Snooze duration.
     public var snoozeMinutes: Int {
         didSet { snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes) }
     }
 
-    public init(isEnabled: Bool, sound: AlertSoundID, soundsOnSilent: Bool, snoozeMinutes: Int) {
+    public init(isEnabled: Bool, sound: AlertSoundID, soundsOnSilent: Bool, style: AlertStyle = .sound, snoozeMinutes: Int) {
         self.isEnabled = isEnabled
         self.sound = sound
         self.soundsOnSilent = soundsOnSilent
+        self.style = AlertStyle.conditionStyles.contains(style) ? style : .sound
         self.snoozeMinutes = AlertLimits.clamp(snoozeMinutes, to: AlertLimits.snoozeMinutes)
     }
 
@@ -225,25 +260,36 @@ public struct EventAlertSettings: Sendable, Equatable, Hashable, Encodable {
     public var isEnabled: Bool
     public var sound: AlertSoundID
     public var soundsOnSilent: Bool
-    /// `false`: delivered as a visible notification with no sound at all (D43: the 24-hour expiry
-    /// reminder's default). Overrides `soundsOnSilent`.
-    public var playsSound: Bool
+    /// Sound, vibrate only, or silent: a visible notification with no sound and no vibration
+    /// (D53; D43's sound switch off is `.silent`, the 24-hour expiry reminder's default).
+    public var style: AlertStyle
+
+    /// D43's sound switch: `false` is `.silent`. Turning it on restores `.sound` (a vibrate-only
+    /// style stays). Kept for the Alerts screen; `style` says more.
+    public var playsSound: Bool {
+        get { style != .silent }
+        set { style = newValue ? (style == .silent ? .sound : style) : .silent }
+    }
 
     public init(
         isEnabled: Bool = true,
         sound: AlertSoundID = AlertSoundCatalog.defaultSound(for: .sensorWarmUpComplete),
         soundsOnSilent: Bool = false,
-        playsSound: Bool = true
+        style: AlertStyle = .sound
     ) {
         self.isEnabled = isEnabled
         self.sound = sound
         self.soundsOnSilent = soundsOnSilent
-        self.playsSound = playsSound
+        self.style = style
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, sound, soundsOnSilent, style
     }
 
     /// Defaults per kind: on, Doorbell, respects the ringer switch; the 24-hour expiry reminder is
     /// silent (D43).
     public static func defaults(for kind: AlertKind) -> EventAlertSettings {
-        EventAlertSettings(sound: AlertSoundCatalog.defaultSound(for: kind), playsSound: kind != .sensorExpiringIn24Hours)
+        EventAlertSettings(sound: AlertSoundCatalog.defaultSound(for: kind), style: kind == .sensorExpiringIn24Hours ? .silent : .sound)
     }
 }

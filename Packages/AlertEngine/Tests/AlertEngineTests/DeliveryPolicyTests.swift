@@ -6,9 +6,9 @@ import XCTest
 /// suspended (`.scheduled`).
 final class DeliveryPolicyTests: XCTestCase {
     private func notice(_ kind: AlertKind, soundsOnSilent: Bool, silenced: Bool = false, sound: AlertSoundID = .dusk,
-                        playsSound: Bool = true) -> AlertNotice {
+                        playsSound: Bool = true, style: AlertStyle? = nil) -> AlertNotice {
         AlertNotice(kind: kind, title: "t", body: "b", sound: sound, soundsOnSilent: soundsOnSilent,
-                    isSilenced: silenced, snoozeMinutes: 30, fireDate: nil, playsSound: playsSound)
+                    isSilenced: silenced, snoozeMinutes: 30, fireDate: nil, style: style ?? (playsSound ? .sound : .silent))
     }
 
     private func decide(_ n: AlertNotice, critical: Bool = false, alarms: Bool = false, _ timing: DeliveryTiming) -> DeliveryDecision {
@@ -154,7 +154,11 @@ final class DeliveryPolicyTests: XCTestCase {
         XCTAssertEqual(DeliveryDecision(interruption: .timeSensitive, notificationSound: .named(fileName: "x"), inAppSound: nil).loudness, 1)
         XCTAssertEqual(DeliveryDecision(interruption: .passive, notificationSound: .none, inAppSound: InAppSound(fileName: "x", loopSeconds: 0)).loudness, 2)
         XCTAssertEqual(DeliveryDecision(interruption: .timeSensitive, notificationSound: .none, inAppSound: nil, systemAlarmSoundFileName: "x").loudness, 3)
-        XCTAssertEqual(DeliveryDecision(interruption: .critical, notificationSound: .none, inAppSound: nil).loudness, 3)
+        XCTAssertEqual(DeliveryDecision(interruption: .critical, notificationSound: .critical(fileName: "x", volume: 1), inAppSound: nil).loudness, 3)
+        XCTAssertEqual(DeliveryDecision(interruption: .critical, notificationSound: .critical(fileName: AlertSoundCatalog.vibrateFileName, volume: 1),
+                                        inAppSound: nil).loudness, 0, "D53: vibrate only is never audible")
+        XCTAssertEqual(DeliveryDecision(interruption: .timeSensitive, notificationSound: .named(fileName: AlertSoundCatalog.vibrateFileName),
+                                        inAppSound: nil, inAppHaptic: true).loudness, 0)
     }
 
     func test_alarmIDsAreFixedDistinctAndValid() {

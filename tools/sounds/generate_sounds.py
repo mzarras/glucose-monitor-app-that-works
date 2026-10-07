@@ -20,6 +20,9 @@
 #                     files by name (LoopKit/Loop PR #2520); WAV is unverified there.
 # Every sound here is 2.4–5.2 s.
 #
+# Plus one silent file (PROGRESS.md D53): alert-vibrate.caf, 1 s of digital silence in the same IMA4
+# CAF format, the notification sound of vibrate-only alerts (see SILENT below).
+#
 # Design rule (the reason this project exists): every sound differs from the others in rhythm AND
 # pitch contour, not just pitch, and none is a constant-pitch train of high square-wave beeps (the
 # classic pager tone). Michael verifies by ear on device (HANDOFF §11 step 1).
@@ -213,6 +216,16 @@ SOUNDS = [
 ]
 
 
+# Silent notification sounds (PROGRESS.md D53, vibrate-only alerts): IMA4 .caf of digital silence.
+# iOS has no vibrate-only option for a local notification; it plays the vibration that goes with a
+# notification sound (subject to Settings → Sounds & Haptics → Haptics), so a silent sound gives the
+# vibration without any sound. IMA4 of all-zero samples decodes to exact zeros (each 4-bit code is 0
+# and the step never grows past 7, so every difference is 7 >> 3 = 0).
+SILENT = [
+    ("alert-vibrate.caf", 1.0),
+]
+
+
 def render(generator):
     """The sound as 16-bit integer samples, normalised to PEAK."""
     samples = generator() + silence(0.05)
@@ -343,6 +356,24 @@ def main():
                 with open(path, "wb") as f:
                     f.write(data)
                 print(f"wrote    {file_name:22} {seconds:5.2f} s  sha256 {digest}")
+    for file_name, seconds in SILENT:
+        samples = [0] * int(round(seconds * SAMPLE_RATE))
+        data = caf_ima4_bytes(samples)
+        path = os.path.join(OUTPUT_DIR, file_name)
+        digest = hashlib.sha256(data).hexdigest()
+        if args.check:
+            try:
+                with open(path, "rb") as f:
+                    same = f.read() == data
+            except FileNotFoundError:
+                same = False
+            status = "ok" if same else "MISMATCH"
+            mismatches += 0 if same else 1
+            print(f"{status:8} {file_name:22} {seconds:5.2f} s  sha256 {digest}  (silence)")
+        else:
+            with open(path, "wb") as f:
+                f.write(data)
+            print(f"wrote    {file_name:22} {seconds:5.2f} s  sha256 {digest}  (silence)")
     # Sanity-check the container with the standard library reader.
     if not args.check:
         for name, _ in SOUNDS:
