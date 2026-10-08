@@ -151,9 +151,10 @@ final class AppModel {
     /// Onboarding is decided once both the sensor state is known and protected data is available
     /// (`decideOnboardingIfReady`), never from the facade's launch defaults.
     ///
-    /// Launch arguments: `-onboarding` shows onboarding; `-tab <now|trends|alerts|settings>` opens a
-    /// tab; DEBUG `-resetOnboardingFlag` forgets that onboarding was completed (UI tests). A replay
-    /// run (DEBUG `-replayScenario`, started by the services) never shows onboarding.
+    /// Launch arguments: `-onboarding` shows onboarding; `-tab <now|predict|trends|settings>` opens a
+    /// tab, `-tab alerts` Settings › Alerts (`openTab(launchArguments:)`); DEBUG
+    /// `-resetOnboardingFlag` forgets that onboarding was completed (UI tests). A replay run (DEBUG
+    /// `-replayScenario`, started by the services) never shows onboarding.
     static func launch(
         services: any AppServices,
         arguments: [String] = ProcessInfo.processInfo.arguments,
@@ -171,9 +172,7 @@ final class AppModel {
         model.rebuildAll()
         model.loadPreferences()
         if !model.preferencesLoaded { model.waitForProtectedData() }
-        if let index = arguments.firstIndex(of: "-tab"), index + 1 < arguments.count, let tab = AppTab(rawValue: arguments[index + 1]) {
-            model.selectedTab = tab
-        }
+        model.openTab(launchArguments: arguments)
         model.startObserving()
         return model
     }
@@ -262,13 +261,33 @@ final class AppModel {
             calibration: Fixtures.calibration(.available, at: current),
             onboarding: arguments.contains("-onboarding") ? .initial : nil
         )
-        if let index = arguments.firstIndex(of: "-tab"), index + 1 < arguments.count,
-           let tab = AppTab(rawValue: arguments[index + 1]) {
-            model.selectedTab = tab
-        }
+        model.openTab(launchArguments: arguments)
         return model
     }
     #endif
+
+    /// The Alerts tab's `-tab` value before D56. Old invocations (UI tests, screenshot scripts) still
+    /// pass it; it opens Settings › Alerts.
+    static let legacyAlertsTab = "alerts"
+
+    /// `-tab <now|predict|trends|settings>` selects that tab; `-tab alerts` opens Settings › Alerts
+    /// (D56). Anything else is ignored (Now). The tab itself is never persisted (a cold launch opens
+    /// Now, P3 review m6), so there is no stored "alerts" value to migrate.
+    func openTab(launchArguments arguments: [String]) {
+        guard let index = arguments.firstIndex(of: "-tab"), index + 1 < arguments.count else { return }
+        let value = arguments[index + 1]
+        if value == Self.legacyAlertsTab {
+            openSettings(.alerts)
+        } else if let tab = AppTab(rawValue: value) {
+            selectedTab = tab
+        }
+    }
+
+    /// The tab bar's red dots (RootView, every render and UI clock tick). Pure function of the
+    /// current view states (`TabAttention`): a dot clears as soon as its cause does.
+    func tabsNeedingAttention() -> Set<AppTab> {
+        TabAttention.tabs(nowBanners: now.banners(now: clock()), settings: settings)
+    }
 
     static func emptySettings(appearance: AppearancePreference) -> SettingsViewState {
         SettingsViewState(
@@ -371,6 +390,9 @@ final class AppModel {
             alertSettingsDraft = nil
             alerts = AlertsMapping.make(services.alertSettings)
         case .alertDelivery:
+            // D55: the Settings notice and tab dot are computed from `settings.delivery`, so a live
+            // volume change (AlertEngine observes it while the app is in the foreground) shows up
+            // or clears here, with nothing cached.
             settings.delivery = SettingsMapping.delivery(services.alertDelivery)
             refreshOnboardingPermissions()
             refreshHealth(time)
@@ -733,6 +755,8 @@ final class AppModel {
 }
 
 enum SettingsRoute: Hashable, Sendable {
+    /// Settings › Alerts (D56: was the Alerts tab).
+    case alerts
     case sensor
     case trio
     case sharing

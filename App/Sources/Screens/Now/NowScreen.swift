@@ -12,7 +12,7 @@ import WidgetCore
 
 struct NowActions {
     var selectChartWindow: @MainActor (ChartWindow) -> Void
-    /// Header sound button: the Alerts tab (sounds and snoozes live there).
+    /// Header sound button: Settings › Alerts (sounds and snoozes live there; D56).
     var openAlerts: @MainActor () -> Void
     var openSensorSettings: @MainActor () -> Void
     var openCalibration: @MainActor () -> Void

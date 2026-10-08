@@ -20,7 +20,7 @@ final class ReplayLaunchUITests: XCTestCase {
     private let timeout: TimeInterval = 30
 
     /// Launches the app with `arguments` and, always, `-silenceAlertAudio` and `-resetConnectionMode`;
-    /// on the Now tab unless `arguments` pick one (the app restores the last tab across launches).
+    /// on the Now tab unless `arguments` pick one.
     private func launchApp(_ arguments: [String]) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -62,6 +62,12 @@ final class ReplayLaunchUITests: XCTestCase {
         } while Date() < deadline
         XCTFail("\(description); last label: \"\(last)\"")
         return last
+    }
+
+    /// A tab bar button by title. The label is "<Title>, needs attention" while the tab shows its
+    /// red dot (Now: a banner; Settings: a low alarm volume, D55), so match the start.
+    private func tab(_ app: XCUIApplication, _ title: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@ OR label BEGINSWITH %@", title, "\(title), ")).firstMatch
     }
 
     /// The DEBUG/REPLAY banner names the scenario (PROGRESS D19), and onboarding is not shown.
@@ -159,16 +165,61 @@ final class ReplayLaunchUITests: XCTestCase {
         assertReplayBanner(app, "sensorExpiry")
     }
 
-    // MARK: - Alerts (D43)
+    // MARK: - Navigation (D56): Now · Predict · Trends · Settings, Alerts in Settings
 
-    /// The Alerts tab groups the sensor expiry reminders (24 h, 12 h, 2 h, grace start, expired). Each
-    /// row has one switch (on/off; review m8: no Sound switch in the list); an announcement's page has
-    /// the alert style choice (D53; 24 h Silent by default); urgent low's page has none, only its
-    /// note (S7).
+    /// Four tabs, no Alerts tab; Predict shows its placeholder; Now's sound button opens Settings ›
+    /// Alerts (the list, a detail page, back), and Settings lists ALERTS first, ALERT DELIVERY next.
+    /// Saves the Predict tab and the Settings root to docs/screenshots when asked (see below).
+    func test_settingsAlertsAndThePredictTab() throws {
+        let app = launch(scenario: "steady", minute: 60)
+        for title in ["Now", "Predict", "Trends", "Settings"] {
+            XCTAssertTrue(tab(app, title).waitForExistence(timeout: timeout), "\(title) tab")
+        }
+        XCTAssertFalse(tab(app, "Alerts").exists, "no Alerts tab (D56)")
+
+        tapWhenReady(tab(app, "Predict"))
+        waitForLabel(element(app, "predict.placeholder"), "the Predict placeholder") { $0.contains("Zen Predict") }
+        try saveScreenshot("predict-placeholder-app")
+
+        // Now's header sound button → Settings › Alerts.
+        tapWhenReady(tab(app, "Now"))
+        tapWhenReady(app.buttons["Alert sounds"])
+        let urgentLow = element(app, "alerts.row.urgentLow")
+        XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout), "Settings › Alerts")
+        XCTAssertTrue(tab(app, "Settings").isSelected, "on the Settings tab")
+        tapWhenReady(element(app, "alerts.row.high"))
+        XCTAssertTrue(app.staticTexts["High"].waitForExistence(timeout: timeout), "an alert's page inside Settings")
+        XCTAssertTrue(app.staticTexts["SOUND"].exists, "its sound picker")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout), "back to the list")
+        app.navigationBars.buttons.firstMatch.tap()
+
+        // The Settings root: ALERTS first, then ALERT DELIVERY, then SENSOR.
+        let alertsRow = element(app, "settings.alerts")
+        XCTAssertTrue(alertsRow.waitForExistence(timeout: timeout))
+        waitForLabel(alertsRow, "the Alerts summary") { $0.contains(" on · quiet hours") }
+        let volume = element(app, "settings.alarmVolume")
+        let sensor = element(app, "settings.sensor")
+        XCTAssertTrue(volume.exists && sensor.exists)
+        XCTAssertLessThan(alertsRow.frame.minY, volume.frame.minY, "ALERTS before ALERT DELIVERY")
+        XCTAssertLessThan(volume.frame.minY, sensor.frame.minY, "ALERT DELIVERY before SENSOR")
+        try saveScreenshot("settings-root-app")
+        tapWhenReady(alertsRow)
+        XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout), "the row opens Settings › Alerts")
+    }
+
+    // MARK: - Alerts (D43), Settings › Alerts since D56
+
+    /// Settings › Alerts groups the sensor expiry reminders (24 h, 12 h, 2 h, grace start, expired).
+    /// Each row has one switch (on/off; review m8: no Sound switch in the list); an announcement's page
+    /// has the alert style choice (D53; 24 h Silent by default); urgent low's page has none, only its
+    /// note (S7). Launched with the old `-tab alerts`, which opens Settings › Alerts (D56).
     /// With SENSOR_WRITE_SCREENSHOTS=1 (TEST_RUNNER_ prefix through xcodebuild) it also saves the
     /// list and the 24 h reminder's page to docs/screenshots, named with SENSOR_SCREENSHOT_SCHEME.
     func test_alertsShowTheSensorExpiryReminders() throws {
         let app = launch(scenario: "steady", minute: 60, extra: ["-tab", "alerts"])
+        XCTAssertTrue(tab(app, "Settings").waitForExistence(timeout: timeout))
+        XCTAssertTrue(tab(app, "Settings").isSelected, "-tab alerts opens the Settings tab")
         let urgentLow = element(app, "alerts.row.urgentLow")
         XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout))
         tapWhenReady(urgentLow)
@@ -181,7 +232,7 @@ final class ReplayLaunchUITests: XCTestCase {
         let last = element(app, "alerts.row.sensorExpired")
         // Scroll until the whole group is on screen (the last row of it visible).
         for _ in 0..<12 where !(last.exists && last.isHittable) { app.swipeUp(velocity: .slow) }
-        XCTAssertTrue(first.isHittable && last.isHittable, "the expiry reminders are on the Alerts tab")
+        XCTAssertTrue(first.isHittable && last.isHittable, "the expiry reminders are in Settings › Alerts")
         for kind in ["sensorExpiringIn24Hours", "sensorExpiringIn12Hours", "sensorExpiringIn2Hours", "sensorGracePeriod", "sensorExpired"] {
             XCTAssertTrue(element(app, "alerts.row.\(kind)").exists, kind)
             XCTAssertTrue(element(app, "alerts.toggle.\(kind)").exists, "\(kind): its on/off switch")
@@ -199,9 +250,11 @@ final class ReplayLaunchUITests: XCTestCase {
     }
 
     /// D53: Low set to vibrate only — the detail page hides the sound settings and explains it, the
-    /// list subtitle says "vibrate only"; back to Sound restores them.
+    /// list subtitle says "vibrate only"; back to Sound restores them. Reached through Settings ›
+    /// Alerts (D56).
     func test_lowCanVibrateOnly() throws {
-        let app = launch(scenario: "steady", minute: 60, extra: ["-tab", "alerts"])
+        let app = launch(scenario: "steady", minute: 60, extra: ["-tab", "settings"])
+        tapWhenReady(element(app, "settings.alerts"))
         let low = element(app, "alerts.row.low")
         tapWhenReady(low)
         let style = app.segmentedControls["alerts.detail.style"]
@@ -255,7 +308,7 @@ final class ReplayLaunchUITests: XCTestCase {
         tapWhenReady(pair)
         XCTAssertTrue(element(app, "settings.sensor.page").waitForExistence(timeout: timeout), "Settings › Sensor")
         XCTAssertFalse(element(app, "onboarding.step").exists, "not the full-screen onboarding")
-        XCTAssertTrue(app.buttons["Trends"].exists && app.buttons["Settings"].exists, "the tab bar is there")
+        XCTAssertTrue(tab(app, "Trends").exists && tab(app, "Settings").exists, "the tab bar is there")
     }
 
     // MARK: - D45 listen mode (no real G7 here: the live source in the simulator, or a replay)
@@ -312,7 +365,7 @@ final class ReplayLaunchUITests: XCTestCase {
         reveal(app, nowLine)
         XCTAssertTrue(nowLine.isHittable, "Now: the listening line")
         try saveScreenshot("listen-now")
-        app.buttons["Settings"].tap()
+        tab(app, "Settings").tap()
         waitForLabel(element(app, "settings.connection"), "Settings: listening") { $0.contains("listening alongside Dexcom") }
         waitForLabel(element(app, "settings.trio"), "Settings: Trio off while listening") { $0.contains("off while listening") }
         try saveScreenshot("listen-settings")
@@ -365,7 +418,7 @@ final class ReplayLaunchUITests: XCTestCase {
         assertSharingSwitches(app, enabled: true)
         app.navigationBars.buttons.firstMatch.tap()
         // "Now" or "Now, needs attention" (no sensor here).
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Now'")).firstMatch.tap()
+        tab(app, "Now").tap()
         waitForLabel(element(app, "now.trioRow"), "Now: Trio row back to its usual words") { !$0.contains("listening") }
     }
 

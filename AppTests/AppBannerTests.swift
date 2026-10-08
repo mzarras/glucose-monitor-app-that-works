@@ -18,7 +18,6 @@ final class AppBannerTests: XCTestCase {
         var share = healthy; share.dexcomShare = .failing(failureCount: 1, lastError: "Login failed", since: minutes(-5))
         var denied = healthy; denied.notifications = .denied
         var quiet = healthy; quiet.notifications = .provisional
-        var volume = healthy; volume.alarmVolume = .tooLow(level: 0.1)
         var alarm = healthy; alarm.urgentLowAlarm = .denied
         var forceQuit = healthy; forceQuit.forceQuitGap = ForceQuitGap(from: minutes(-300), to: minutes(-210))
 
@@ -42,7 +41,6 @@ final class AppBannerTests: XCTestCase {
             ("Trio bridge failing", banners(health: trio), .trioBridgeFailing, .critical),
             ("notifications denied", banners(health: denied), .notificationsDisabled, .critical),
             ("notifications provisional", banners(health: quiet), .notificationsDisabled, .critical),
-            ("alarm volume too low", banners(health: volume), .alarmVolumeTooLow, .warning),
             ("urgent low alarm not allowed (D26, review m6)", banners(health: alarm), .urgentLowAlarmOff, .critical),
             ("Nightscout upload failing", banners(health: nightscout), .nightscoutUploadFailing, .warning),
             ("Dexcom Share upload failing", banners(health: share), .shareUploadFailing, .warning),
@@ -173,6 +171,20 @@ final class AppBannerTests: XCTestCase {
             XCTAssertEqual(banner?.kind, .calibrationNeeded)
             XCTAssertEqual(banner?.action, .openCalibration)
             XCTAssertEqual(banners(state, latestAge: 30).count, 1, "no missed-readings banner on top")
+        }
+    }
+
+    /// D55: a low or muted alarm volume is no longer a Now banner (it is the Settings notice and
+    /// tab dot, `SettingsAttentionTests`); every other delivery banner stays on Now.
+    func test_S5_lowAlarmVolumeIsNotANowBanner() {
+        for level in [0.0, 0.1, 0.249] {
+            var health = healthy
+            health.alarmVolume = .tooLow(level: level)
+            XCTAssertEqual(banners(health: health), [], "\(level): no Now banner")
+            // The critical delivery banners are unchanged next to it.
+            health.notifications = .denied
+            health.urgentLowAlarm = .denied
+            XCTAssertEqual(banners(health: health).map(\.kind), [.notificationsDisabled, .urgentLowAlarmOff], "\(level)")
         }
     }
 

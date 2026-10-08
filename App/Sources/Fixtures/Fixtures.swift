@@ -172,7 +172,7 @@ enum Fixtures {
         }
         if scenario == .manyProblems {
             health.notifications = .denied
-            health.alarmVolume = .tooLow(level: 0.15)
+            health.alarmVolume = .tooLow(level: 0.15) // D55: Settings shows it; no Now banner
             health.urgentLowAlarm = .denied
             health.nightscout = .failing(failureCount: 3, lastError: "HTTP 401 Unauthorized.", since: now.addingTimeInterval(-20 * 60))
             health.forceQuitGap = ForceQuitGap(from: now.addingTimeInterval(-5 * 3_600), to: now.addingTimeInterval(-3.5 * 3_600))
@@ -359,6 +359,13 @@ enum Fixtures {
         var state = settings(at: now)
         state.connection = ConnectionModeState(mode: .listen)
         state.packetRecording = PacketRecordingState(isOn: true)
+        return state
+    }
+
+    /// D55: everything fine except the alarm volume (15 %): the compact notice at the top.
+    static func settingsVolumeLow(at now: Date = referenceNow) -> SettingsViewState {
+        var state = settings(at: now)
+        state.delivery.alarmVolume = .tooLow(level: 0.15)
         return state
     }
 

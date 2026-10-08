@@ -2,7 +2,12 @@
 // shows a status summary per area; editing happens on sub-pages. Secrets are write-only fields: the
 // state says whether one is saved, never what it is. Every action goes to `AppServices` through
 // `AppModel` (docs/app-wiring.md).
+//
+// D56: Alerts is the first group (Settings › Alerts and its detail pages live in this stack).
+// D55: while the alarm volume is too low, a compact notice sits at the top (and the tab shows a
+// dot); both are computed from the current state, so they clear when the volume goes up.
 
+import AlertEngine
 import GlucoseCore
 import SwiftUI
 import WidgetCore
@@ -61,22 +66,32 @@ struct SettingsActions {
 struct SettingsScreen: View {
     let state: SettingsViewState
     let calibration: CalibrationViewState
+    /// Settings › Alerts (D56).
+    let alerts: AlertsViewState
     @Binding var route: SettingsRoute?
     let actions: SettingsActions
+    let alertsActions: AlertsActions
     /// G7Kit `hasStoredSensor` (review N2), passed to Settings › Sensor.
     var hasStoredSensor = false
-    @State private var path: [SettingsRoute] = []
+    /// Type-erased: holds `SettingsRoute`s and, under Settings › Alerts, an `AlertKind` (D56).
+    @State private var path = NavigationPath()
 
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
-                SettingsContent(state: state, now: Date(), actions: actions)
+                SettingsContent(state: state, alerts: alerts, now: Date(), actions: actions)
             }
             .editorialScreen()
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: AlertKind.self) { kind in
+                if let row = alerts.row(kind) {
+                    AlertDetailView(row: row, sounds: alerts.sounds, actions: alertsActions)
+                }
+            }
             .navigationDestination(for: SettingsRoute.self) { route in
                 Group {
                     switch route {
+                    case .alerts: AlertsPage(state: alerts, actions: alertsActions)
                     case .sensor: SensorSettingsView(sensor: state.sensor, calibration: calibration, feedback: state.feedback.pairing, actions: actions,
                                                      hasStoredSensor: hasStoredSensor, connection: state.connection,
                                                      connectionSwitchingTo: state.connectionSwitchingTo, connectionFeedback: state.feedback.connection,
@@ -101,13 +116,17 @@ struct SettingsScreen: View {
 
     private func followRoute() {
         guard let route else { return }
-        path = [route]
+        var opened = NavigationPath()
+        opened.append(route)
+        path = opened
         self.route = nil
     }
 }
 
 struct SettingsContent: View {
     let state: SettingsViewState
+    /// The ALERTS row's summary (D56).
+    let alerts: AlertsViewState
     let now: Date
     let actions: SettingsActions
     var context: DisplayContext = .current
@@ -120,6 +139,14 @@ struct SettingsContent: View {
                     .accessibilityAddTraits(.isHeader)
                 Hairline().padding(.top, 6)
             }
+            if let notice = state.alarmVolumeNotice {
+                AlarmVolumeNotice(text: notice)
+            }
+            SettingsGroup("ALERTS") {
+                SettingsLinkRow(title: "Alerts", value: AlertsText.settingsSummary(alerts), route: .alerts)
+                    .accessibilityIdentifier("settings.alerts")
+            }
+            alertDeliveryGroup
             SettingsGroup("SENSOR") {
                 SettingsLinkRow(title: "G7 sensor", value: state.sensor.isWaitingForFirstState ? "checking…"
                                     : SensorStatusText.row(state.sensor.state, session: state.sensor.session, now: now, context: context,
@@ -149,14 +176,6 @@ struct SettingsContent: View {
                                 route: .sharing, valueIsAlert: !state.isListening && isFailing(state.dexcomShare.status))
                     .accessibilityIdentifier("settings.share")
             }
-            SettingsGroup("ALERT DELIVERY") {
-                SettingsLinkRow(title: "Notifications", value: SettingsText.notifications(state.delivery.notifications).status,
-                                route: .alertDelivery, valueIsAlert: state.delivery.notifications == .denied || state.delivery.notifications == .provisional)
-                SettingsLinkRow(title: "Urgent low alarm", value: SettingsText.urgentLowAlarm(state.delivery.urgentLowAlarm).status,
-                                route: .alertDelivery, valueIsAlert: state.delivery.urgentLowAlarm == .denied)
-                SettingsLinkRow(title: "Critical Alerts (optional)", value: SettingsText.criticalAlerts(state.delivery.criticalAlerts).status, route: .alertDelivery)
-                SettingsLinkRow(title: "Alarm volume", value: SettingsText.alarmVolume(state.delivery.alarmVolume), route: .alertDelivery, valueIsAlert: isTooLow(state.delivery.alarmVolume))
-            }
             dataGroup
             diagnosticsGroup
             appearanceGroup
@@ -173,6 +192,19 @@ struct SettingsContent: View {
         .padding(.horizontal, Layout.sideMargin)
         .padding(.top, 8)
         .padding(.bottom, 24)
+    }
+
+    private var alertDeliveryGroup: some View {
+        SettingsGroup("ALERT DELIVERY") {
+            SettingsLinkRow(title: "Notifications", value: SettingsText.notifications(state.delivery.notifications).status,
+                            route: .alertDelivery, valueIsAlert: state.delivery.notifications == .denied || state.delivery.notifications == .provisional)
+            SettingsLinkRow(title: "Urgent low alarm", value: SettingsText.urgentLowAlarm(state.delivery.urgentLowAlarm).status,
+                            route: .alertDelivery, valueIsAlert: state.delivery.urgentLowAlarm == .denied)
+            SettingsLinkRow(title: "Critical Alerts (optional)", value: SettingsText.criticalAlerts(state.delivery.criticalAlerts).status, route: .alertDelivery)
+            SettingsLinkRow(title: "Alarm volume", value: SettingsText.alarmVolume(state.delivery.alarmVolume), route: .alertDelivery,
+                            valueIsAlert: state.needsAttention)
+                .accessibilityIdentifier("settings.alarmVolume")
+        }
     }
 
     private var dataGroup: some View {
@@ -288,14 +320,44 @@ struct SettingsContent: View {
         case .off, .ok: return false
         }
     }
-
-    private func isTooLow(_ status: AlarmVolumeStatus) -> Bool {
-        if case .tooLow = status { return true }
-        return false
-    }
 }
 
 // MARK: - Rows
+
+/// D55: one line at the top of Settings while the alarm volume is too low, linking to Alert
+/// delivery. No dismiss button: it disappears when the volume goes up.
+struct AlarmVolumeNotice: View {
+    let text: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            NavigationLink(value: SettingsRoute.alertDelivery) {
+                HStack(alignment: .top, spacing: 10) {
+                    Circle().fill(Theme.alert).frame(width: 6, height: 6)
+                        .padding(.top, 6)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(verbatim: text)
+                            .font(Typography.body(size: 13))
+                        Text(verbatim: "Alert delivery \u{203A}")
+                            .font(Typography.label(size: 11))
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.vertical, 6)
+                .frame(minHeight: Layout.minTarget)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(verbatim: text))
+            .accessibilityHint(Text(verbatim: "Opens Alert delivery"))
+            .accessibilityIdentifier("settings.volumeNotice")
+            Hairline()
+        }
+    }
+}
 
 struct SettingsGroup<Content: View>: View {
     let title: String

@@ -17,12 +17,13 @@ struct RootView: View {
             }
             screen
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // The UI clock: every 15 s the latch is re-evaluated (S5) and the tab dot follows the
-            // banners, which the screens classify against `model.clock`.
+            // The UI clock: every 15 s the latch is re-evaluated (S5) and the tab dots follow the
+            // banners, which the screens classify against `model.clock`, and the Settings state
+            // (D55: alarm volume), which every `.alertDelivery` change rebuilds.
             TimelineView(.periodic(from: .now, by: 15)) { timeline in
                 SensorTabBar(
                     selected: model.selectedTab,
-                    nowHasProblems: !model.now.banners(now: model.clock()).isEmpty,
+                    attention: model.tabsNeedingAttention(),
                     select: { model.selectTab($0) }
                 )
                 .onChange(of: timeline.date, initial: true) { _, _ in
@@ -64,13 +65,13 @@ struct RootView: View {
         switch model.selectedTab {
         case .now:
             NowScreen(state: model.now, calibration: model.calibration, actions: nowActions, clock: model.clock)
+        case .predict:
+            PredictScreen()
         case .trends:
             TrendsScreen(state: model.trends, selectPeriod: { model.selectTrendsPeriod($0) })
-        case .alerts:
-            AlertsScreen(state: model.alerts, actions: alertsActions)
         case .settings:
-            SettingsScreen(state: model.settings, calibration: model.calibration, route: $model.settingsRoute, actions: settingsActions,
-                           hasStoredSensor: model.hasStoredSensor)
+            SettingsScreen(state: model.settings, calibration: model.calibration, alerts: model.alerts, route: $model.settingsRoute,
+                           actions: settingsActions, alertsActions: alertsActions, hasStoredSensor: model.hasStoredSensor)
         }
     }
 
@@ -87,7 +88,7 @@ struct RootView: View {
     private var nowActions: NowActions {
         NowActions(
             selectChartWindow: { model.selectChartWindow($0) },
-            openAlerts: { model.selectTab(.alerts) },
+            openAlerts: { model.openAlerts() },
             openSensorSettings: { model.openSettings(.sensor) },
             openCalibration: { model.isCalibrationPresented = true },
             exportDiagnostics: { model.exportDiagnostics() },

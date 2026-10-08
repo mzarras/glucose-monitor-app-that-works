@@ -363,10 +363,10 @@ uploads; Trends footnotes periods that contain it. A LOW/HIGH that Trio's native
 | Onboarding › Permissions, or Settings › Alert delivery | **Notifications**: Allow. Bluetooth is asked the first time the app looks for the sensor |
 | iOS Settings › Notifications › Sensor | Allow Notifications, Lock Screen and Banners, **Sounds**, **Time Sensitive Notifications** on. The app raises "Alerts may not show or sound" if alerts (banners), sounds or Time Sensitive are off. In each Focus, allow Time Sensitive notifications |
 | Onboarding › Urgent low alarm, or Settings › Alert delivery (iOS 26+) | **Allow alarms** (AlarmKit, D26): urgent low and its repeats ring as system alarms on silent, in Focus and while the app is suspended. Denied → critical banner "Urgent low alarm is off" |
-| Phone volume | In-app alert audio plays at the **media** volume. Settings › Alert delivery warns below 25 %, and a banner says "Alarm volume is low" |
-| Alerts tab › each alert | thresholds, sound (preview), snooze, and **Sound on silent** (D17). Urgent low: threshold 50–60, repeat every 2–5 min until acknowledged, snooze ≤ 30 min, no off switch, sound on silent always (S7) |
-| Alerts tab › Quiet hours | a daily window that silences every alert **except urgent low**, including Low and Missed readings (D27) |
-| Alerts tab › Sensor expiry reminders | 24 h (no sound by default), 12 h, 2 h, grace period started, sensor expired; each with its own switch; the one-off reminders have a Sound switch (D43) |
+| Phone volume | In-app alert audio plays at the **media** volume. Below 25 % the Settings tab shows a red dot and Settings a one-line notice ("Alarm volume 15%. …") with the red "Alarm volume" row; both clear as soon as the volume goes up while the app is open (D55) |
+| Settings › Alerts › each alert | thresholds, sound (preview), snooze, and **Sound on silent** (D17). Urgent low: threshold 50–60, repeat every 2–5 min until acknowledged, snooze ≤ 30 min, no off switch, sound on silent always (S7) |
+| Settings › Alerts › Quiet hours | a daily window that silences every alert **except urgent low**, including Low and Missed readings (D27) |
+| Settings › Alerts › Sensor expiry reminders | 24 h (no sound by default), 12 h, 2 h, grace period started, sensor expired; each with its own switch; the one-off reminders have a Sound switch (D43) |
 
 What "Sound on silent" can and can't do (D17): while the app is awake for a sensor wake-up (about
 every 5 minutes) it plays the alert sound itself, through the ringer switch. An alert that comes due
@@ -479,7 +479,7 @@ source for its duration and uses an in-memory store (D20).
     value shown that the scenario did not deliver.
   - Record: screenshots of anything wrong.
 - [ ] **Sounds are distinct by ear** (`docs/alerts.md` §8).
-  - Do: Alerts tab › each alert › sound preview; all eight sounds.
+  - Do: Settings › Alerts › each alert › sound preview; all eight sounds.
   - Expect: no two confusable; none sounds like a pager.
   - Record: pairs you confuse.
 - [ ] **Low alert with the ringer off, app awake** (D17 path).
@@ -521,8 +521,9 @@ source for its duration and uses an in-memory store (D20).
   - Record: anything that rang.
 - [ ] **Media volume at zero** (alerts.md §10.6).
   - Do: media volume 0, ringer on; trigger a Low.
-  - Expect: Settings › Alert delivery shows the volume warning and the "Alarm volume is low"
-    banner; the notification sound still plays.
+  - Expect: the Settings tab's red dot, the Settings notice and the red "Alarm volume" row (no Now
+    banner, D55); the notification sound still plays. Turn the volume up with the app open: the
+    notice and the dot clear within a second, no relaunch.
   - Record: result.
 - [ ] **Quiet hours** (D27).
   - Do: set quiet hours around now; trigger a Low, then urgent low.

@@ -47,6 +47,14 @@ struct SettingsViewState: Equatable, Sendable {
 
     /// D45: listening forces the Trio handoff and uploads off, and hides pairing-only actions.
     var isListening: Bool { connection?.isListening == true }
+
+    /// D55: the compact notice at the top of Settings while the alarm volume is too low, nil
+    /// otherwise. Computed from `delivery`, which `AppModel` rebuilds on every `.alertDelivery`
+    /// change, so it clears as soon as the volume goes up: nothing to dismiss, no relaunch.
+    var alarmVolumeNotice: String? { SettingsText.alarmVolumeNotice(delivery.alarmVolume) }
+
+    /// D55: the Settings tab's red dot (`TabAttention`). Same source as the notice.
+    var needsAttention: Bool { alarmVolumeNotice != nil }
 }
 
 /// What happened after a Settings action, for the page that started it. Nil = nothing to say.
@@ -318,6 +326,14 @@ enum SettingsText {
         case .unavailable:
             return ("Not available", "Needs iOS 26 or later. On this iOS, urgent low uses a Time Sensitive notification and rings on silent while the app is running.")
         }
+    }
+
+    /// D55: "Alarm volume 15%. Alarms may be hard to hear; turn the volume up." while the volume is
+    /// below `AlertLimits.lowAlarmVolume` (`.tooLow`, ServiceHealthMapping.alarmVolume); nil when it
+    /// is fine or not known yet.
+    static func alarmVolumeNotice(_ status: AlarmVolumeStatus) -> String? {
+        guard case .tooLow(let level) = status else { return nil }
+        return "Alarm volume \(Int((level * 100).rounded()))%. Alarms may be hard to hear; turn the volume up."
     }
 
     static func alarmVolume(_ status: AlarmVolumeStatus) -> String {
