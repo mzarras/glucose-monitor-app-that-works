@@ -13,9 +13,12 @@
 //   WidgetSnapshotPublisher (App Group group.com.mzarras.sensor)
 //   History importers + UserDefaultsNightscoutImportCheckpointStore (on demand)
 //   RingBufferDiagnosticLog, saved to Application Support/Diagnostics
+//   ForecastService (D57)  the Zen Predict feed from Info.plist ZenPredictFeedHost over URLSession,
+//                 foreground only, in memory only; linked to nothing that handles readings
 //
 // DEBUG: a unit-test host gets an inert `PreviewAppServices` (tests build their own pipelines);
-// `-replayScenario <name>` starts a replay run at launch (B's UI tests).
+// `-replayScenario <name>` starts a replay run at launch (B's UI tests); `-forecastFixture <kind>`
+// reads a fixture forecast feed instead of the network (UI tests, app-run screenshots).
 
 import AlertEngine
 import Foundation
@@ -93,11 +96,14 @@ final class AppEnvironment {
         if trioGroupID == nil {
             diagnostics.record(DiagnosticEvent(date: Date(), category: .bridge, message: "Info.plist has no TrioAppGroupID: the Trio bridge cannot be used"))
         }
-        return LiveAppServices(LiveAppServices.Dependencies(
-            g7: g7, diagnostics: diagnostics, preferences: AppPreferences(), credentials: credentials, trio: trio, uploads: uploads,
+        let preferences = AppPreferences()
+        var dependencies = LiveAppServices.Dependencies(
+            g7: g7, diagnostics: diagnostics, preferences: preferences, credentials: credentials, trio: trio, uploads: uploads,
             alertPorts: ports, widget: widget, databaseURL: support.appendingPathComponent("GlucoseStore/readings.sqlite"),
             httpTransport: URLSessionTransport(), launchReplay: launchReplay(arguments)
-        ).with(connectionSettings: connectionSettings, launch: connectionLaunch, credentialGuard: credentialGuard))
+        ).with(connectionSettings: connectionSettings, launch: connectionLaunch, credentialGuard: credentialGuard)
+        dependencies.forecastFeed = makeForecastFeed(arguments: arguments, preferences: preferences, diagnostics: diagnostics)
+        return LiveAppServices(dependencies)
     }
 
     /// D45/D47: `Application Support/SensorConnection.json` (not UserDefaults; see the file comment of

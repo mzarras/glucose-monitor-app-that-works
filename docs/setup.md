@@ -125,6 +125,7 @@ safe unsigned defaults (`org.example.sensor`) the gates build with. Fill in:
 | `APP_GROUP_ID` | `group.com.mzarras.sensor` (D2) | this app's own App Group: the widget snapshot (`widget-snapshot.json`). App **and** widget entitlements |
 | `TRIO_APP_GROUP_ID` | leave as `group.org.nightscout.$(DEVELOPMENT_TEAM).trio.trio-app-group` | Trio handoff and heartbeat (§4.1). App entitlements only, not the widget |
 | `SENSOR_APP_ENTITLEMENTS` | `App/Sensor.entitlements` (default) | switch to `App/Sensor+CriticalAlerts.entitlements` only after Apple grants Critical Alerts (§2.4) |
+| `ZEN_PREDICT_FEED_HOST` | your Zen Predict feed's host name, no `https://` (`//` starts an xcconfig comment); empty = predictions not set up | the Predict tab (D57, §4.6); Info.plist `ZenPredictFeedHost`. Settings › Predictions can override it |
 
 The reading database is **not** in either App Group: it lives in the app's own container,
 `Application Support/GlucoseStore/readings.sqlite` (D25), as do the upload queues (D48).
@@ -395,6 +396,19 @@ soon and rising/falling fast.
   off). A reading at or below the threshold at the end is the urgent-low alarm alone, without Low on
   top.
 
+### 4.6 Predictions (Zen Predict, D57; `docs/forecast.md`)
+
+| Where | Set |
+|---|---|
+| `Config/Signing.xcconfig` | `ZEN_PREDICT_FEED_HOST` = the feed's host (§2.1). Without it the Predict tab explains how to set one up |
+| Settings › Predictions | **Show predictions** (on by default once a host exists); **Feed host** (a bare host or `https://host`; `http://`, paths, ports and credentials are refused with the reason under the field), Save; "Last updated N min ago" and the last error |
+
+The tab reads `https://<host>/latest.json` (and `/metrics.json` every 30 minutes) about once a
+minute, **only while the app is open**; nothing is fetched in the background and nothing is saved.
+A forecast is never a reading: it is never the current value, never sent to Trio, Nightscout,
+Dexcom Share or the widget, and never raises an alert. A model run older than 15 minutes is shown as
+"Forecast out of date", without its numbers.
+
 ---
 
 ## 5. On-device validation plan (HANDOFF §11, D46 order)
@@ -435,7 +449,7 @@ permissions, reboot, disk full, clock and time-zone changes, force-quit, listen 
 
 **Part A, the current sensor, in listen mode** (§0): the Dexcom app stays installed and keeps the
 sensor, Trio stays on its own G7 source, and this app's Trio handoff and uploads are off. Steps 1,
-1a, 2L, 3L, 3a, and whatever of step 5 the rest of this sensor's session allows.
+1a, 2L, 3L, 3a, 3b, and whatever of step 5 the rest of this sensor's session allows.
 **Part B, the next sensor, in primary mode**: delete the Dexcom app, pair this app, switch Trio to it,
 turn on uploads (switch-over below), then steps 2P, 3P, 4, 4a, 5 and 6.
 
@@ -712,6 +726,26 @@ gap in this app (the Dexcom app keeps its own history).
     walk-away; never an old number presented as current.
   - Record: in `docs/widgets.md` › "Measured on device": typical and worst lag app → widget,
     unlocked, locked and in Low Power Mode.
+
+#### Step 3b — Predict tab (Zen Predict, D57; any time, Release)
+
+- [ ] **Forecast within about a minute.** Open the app on the Predict tab (§4.6 host set).
+  - Expect: within about a minute "MODEL RAN N MIN AGO · FROM <value> AT <time>" with three columns
+    labelled "predicted" and a dashed line on the chart; the value matches this app's reading at that
+    time (Now's chart). The model runs on readings that reach Nightscout, so in listen mode (no
+    upload from this app) it follows whatever uploads to Nightscout.
+- [ ] **Offline, then out of date.** Turn on airplane mode with the app open on Predict.
+  - Expect: within a few minutes "COULDN'T REFRESH · RETRYING" under the run's time, the forecast
+    still shown; **15 minutes after the last model run** the numbers and the dashed line disappear
+    and "Forecast out of date: last model run N min ago" shows (readings chart kept). Turn airplane
+    mode off: the forecast returns within about a minute of the next run.
+- [ ] **No host.** Build with `ZEN_PREDICT_FEED_HOST` empty (or save a different host and turn
+  "Show predictions" off).
+  - Expect: "Predictions aren't set up" (or "Predictions are off") with "Set up in Settings", which
+    opens Settings › Predictions.
+- [ ] **Never elsewhere.** While a forecast shows: Now, the widget, Trio and followers show only
+  readings; no alert follows a forecast.
+  - Record: anything else as an issue (step 6).
 
 ---
 

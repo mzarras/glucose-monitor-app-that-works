@@ -5,9 +5,10 @@
 //
 // Launch hook (AppEnvironment, DEBUG): `-replayScenario <name> -replaySpeed <x> -replayStartMinute <m>`.
 // Every launch also passes DEBUG `-silenceAlertAudio` (a silent alert player, notifications without
-// sound), so replayed urgent lows don't ring on the machine running the tests, and DEBUG
+// sound), so replayed urgent lows don't ring on the machine running the tests, DEBUG
 // `-resetConnectionMode` (pairing mode, recording off), so a D45 mode switch never carries into the
-// next test.
+// next test, and DEBUG `-forecastFixture current` unless a test picks another fixture: the Predict
+// tab reads a fixture feed for the example host, so no UI test ever makes a network request (D57).
 // Speed 1 keeps the replay clock equal to the phone clock (the UI classifies staleness against the
 // phone clock); `-replayStartMinute m` delivers everything up to scenario minute m at once, dated in
 // the past, so each test lands on the moment it checks without waiting. Offsets and values are the
@@ -20,11 +21,15 @@ final class ReplayLaunchUITests: XCTestCase {
     private let timeout: TimeInterval = 30
 
     /// Launches the app with `arguments` and, always, `-silenceAlertAudio` and `-resetConnectionMode`;
-    /// on the Now tab unless `arguments` pick one.
+    /// on the Now tab unless `arguments` pick one; with the `current` forecast fixture unless they
+    /// pick another (never the network).
     private func launchApp(_ arguments: [String]) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchArguments = ["-silenceAlertAudio", "-resetConnectionMode"] + (arguments.contains("-tab") ? [] : ["-tab", "now"]) + arguments
+        app.launchArguments = ["-silenceAlertAudio", "-resetConnectionMode"]
+            + (arguments.contains("-tab") ? [] : ["-tab", "now"])
+            + (arguments.contains("-forecastFixture") ? [] : ["-forecastFixture", "current"])
+            + arguments
         app.launch()
         return app
     }
@@ -167,9 +172,9 @@ final class ReplayLaunchUITests: XCTestCase {
 
     // MARK: - Navigation (D56): Now · Predict · Trends · Settings, Alerts in Settings
 
-    /// Four tabs, no Alerts tab; Predict shows its placeholder; Now's sound button opens Settings ›
-    /// Alerts (the list, a detail page, back), and Settings lists ALERTS first, ALERT DELIVERY next.
-    /// Saves the Predict tab and the Settings root to docs/screenshots when asked (see below).
+    /// Four tabs, no Alerts tab; Predict shows the fixture forecast (D57); Now's sound button opens
+    /// Settings › Alerts (the list, a detail page, back), and Settings lists ALERTS first, ALERT
+    /// DELIVERY next. Saves the Predict tab and the Settings root to docs/screenshots when asked.
     func test_settingsAlertsAndThePredictTab() throws {
         let app = launch(scenario: "steady", minute: 60)
         for title in ["Now", "Predict", "Trends", "Settings"] {
@@ -178,8 +183,11 @@ final class ReplayLaunchUITests: XCTestCase {
         XCTAssertFalse(tab(app, "Alerts").exists, "no Alerts tab (D56)")
 
         tapWhenReady(tab(app, "Predict"))
-        waitForLabel(element(app, "predict.placeholder"), "the Predict placeholder") { $0.contains("Zen Predict") }
-        try saveScreenshot("predict-placeholder-app")
+        waitForLabel(element(app, "predict.column.30"), "the +30 min forecast") { $0.hasPrefix("Predicted ") && $0.contains("in 30 minutes") }
+        waitForLabel(element(app, "predict.freshness"), "the model run's time") { $0.hasPrefix("MODEL RAN ") }
+        waitForLabel(element(app, "predict.chart"), "the chart says which part is predicted") { $0.contains("The predicted part is not readings.") }
+        XCTAssertTrue(element(app, "predict.disclaimer").exists)
+        try saveScreenshot("predict-app")
 
         // Now's header sound button → Settings › Alerts.
         tapWhenReady(tab(app, "Now"))
@@ -206,6 +214,56 @@ final class ReplayLaunchUITests: XCTestCase {
         try saveScreenshot("settings-root-app")
         tapWhenReady(alertsRow)
         XCTAssertTrue(urgentLow.waitForExistence(timeout: timeout), "the row opens Settings › Alerts")
+    }
+
+    // MARK: - Predict (D57)
+
+    /// An out-of-date run shows no numbers; Settings › Predictions refuses an http:// host with
+    /// ForecastKit's sentence, and turning predictions off empties the tab, whose button leads back
+    /// to Settings › Predictions. Saves the page to docs/screenshots when asked.
+    func test_predictOutOfDateAndSettingsPredictions() throws {
+        let app = launch(scenario: "steady", minute: 60, extra: ["-tab", "predict", "-forecastFixture", "stale"])
+        waitForLabel(element(app, "predict.message"), "out of date") { $0.contains("Forecast out of date") && $0.contains("Last model run 3") }
+        XCTAssertFalse(element(app, "predict.column.30").exists, "no numbers for a stale run")
+        XCTAssertTrue(element(app, "predict.chart").exists, "the readings chart stays")
+
+        tapWhenReady(tab(app, "Settings"))
+        let row = element(app, "settings.predictions")
+        reveal(app, row)
+        waitForLabel(row, "the PREDICTIONS row") { $0.contains("on · zen.example.com") }
+        row.tap()
+        XCTAssertTrue(element(app, "settings.predictions.page").waitForExistence(timeout: timeout))
+        let field = app.textFields["settings.predictions.host"]
+        tapWhenReady(field)
+        // Return saves and puts the keyboard away, so the refusal is in view (and in the screenshot).
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20) + "http://zen.example.com\n")
+        waitForLabel(element(app, "settings.predictions.feedback"), "the refusal under the field") { $0 == "Only https:// is supported." }
+        tapWhenReady(element(app, "settings.predictions.save"))
+        waitForLabel(element(app, "settings.predictions.feedback"), "Save says the same") { $0 == "Only https:// is supported." }
+        try saveScreenshot("settings-predictions-app")
+
+        let toggle = app.switches["settings.predictions.toggle"].firstMatch
+        reveal(app, toggle)
+        XCTAssertEqual(toggle.value as? String, "1")
+        // The switch itself sits at the row's trailing edge (the label does not toggle it).
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        let off = NSPredicate(format: "value == '0'")
+        expectation(for: off, evaluatedWith: toggle)
+        waitForExpectations(timeout: timeout)
+
+        tapWhenReady(tab(app, "Predict"))
+        waitForLabel(element(app, "predict.message"), "predictions off") { $0.contains("Predictions are off") }
+        tapWhenReady(element(app, "predict.setUp"))
+        XCTAssertTrue(element(app, "settings.predictions.page").waitForExistence(timeout: timeout), "the button opens Settings › Predictions")
+    }
+
+    /// With no feed host, the tab explains how to set one up.
+    func test_predictWithoutAHostExplainsTheSetup() {
+        let app = launch(scenario: "steady", minute: 60, extra: ["-tab", "predict", "-forecastFixture", "notConfigured"])
+        waitForLabel(element(app, "predict.message"), "not set up") { $0.contains("Predictions aren't set up") && $0.contains("Settings › Predictions") }
+        XCTAssertFalse(element(app, "predict.chart").exists)
+        tapWhenReady(element(app, "predict.setUp"))
+        XCTAssertTrue(element(app, "settings.predictions.page").waitForExistence(timeout: timeout))
     }
 
     // MARK: - Alerts (D43), Settings › Alerts since D56

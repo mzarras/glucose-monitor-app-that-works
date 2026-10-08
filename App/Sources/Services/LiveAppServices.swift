@@ -15,7 +15,8 @@
 // 3. Every drain attempt is a wake: storage health and alert tick, widget, clock-mismatch check,
 //    pipeline heartbeat.
 // 4. Foreground: permissions, `.foreground` (expiry reminders, D43), drain attempt (storage, tick),
-//    Trio retry, upload flush, retention, a 60 s ticker.
+//    Trio retry, upload flush, retention, a 60 s ticker; the Zen Predict feed (D57) is polled from
+//    here until the app leaves the foreground (never in the background).
 //
 // Area-specific parts are in the LiveAppServices+*.swift extensions.
 
@@ -26,6 +27,9 @@ import G7Kit
 import GlucoseCore
 import GlucoseStore
 import NightscoutKit
+#if DEBUG
+import ReplayKit // the replay run's scenario name (`replay`); every ReplayKit source is DEBUG-only
+#endif
 import UIKit
 import WidgetCore
 
@@ -73,6 +77,9 @@ final class LiveAppServices: AppServices {
         /// Review m2/m3: the G7 source's credential store, which refuses deletions the person did not
         /// ask for. Nil where the source has no Keychain store (scripted tests).
         var credentialGuard: GuardedG7CredentialStore?
+        /// D57: the Zen Predict feed (Predict tab). The default has no host and no network;
+        /// AppEnvironment passes the Info.plist host and URLSession (a fixture in DEBUG UI tests).
+        var forecastFeed = ForecastService.Feed.none
     }
 
     struct LaunchReplay: Equatable {
@@ -103,6 +110,9 @@ final class LiveAppServices: AppServices {
     let connectionSettingsStore: SensorConnectionSettingsStore
     let credentialGuard: GuardedG7CredentialStore?
     let historyImports: HistoryImportCoordinator
+    /// D57: the Zen Predict forecast, foreground only (LiveAppServices+Forecast.swift). Separate from
+    /// everything that handles readings.
+    let forecastService: ForecastService
 
     /// The G7 pipeline, for the whole process.
     let sensorPipeline: ReadingPipeline
@@ -187,6 +197,9 @@ final class LiveAppServices: AppServices {
         supportsCalibration = loaded.settings.mode != .listen
         connectionSettingProblem = loaded.problem
         historyImports = HistoryImportCoordinator(diagnostics: dependencies.diagnostics)
+        forecastService = ForecastService(feed: dependencies.forecastFeed) { [diagnostics = dependencies.diagnostics, clock = dependencies.clock] message in
+            diagnostics.record(DiagnosticEvent(date: clock(), category: .app, message: message))
+        }
         sensorPipeline = ReadingPipeline(name: "sensor", source: dependencies.g7, diagnostics: dependencies.diagnostics, now: dependencies.clock)
         // B1: no widget snapshot until the store is open — before that the latest reading is
         // unknown, and a snapshot without it would clear the widget's clock-mismatch latch.
@@ -212,6 +225,7 @@ final class LiveAppServices: AppServices {
         }
         trioCoordinator.onChange = { [weak self] summary in self?.trioSummaryChanged(summary) }
         uploads.onChange = { [weak self] in self?.send(.uploads) }
+        forecastService.onChange = { [weak self] in self?.send(.forecast) }
         // Consume the G7 streams for the whole process (CGMSource stream rules), holding events
         // until bootstrap.
         sensorPipeline.startConsuming()
@@ -559,6 +573,7 @@ final class LiveAppServices: AppServices {
         if let last = preferences.lastHistoryImport { historyImports.restore(last) }
         detectForceQuitGap()
         loadSharingSecrets()
+        applyForecastSettings() // D57: no fetch here; only `handleForeground()` starts one
 
         // Alerts first, so the held states reach them in order.
         alertSettings = preferences.alertSettings
@@ -592,7 +607,7 @@ final class LiveAppServices: AppServices {
         await updateTrioHeartbeat()
         updateClockMismatchLatch(now: now())
         await storeOpening.value
-        for change in [ServiceChange.readings, .sensor, .calibration, .trio, .uploads, .historyImport, .alertSettings, .alertDelivery, .storage, .health, .appearance] {
+        for change in [ServiceChange.readings, .sensor, .calibration, .trio, .uploads, .historyImport, .alertSettings, .alertDelivery, .storage, .health, .appearance, .forecast] {
             send(change)
         }
 
@@ -747,6 +762,9 @@ final class LiveAppServices: AppServices {
         if !markedByScene { isInForeground = true }
         await bootstrap()
         guard isBootstrapped else { return }
+        // D57: the forecast feed is fetched only from here (never on a Bluetooth wake or a bootstrap),
+        // at once, unless `handleBackground()` arrived meanwhile.
+        if isInForeground { forecastService.enterForeground() }
         // D55: the media volume is observed live until `handleBackground()`. Before the permission
         // refresh below, so that reads the volume from an active session.
         updateVolumeMonitoring()
@@ -777,6 +795,7 @@ final class LiveAppServices: AppServices {
         // D55: no volume monitoring in the background (an alert sound that is playing is untouched).
         isInForeground = false
         updateVolumeMonitoring()
+        forecastService.enterBackground() // D57: no forecast requests in the background
         foregroundTicker?.cancel()
         foregroundTicker = nil
         writePipelineHeartbeat()

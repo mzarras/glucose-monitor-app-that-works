@@ -175,7 +175,9 @@ final class AppBannerTests: XCTestCase {
     }
 
     /// D55: a low or muted alarm volume is no longer a Now banner (it is the Settings notice and
-    /// tab dot, `SettingsAttentionTests`); every other delivery banner stays on Now.
+    /// tab dot: `NavigationTests` and
+    /// `AppModelWiringTests.test_alarmVolumeNoticeAndSettingsDotFollowEveryDeliveryChange`); every
+    /// other delivery banner stays on Now.
     func test_S5_lowAlarmVolumeIsNotANowBanner() {
         for level in [0.0, 0.1, 0.249] {
             var health = healthy

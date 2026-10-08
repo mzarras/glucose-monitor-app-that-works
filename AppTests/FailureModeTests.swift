@@ -98,7 +98,8 @@ final class LiveServicesHarness {
     ///   - foregroundTickInterval: the foreground ticker's period (default: production's 60 s).
     init(_ persistence: Persistence, trioEnabled: Bool = true, protectedData: Bool = true, storeOpens: Bool = true,
          launchedByBluetoothRestoration: Bool = false, uploadTransport: (any HTTPTransport)? = nil,
-         foregroundTickInterval: Duration? = nil, credentialGuard: GuardedG7CredentialStore? = nil) {
+         foregroundTickInterval: Duration? = nil, credentialGuard: GuardedG7CredentialStore? = nil,
+         forecastFeed: ForecastService.Feed = .none) {
         self.persistence = persistence
         self.protectedData = Flag(protectedData)
         self.storeOpens = Flag(storeOpens)
@@ -129,6 +130,7 @@ final class LiveServicesHarness {
         dependencies.connectionSettings = persistence.connectionSettings
         dependencies.connectionLaunch = connectionLaunch
         dependencies.credentialGuard = credentialGuard
+        dependencies.forecastFeed = forecastFeed // D57: no host and no network unless a test passes one
         let uptime = persistence.uptime
         dependencies.uptime = { uptime.value }
         let protected = self.protectedData

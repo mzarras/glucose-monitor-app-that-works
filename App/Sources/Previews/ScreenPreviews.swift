@@ -2,6 +2,7 @@
 // use Fixtures. Generated once by hand-run script; edit freely.
 
 #if DEBUG
+import AlertEngine
 import GlucoseCore
 import SwiftUI
 import WidgetCore
@@ -272,11 +273,11 @@ struct ScrubPreview: View {
 
 #Preview("Settings · volume notice · light") { NavigationStack { PreviewScreen(scheme: .light) { SettingsContent(state: Fixtures.settingsVolumeLow(at: previewNow), alerts: Fixtures.alerts, now: previewNow, actions: .noop) } } }
 #Preview("Settings › Alerts · light") { NavigationStack { AlertsPage(state: Fixtures.alerts, actions: .noop).environment(\.colorScheme, .light).preferredColorScheme(.light) } }
-#Preview("Predict · placeholder · light") { PredictScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("Predict · screen · light") { PredictScreen(state: PredictFixtures.state(.current, at: previewNow), actions: .noop).environment(\.colorScheme, .light).preferredColorScheme(.light) }
 #Preview("Tab bar · Settings needs attention · light") { VStack { Spacer(); SensorTabBar(selected: .settings, attention: [.settings], select: { _ in }) }.editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) }
 #Preview("Settings · volume notice · dark") { NavigationStack { PreviewScreen(scheme: .dark) { SettingsContent(state: Fixtures.settingsVolumeLow(at: previewNow), alerts: Fixtures.alerts, now: previewNow, actions: .noop) } } }
 #Preview("Settings › Alerts · dark") { NavigationStack { AlertsPage(state: Fixtures.alerts, actions: .noop).environment(\.colorScheme, .dark).preferredColorScheme(.dark) } }
-#Preview("Predict · placeholder · dark") { PredictScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+#Preview("Predict · screen · dark") { PredictScreen(state: PredictFixtures.state(.current, at: previewNow), actions: .noop).environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
 #Preview("Tab bar · Now and Settings need attention · dark") { VStack { Spacer(); SensorTabBar(selected: .predict, attention: [.now, .settings], select: { _ in }) }.editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
 #Preview("App · Settings, volume low · light") { RootView(model: { let m = AppModel.fixtures(arguments: ["-tab", "settings"]); m.settings.delivery.alarmVolume = .tooLow(level: 0.15); return m }()).environment(\.colorScheme, .light).preferredColorScheme(.light) }
 #endif

@@ -103,6 +103,31 @@ final class NavigationTests: XCTestCase {
         #endif
     }
 
+    /// p5-nav review m1: the "Alarm volume" row is red from the volume alone, never from the tab's
+    /// dot, and the dot is built from named causes. Predictions add no cause (D57: a forecast
+    /// problem is not a safety problem), so failing or switched-off predictions leave both alone.
+    func test_alarmVolumeRowFollowsTheVolumeAloneAndTheDotItsNamedCauses() {
+        var fine = Fixtures.settings(at: t0)
+        fine.delivery.alarmVolume = .ok(level: 0.6)
+        XCTAssertFalse(fine.alarmVolumeIsTooLow, "60 %: the row is not red")
+        XCTAssertEqual(fine.attentionCauses, [])
+        XCTAssertFalse(fine.needsAttention)
+
+        for scenario in [PredictFixtures.Scenario.failingNothingHeld, .failingWithRun, .turnedOff, .notConfigured, .stale] {
+            var withPredictions = fine
+            withPredictions.predictions = PredictFixtures.settings(scenario, at: t0)
+            withPredictions.feedback.predictions = "That is not a valid host name."
+            XCTAssertEqual(withPredictions.attentionCauses, [], "\(scenario): no Settings attention for predictions")
+            XCTAssertFalse(withPredictions.alarmVolumeIsTooLow, "\(scenario): the volume row stays as the volume says (60 %)")
+        }
+
+        let low = Fixtures.settingsVolumeLow(at: t0)
+        XCTAssertTrue(low.alarmVolumeIsTooLow)
+        XCTAssertEqual(low.attentionCauses, [.alarmVolumeTooLow])
+        XCTAssertTrue(low.needsAttention)
+        XCTAssertEqual(SettingsAttentionCause.allCases, [.alarmVolumeTooLow], "a new cause needs its own row and its own test here")
+    }
+
     func test_alarmVolumeNotice() {
         XCTAssertEqual(SettingsText.alarmVolumeNotice(.tooLow(level: 0.15)), "Alarm volume 15%. Alarms may be hard to hear; turn the volume up.")
         XCTAssertEqual(SettingsText.alarmVolumeNotice(.tooLow(level: 0)), "Alarm volume 0%. Alarms may be hard to hear; turn the volume up.")
@@ -143,8 +168,18 @@ final class NavigationTests: XCTestCase {
         XCTAssertEqual(AlertsText.settingsSummary(defaults), "\(on) of \(defaults.rows.count) on · quiet hours off")
     }
 
-    /// The Predict placeholder never shows a number (S1: a forecast is never a reading; D57).
-    func test_predictPlaceholderShowsNoNumber() {
-        XCTAssertFalse(PredictContent.placeholder.contains { $0.isNumber })
+    /// The Predict tab shows forecast numbers only for a current run (S1, D57; every state is in
+    /// PredictMappingTests): not set up, off, waiting, out of date, no run and unavailable show none.
+    func test_predictTabShowsNumbersOnlyForACurrentRun() {
+        for scenario in PredictFixtures.Scenario.allCases {
+            let state = PredictFixtures.state(scenario, at: t0, context: testContext)
+            switch scenario {
+            case .current, .currentWithoutReading, .clippedLow, .clippedHigh, .failingWithRun:
+                XCTAssertNotNil(state.forecast, "\(scenario)")
+            case .stale, .aheadOfClock, .noRunYet, .waiting, .failingNothingHeld, .notConfigured, .turnedOff:
+                XCTAssertNil(state.forecast, "\(scenario)")
+                XCTAssertTrue(state.chart?.forecast.isEmpty ?? true, "\(scenario): no forecast line")
+            }
+        }
     }
 }

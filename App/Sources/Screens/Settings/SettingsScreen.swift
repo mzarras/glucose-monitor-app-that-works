@@ -9,6 +9,7 @@
 
 import AlertEngine
 import GlucoseCore
+import GlucoseStore
 import SwiftUI
 import WidgetCore
 
@@ -48,6 +49,9 @@ struct SettingsActions {
     var setConnectionMode: @MainActor (SensorConnectionMode) -> Void = { _ in }
     /// D47: record raw glucose packets in the diagnostic log.
     var setPacketRecording: @MainActor (Bool) -> Void = { _ in }
+    /// D57: Settings › Predictions "Show predictions" and the feed host's Save.
+    var setPredictionsEnabled: @MainActor (Bool) -> Void = { _ in }
+    var savePredictionsHost: @MainActor (String) -> Void = { _ in }
     #if DEBUG
     /// DEBUG builds: replay controls (D11, D20). Not in Release (review m5).
     var startReplay: @MainActor (_ scenario: String, _ speed: Double) -> Void = { _, _ in }
@@ -100,6 +104,8 @@ struct SettingsScreen: View {
                     case .sharing: SharingSettingsView(nightscout: state.nightscout, share: state.dexcomShare, feedback: state.feedback, actions: actions,
                                                        listening: state.isListening)
                     case .alertDelivery: AlertDeliveryView(delivery: state.delivery, actions: actions)
+                    case .predictions: PredictionsSettingsView(predictions: state.predictions, feedback: state.feedback.predictions,
+                                                               setEnabled: actions.setPredictionsEnabled, saveHost: actions.savePredictionsHost)
                     case .about: AboutView(version: state.appVersion)
                     #if DEBUG
                     case .developer: DeveloperSettingsView(debug: state.debug, actions: actions)
@@ -176,6 +182,10 @@ struct SettingsContent: View {
                                 route: .sharing, valueIsAlert: !state.isListening && isFailing(state.dexcomShare.status))
                     .accessibilityIdentifier("settings.share")
             }
+            SettingsGroup("PREDICTIONS") {
+                SettingsLinkRow(title: "Zen Predict", value: state.predictions.rowValue, route: .predictions)
+                    .accessibilityIdentifier("settings.predictions")
+            }
             dataGroup
             diagnosticsGroup
             appearanceGroup
@@ -202,7 +212,7 @@ struct SettingsContent: View {
                             route: .alertDelivery, valueIsAlert: state.delivery.urgentLowAlarm == .denied)
             SettingsLinkRow(title: "Critical Alerts (optional)", value: SettingsText.criticalAlerts(state.delivery.criticalAlerts).status, route: .alertDelivery)
             SettingsLinkRow(title: "Alarm volume", value: SettingsText.alarmVolume(state.delivery.alarmVolume), route: .alertDelivery,
-                            valueIsAlert: state.needsAttention)
+                            valueIsAlert: state.alarmVolumeIsTooLow)
                 .accessibilityIdentifier("settings.alarmVolume")
         }
     }

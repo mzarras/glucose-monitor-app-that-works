@@ -4,7 +4,8 @@ The **Predict** tab shows forecasts from Michael's own blood-glucose model, Zen 
 D57). Every 5 minutes a `predict` Lambda forecasts his glucose at +5, +30, +60 and +120 minutes and
 a `publish` Lambda writes public JSON feeds to S3 behind CloudFront. **There is no new API and no
 new AWS resource:** the static feed is the API. `Packages/ForecastKit` fetches, validates and
-classifies it; the app's Predict UI is built on top of ForecastKit's public API (end of this page).
+classifies it; the app's Predict UI is built on top of ForecastKit's public API ("In the app", end
+of this page).
 
 Producer references are to `zen-predict-infra` at `3f3d682` (lambdas, terraform) and `zen-predict`
 at `0d13ce3` (the model), both read-only.
@@ -325,6 +326,39 @@ if let run = latest.currentRun(at: now) {
 latest.feedGlucose                   // informational; .value is FeedGlucoseValue (LOW/HIGH as flags)
 latest.modelVersion, accuracy.sevenDays?.accuracy(at:), accuracy.thirtyDays, …
 ```
+
+## In the app (Predict tab, Settings › Predictions)
+
+The app side is in `docs/app-wiring.md` ("Predict"); in short:
+
+- **One service, foreground only.** `ForecastService` holds the last validated documents in memory
+  and polls only between `handleForeground()` and `handleBackground()`: at once, then per
+  `ForecastPolling`, with one polling task. A Bluetooth wake, a bootstrap or a launch by state
+  restoration never fetches. An answer that arrives after the app left the foreground (or after the
+  host changed) is dropped, not counted as a failure. A `.cancelled` answer while polling is still
+  wanted (the system cancelled it, or the poll joined a shared request a stopped poll cancelled)
+  is not a failure either: no backoff, no error shown, asked again at once the first time. Opening
+  the tab never restarts a poll that is running (that would cancel the shared request).
+- **Freshness on the UI clock.** The Predict tab is rebuilt from the held document at every UI tick
+  (15 s), every `.forecast` change and just after the shown run turns 15 minutes old, so it goes
+  "out of date" on time while every fetch fails. Every tick reads one `ForecastInstant` (both clocks,
+  `AppModel.forecastClock`), so a clock set back does not keep a run current, and "last model run
+  N min ago" is the conservative `zenRunAge(at:)`. All freshness questions go through one file,
+  `App/Sources/Model/PredictFreshness.swift`.
+- **What it shows.** Zen only (oref has no time, see above), always labelled "predicted" with the
+  model run's time; the stored live reading at the run's time (±150 s), never the feed's `bg`;
+  "≤40"/"≥400" from `ForecastPoint.modelBound` (and for a value that rounds to 40 or 400); the 7-day
+  MAE as "typical miss". Out of date, ahead of the
+  clock, no run, and failing with nothing held show a message and no numbers.
+- **Configuration.** The build's `ZEN_PREDICT_FEED_HOST` (Info.plist `ZenPredictFeedHost`), or a host
+  saved in Settings › Predictions (validated with `ForecastFeedEndpoint`), and a "Show predictions"
+  switch, on by default once a host exists. Only the host and the switch are saved (UserDefaults).
+- **Imports.** ForecastKit is linked to the app target only. Inside the app only `Forecast*`,
+  `Predict*`, `*+Forecast`, `*+Predict` files and `Screens/Predict/` import it; `AppServices` names
+  only app types (`ForecastStatus`, `ForecastHostRefusal`).
+- **No network in tests.** Unit tests use an in-process transport and a hand-stepped sleeper; UI
+  tests and app-run screenshots launch with DEBUG `-forecastFixture <kind>` (a fixture feed for
+  `zen.example.com`, compiled out of Release).
 
 ## Tests
 

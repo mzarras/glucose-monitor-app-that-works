@@ -79,7 +79,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// D55: the alarm-volume notice at the top of Settings and the Settings tab's dot; D56: the
-    /// ALERTS group first, the four-tab bar, the Predict placeholder. Settings is drawn in a window
+    /// ALERTS group first, the four-tab bar. Settings is drawn in a window
     /// inside a real `NavigationStack` (`renderHosted`): `ImageRenderer` can't draw one, and its
     /// links would look disabled without it.
     @MainActor
@@ -97,7 +97,6 @@ final class ScreenshotTests: XCTestCase {
             }
             .editorialScreen()
             try renderHosted(settings, name: "settings-volume-notice-\(scheme.name)", scheme: scheme)
-            try render(phone(tab: .predict) { PredictContent() }, name: "predict-placeholder-\(scheme.name)", scheme: scheme)
             // Every tab selected in turn; no dot, Settings' dot (D55), Now's and Settings' dots.
             let bars = VStack(spacing: 12) {
                 ForEach(AppTab.allCases) { tab in
@@ -112,6 +111,31 @@ final class ScreenshotTests: XCTestCase {
             .editorialScreen()
             try render(bars, name: "tabbar-\(scheme.name)", scheme: scheme, height: nil)
         }
+    }
+
+    /// D57: the Predict tab (current forecast light and dark, out of date, not set up, the largest
+    /// text size) and Settings › Predictions. Fixture forecasts are decoded by ForecastKit and mapped
+    /// by the real `PredictMapping`; the host is the example host.
+    @MainActor
+    func test_renderPredictScreens() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            try render(phone(tab: .predict) { predictContent(.current) }, name: "predict-\(scheme.name)", scheme: scheme)
+        }
+        try render(phone(tab: .predict) { predictContent(.stale) }, name: "predict-stale-light", scheme: .light)
+        try render(phone(tab: .predict) { predictContent(.notConfigured) }, name: "predict-not-configured-light", scheme: .light)
+        try render(phone(tab: .predict) { predictContent(.clippedLow) }, name: "predict-clipped-low-dark", scheme: .dark)
+        try render(phone(tab: .predict) { predictContent(.failingWithRun) }.environment(\.dynamicTypeSize, .accessibility5),
+                   name: "predict-failing-ax5-light", scheme: .light, height: nil)
+        let page = VStack(spacing: 0) {
+            NavigationStack {
+                PredictionsSettingsView(predictions: PredictFixtures.settings(.current, at: Date().addingTimeInterval(120)),
+                                        feedback: "Only https:// is supported.", setEnabled: { _ in }, saveHost: { _ in })
+                    .editorialScreen()
+            }
+            SensorTabBar(selected: .settings, attention: [], select: { _ in })
+        }
+        .editorialScreen()
+        try renderHosted(page, name: "settings-predictions-light", scheme: .light)
     }
 
     @MainActor
@@ -213,6 +237,11 @@ final class ScreenshotTests: XCTestCase {
     @MainActor
     private func nowContent(_ scenario: Fixtures.NowScenario) -> some View {
         NowContent(state: Fixtures.now(scenario, at: now), calibration: Fixtures.calibration(.available, at: now), now: now, actions: .noop, context: context)
+    }
+
+    @MainActor
+    private func predictContent(_ scenario: PredictFixtures.Scenario) -> some View {
+        PredictContent(state: PredictFixtures.state(scenario, at: now, context: context), actions: .noop)
     }
 
     @MainActor

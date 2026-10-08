@@ -14,6 +14,7 @@
 import AlertEngine
 import Foundation
 import GlucoseCore
+import GlucoseStore
 import Observation
 import UIKit
 import WidgetCore
@@ -27,6 +28,11 @@ final class AppModel {
     var alerts: AlertsViewState
     var settings: SettingsViewState
     var calibration: CalibrationViewState
+    /// D57: the Predict tab, rebuilt on every `.forecast` change, readings reload and UI clock tick
+    /// (AppModel+Predict.swift), so a run goes "out of date" on time without a new fetch.
+    var predict: PredictViewState = .notConfigured
+    /// Stored readings of the last 3 hours (any source) for the Predict chart and the run's reading.
+    @ObservationIgnored var predictReadings: [GlucoseReading] = []
     /// Non-nil while onboarding is shown.
     var onboarding: OnboardingState?
     var isCalibrationPresented = false
@@ -50,6 +56,10 @@ final class AppModel {
     /// DEBUG replay run the replay clock (`AppServices.replayClockNow`), so an accelerated replay's
     /// readings are current rather than "dated ahead of the phone clock".
     let clock: @MainActor () -> Date
+    /// D57/D59: the clock the Predict tab is drawn for, wall and monotonic together (one instant
+    /// answers every freshness question, `PredictFreshness`). The phone's clocks, also in a DEBUG
+    /// replay run: the forecast feed is real time, not replay time. Injected in tests.
+    let forecastClock: PredictClock
     let preferences: AppUIPreferences?
     /// Whether the phone's protected data is readable (false before the first unlock after a restart,
     /// e.g. a Bluetooth-restoration launch). UI preferences are read and written, and onboarding is
@@ -111,8 +121,10 @@ final class AppModel {
         return PairingContext(hasStoredSensor: hasStoredSensor, isNewPairing: true, authenticatedInThisPairing: authenticated)
     }
 
-    init(now: NowViewState, trends: TrendsViewState, alerts: AlertsViewState, settings: SettingsViewState, calibration: CalibrationViewState, onboarding: OnboardingState?) {
+    init(now: NowViewState, trends: TrendsViewState, alerts: AlertsViewState, settings: SettingsViewState, calibration: CalibrationViewState, onboarding: OnboardingState?,
+         predict: PredictViewState = .notConfigured) {
         self.now = now
+        self.predict = predict
         self.trends = trends
         self.alerts = alerts
         self.settings = settings
@@ -120,16 +132,18 @@ final class AppModel {
         self.onboarding = onboarding
         self.services = nil
         self.clock = { Date() }
+        self.forecastClock = .phone
         self.preferences = nil
         self.protectedDataAvailable = { true }
         self.sensorStateKnown = true
     }
 
     private init(services: any AppServices, preferences: AppUIPreferences, clock: @escaping @MainActor () -> Date,
-                 protectedDataAvailable: @escaping @MainActor () -> Bool) {
+                 forecastClock: PredictClock, protectedDataAvailable: @escaping @MainActor () -> Bool) {
         self.services = services
         self.preferences = preferences
         self.clock = clock
+        self.forecastClock = forecastClock
         self.protectedDataAvailable = protectedDataAvailable
         // No preference is read here (review m2): `loadPreferences()` does, once protected data is
         // available.
@@ -161,10 +175,13 @@ final class AppModel {
         preferences: AppUIPreferences = AppUIPreferences(),
         calendar: Calendar = .current,
         clock: (@MainActor () -> Date)? = nil,
+        forecastClock: PredictClock? = nil,
         protectedDataAvailable: @escaping @MainActor () -> Bool = { UIApplication.shared.isProtectedDataAvailable }
     ) -> AppModel {
+        // An injected `clock` (tests) also drives the Predict tab unless a forecast clock is given.
+        let predictClock = forecastClock ?? clock.map(PredictClock.following) ?? .phone
         let model = AppModel(services: services, preferences: preferences, clock: clock ?? defaultClock(services),
-                             protectedDataAvailable: protectedDataAvailable)
+                             forecastClock: predictClock, protectedDataAvailable: protectedDataAvailable)
         model.calendar = calendar
         model.launchArguments = arguments
         // `.notPaired` is also the facade's default before the source's first state: not evidence.
@@ -259,7 +276,8 @@ final class AppModel {
             alerts: Fixtures.alerts,
             settings: Fixtures.settings(at: current),
             calibration: Fixtures.calibration(.available, at: current),
-            onboarding: arguments.contains("-onboarding") ? .initial : nil
+            onboarding: arguments.contains("-onboarding") ? .initial : nil,
+            predict: PredictFixtures.state(.current, at: current)
         )
         model.openTab(launchArguments: arguments)
         return model
@@ -412,6 +430,9 @@ final class AppModel {
             settings.accent = services.accent
         case .replay:
             refreshReplay()
+        case .forecast:
+            refreshPredict()
+            settings.predictions = PredictMapping.settings(services.forecast)
         }
     }
 
@@ -435,6 +456,7 @@ final class AppModel {
         let time = clock()
         services.updateClockMismatchLatch(now: time)
         refreshLatch(time)
+        refreshPredict() // D57: freshness on the UI clock, with or without a fetch
         if let computedFor = todayComputedFor, computedFor != calendar.startOfDay(for: time) {
             reloadRecentReadings() // midnight: "Today so far" starts over
         }
@@ -481,6 +503,8 @@ final class AppModel {
             self.now.chartPoints = recent.chartPoints
             self.now.today = recent.today
             self.todayComputedFor = calendar.startOfDay(for: time)
+            self.predictReadings = PredictMapping.chartReadings(readings, now: time)
+            self.refreshPredict()
         }
     }
 
@@ -761,6 +785,8 @@ enum SettingsRoute: Hashable, Sendable {
     case trio
     case sharing
     case alertDelivery
+    /// Settings › Predictions (D57).
+    case predictions
     case about
     #if DEBUG
     case developer

@@ -9,6 +9,7 @@
 import Foundation
 import G7Kit
 import GlucoseCore
+import GlucoseStore
 
 extension LiveAppServices {
     var isListening: Bool { connectionSettings.mode == .listen }

@@ -33,6 +33,8 @@ final class AppPreferences {
         case recentCalibrations = "sensor.calibration.recent"
         case lastHistoryImport = "sensor.import.last"
         case developerLiveOutputs = "sensor.debug.developerLiveOutputs"
+        case forecastFeedHost = "sensor.forecast.feedHost"
+        case forecastEnabled = "sensor.forecast.enabled"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -92,6 +94,22 @@ final class AppPreferences {
     var developerLiveOutputs: Bool {
         get { defaults.bool(forKey: Key.developerLiveOutputs.rawValue) }
         set { defaults.set(newValue, forKey: Key.developerLiveOutputs.rawValue) }
+    }
+
+    // MARK: Predictions (PROGRESS D57)
+
+    /// The Zen Predict feed host saved in Settings › Predictions (validated before it is saved); nil =
+    /// use the build's `ZEN_PREDICT_FEED_HOST`. Only the host and the switch are kept: never a
+    /// forecast value (D57). The feed is public, so the host is not a secret (no Keychain).
+    var forecastFeedHost: String? {
+        get { defaults.string(forKey: Key.forecastFeedHost.rawValue) }
+        set { defaults.set(newValue, forKey: Key.forecastFeedHost.rawValue) }
+    }
+
+    /// "Show predictions"; nil = never set, which means on once a host is configured.
+    var forecastEnabled: Bool? {
+        get { defaults.object(forKey: Key.forecastEnabled.rawValue) as? Bool }
+        set { defaults.set(newValue, forKey: Key.forecastEnabled.rawValue) }
     }
 
     // MARK: Alert engine (docs/alerts.md §9)

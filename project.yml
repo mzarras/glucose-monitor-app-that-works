@@ -48,8 +48,8 @@ packages:
     path: Packages/ReplayKit
   WidgetCore:
     path: Packages/WidgetCore
-  # Zen Predict feed for the Predict tab (D57). Not linked to any target yet: the app workstream
-  # adds it to Sensor. Never a dependency of a reading/alert/Trio/upload/widget package (check.sh).
+  # Zen Predict feed for the Predict tab (D57). Linked to the Sensor app only (never the widget
+  # extension). Never a dependency of a reading/alert/Trio/upload/widget package (check.sh).
   ForecastKit:
     path: Packages/ForecastKit
 
@@ -76,6 +76,9 @@ targets:
         CODE_SIGN_ENTITLEMENTS: $(SENSOR_APP_ENTITLEMENTS)
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # SE-0444: a file uses members of a module only if it imports that module, so the D57
+        # forecast-import allowlist (scripts/check.sh) is also a compile-time guarantee.
+        SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
     dependencies:
       - target: SensorWidgets
       - package: GlucoseCore
@@ -89,6 +92,9 @@ targets:
       # Release binary contains no replay code (S6). scripts/check.sh verifies with nm.
       - package: ReplayKit
       - package: WidgetCore
+      # D57: the Predict tab and Settings › Predictions only (scripts/check.sh forbids it in
+      # App/Sources/Pipeline, App/Sources/WidgetBridge and the widget extension).
+      - package: ForecastKit
 
   SensorWidgets:
     type: app-extension

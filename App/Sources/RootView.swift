@@ -9,6 +9,10 @@ struct RootView: View {
     @Bindable var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
+    /// The UI clock's grid start, fixed for the view's life: a schedule rebuilt `from: .now` on every
+    /// render would hand the timeline a new date on every state change, and a tick that changes state
+    /// (the Predict tab's "now" moves every tick, D57) would then re-render forever.
+    @State private var clockStart = Date()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,7 +24,7 @@ struct RootView: View {
             // The UI clock: every 15 s the latch is re-evaluated (S5) and the tab dots follow the
             // banners, which the screens classify against `model.clock`, and the Settings state
             // (D55: alarm volume), which every `.alertDelivery` change rebuilds.
-            TimelineView(.periodic(from: .now, by: 15)) { timeline in
+            TimelineView(.periodic(from: clockStart, by: 15)) { timeline in
                 SensorTabBar(
                     selected: model.selectedTab,
                     attention: model.tabsNeedingAttention(),
@@ -66,7 +70,7 @@ struct RootView: View {
         case .now:
             NowScreen(state: model.now, calibration: model.calibration, actions: nowActions, clock: model.clock)
         case .predict:
-            PredictScreen()
+            PredictScreen(state: model.predict, actions: predictActions)
         case .trends:
             TrendsScreen(state: model.trends, selectPeriod: { model.selectTrendsPeriod($0) })
         case .settings:
@@ -95,6 +99,14 @@ struct RootView: View {
             pairSensor: { model.perform(.pairSensor) },
             pairAgain: { model.perform(.pairAgain) },
             performBannerAction: { model.perform($0) }
+        )
+    }
+
+    private var predictActions: PredictActions {
+        PredictActions(
+            openSettings: { model.openPredictionsSettings() },
+            appeared: { model.predictTabAppeared() },
+            refresh: { model.tick() }
         )
     }
 
@@ -131,7 +143,9 @@ struct RootView: View {
             setAppearance: { model.setAppearance($0) },
             setRetention: { model.setRetention($0) },
             setConnectionMode: { model.setConnectionMode($0) },
-            setPacketRecording: { model.setPacketRecording($0) }
+            setPacketRecording: { model.setPacketRecording($0) },
+            setPredictionsEnabled: { model.setPredictionsEnabled($0) },
+            savePredictionsHost: { model.savePredictionsHost($0) }
         ))
     }
 

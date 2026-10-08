@@ -42,6 +42,8 @@ enum ServiceChange: Sendable, Equatable, Hashable, CaseIterable {
     case appearance
     /// DEBUG only in practice: `replay` changed. Never sent in Release builds.
     case replay
+    /// `forecast` changed (PROGRESS D57): the Predict tab and Settings › Predictions only.
+    case forecast
 }
 
 // MARK: - Storage (HANDOFF §4.4, §4.5; PROGRESS D25)
