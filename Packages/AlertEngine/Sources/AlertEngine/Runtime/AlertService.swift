@@ -13,6 +13,7 @@ public final class AlertService {
     private let center: AlertNotificationCenter
     private let audio: AlertAudioPlaying
     private let alarms: SystemAlarmScheduling?
+    private let diagnostics: DiagnosticLog
     private let onSnapshot: @MainActor (AlertEngineSnapshot) -> Void
     /// The last batch of actions being executed. Each batch waits for the previous one, so a
     /// cancel can never overtake the post it is meant to remove.
@@ -23,6 +24,14 @@ public final class AlertService {
     /// notifications were allowed (`nil` until first read). When either changes they are rebuilt:
     /// adds made while notifications were not allowed failed (D43 review B1).
     private var builtFor: (critical: Bool, alarms: Bool, authorized: Bool?) = (false, false, nil)
+
+    /// D55: whether this service has the audio player report the media volume live
+    /// (`setVolumeMonitoring(_:)`; the app turns it on in the foreground).
+    public private(set) var isMonitoringVolume = false
+    /// D55: called on the main actor after a volume change reported while monitoring has changed
+    /// `deliveryStatus` (already updated when this runs). Never called while monitoring is off.
+    /// Permission refreshes do not call it: their callers read `deliveryStatus` themselves.
+    public var onDeliveryStatusChange: (@MainActor () -> Void)?
 
     /// - Parameters:
     ///   - snapshot: what `onSnapshot` last delivered, or `nil` on first launch.
@@ -49,6 +58,7 @@ public final class AlertService {
         self.center = notificationCenter
         self.audio = audio
         self.alarms = systemAlarms
+        self.diagnostics = diagnostics
         self.onSnapshot = onSnapshot
     }
 
@@ -95,6 +105,27 @@ public final class AlertService {
         return deliveryStatus
     }
 
+    /// D55: on while the app is in the foreground, off in the background. On: the audio player keeps
+    /// its session active without ducking anyone and reports the media volume live; each change
+    /// updates `deliveryStatus` and calls `onDeliveryStatusChange`. Turning it on again re-activates
+    /// the player's session (it may have been lost to an interruption). Off: no further reports.
+    /// Never starts, stops or changes an alert sound. The player has one monitor at a time, so when
+    /// the app replaces its service (replay runs) it turns the old one's off first.
+    public func setVolumeMonitoring(_ isOn: Bool) {
+        if isOn {
+            if !isMonitoringVolume { log("volume monitoring on (D55)") }
+            isMonitoringVolume = true
+            audio.startVolumeMonitoring { [weak self] event in
+                self?.volumeMonitoringReported(event)
+            }
+        } else {
+            guard isMonitoringVolume else { return }
+            isMonitoringVolume = false
+            audio.stopVolumeMonitoring()
+            log("volume monitoring off (D55)")
+        }
+    }
+
     /// Everything the Settings screen shows about whether alerts can be heard (S5).
     public var deliveryStatus: AlertDeliveryStatus {
         AlertDeliveryStatus(
@@ -125,6 +156,29 @@ public final class AlertService {
         permissions = await center.permissionState()
         lastOutputVolume = audio.outputVolume
         await rebuildIfDeliveryLevelChanged()
+    }
+
+    /// D55. A report that arrives after monitoring was turned off is dropped.
+    private func volumeMonitoringReported(_ event: VolumeMonitoringEvent) {
+        guard isMonitoringVolume else { return }
+        switch event {
+        case .changed(let volume):
+            guard volume != lastOutputVolume else { return }
+            let wasWarning = AlertDeliveryStatus.volumeProblem(lastOutputVolume) != nil
+            lastOutputVolume = volume
+            let isWarning = AlertDeliveryStatus.volumeProblem(volume) != nil
+            if wasWarning != isWarning {
+                log("media volume \(String(format: "%.2f", volume)): alarm volume warning \(isWarning ? "on" : "off") (live, D55)")
+            }
+            onDeliveryStatusChange?()
+        case .sessionFailed(let reason):
+            let last = lastOutputVolume.map { String(format: "%.2f", $0) } ?? "unknown"
+            log("volume monitoring: audio session not activated (\(reason)); media volume stays \(last) until the next report")
+        }
+    }
+
+    private func log(_ message: String) {
+        diagnostics.record(DiagnosticEvent(date: clock.now, category: .alert, message: message))
     }
 
     private func rebuildIfDeliveryLevelChanged() async {

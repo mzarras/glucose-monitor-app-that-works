@@ -110,6 +110,9 @@ final class LiveAppServices: AppServices {
     private(set) var productionStore: GlucoseStore?
     /// The production alert service; nil before bootstrap and during a DEBUG replay run.
     var productionAlerts: AlertService?
+    /// D55: true from `handleForeground()` until `handleBackground()`. The active alert service
+    /// monitors the media volume exactly while this is true (`updateVolumeMonitoring()`).
+    private(set) var isInForeground = false
     #if DEBUG
     var replayRun: ReplayRun?
     var replaySpeed: Double?
@@ -561,6 +564,7 @@ final class LiveAppServices: AppServices {
         let alerts = makeProductionAlerts()
         productionAlerts = alerts
         sensorPipeline.outputs.alerts = alerts
+        updateVolumeMonitoring() // D55: on only if the app is already in the foreground
         await alerts.start()
         await connectIntentBridge()
         await deliverPendingNotificationResponses()
@@ -726,8 +730,13 @@ final class LiveAppServices: AppServices {
 
     /// The app came to the foreground.
     func handleForeground() async {
+        // Set before any await, so a `handleBackground()` that arrives meanwhile wins (D55).
+        isInForeground = true
         await bootstrap()
         guard isBootstrapped else { return }
+        // D55: the media volume is observed live until `handleBackground()`. Before the permission
+        // refresh below, so that reads the volume from an active session.
+        updateVolumeMonitoring()
         await startG7()
         await openStoreIfNeeded()
         // A drain attempt: stores waiting readings, sends the storage health and a tick (D42).
@@ -750,6 +759,9 @@ final class LiveAppServices: AppServices {
     }
 
     func handleBackground() {
+        // D55: no volume monitoring in the background (an alert sound that is playing is untouched).
+        isInForeground = false
+        updateVolumeMonitoring()
         foregroundTicker?.cancel()
         foregroundTicker = nil
         writePipelineHeartbeat()

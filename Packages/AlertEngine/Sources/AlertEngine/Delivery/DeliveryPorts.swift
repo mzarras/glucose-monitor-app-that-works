@@ -1,4 +1,4 @@
-// The two system services delivery needs, behind protocols so all logic above them runs and is
+// The system services delivery needs, behind protocols so all logic above them runs and is
 // tested on the macOS host. The iOS implementations live in Platform/ under `#if os(iOS)`.
 // Both are main-actor bound: UNUserNotificationCenter callbacks and AVAudioPlayer are used from
 // the main thread in the reference apps (xDrip4iOS, Loop), and the app's pipeline is main-actor.
@@ -55,4 +55,25 @@ public protocol AlertAudioPlaying: AnyObject {
     var isPlaying: Bool { get }
     /// The current media output volume 0…1, or `nil` if unknown.
     var outputVolume: Float? { get }
+
+    /// D55: reports the media volume live until `stopVolumeMonitoring()`: the current value at
+    /// once, then every change, each on the main actor. While monitoring, the player keeps its
+    /// audio session active (`outputVolume` can be stale only while it is inactive) without ducking
+    /// or interrupting other apps' audio. One monitor at a time: calling this again replaces
+    /// `onEvent` and re-activates the monitoring session (recovering from an interruption whose end
+    /// was never reported). While an alert sound plays, its session is left exactly as it is and
+    /// monitoring takes it over when the sound ends. Never starts, stops or changes an alert sound.
+    func startVolumeMonitoring(onEvent: @escaping @MainActor (VolumeMonitoringEvent) -> Void)
+    /// D55: stops reporting; no event is delivered after this returns. Never stops or changes a
+    /// playing alert sound: the session is released once neither a sound nor monitoring needs it.
+    func stopVolumeMonitoring()
+}
+
+/// What an `AlertAudioPlaying` reports while it monitors the media volume (D55).
+public enum VolumeMonitoringEvent: Sendable, Equatable {
+    /// The media output volume 0…1, read from the active session.
+    case changed(Float)
+    /// The session could not be activated for monitoring, so the volume may be stale until the next
+    /// report. Carries the system's error text. Not fatal: the last value stands.
+    case sessionFailed(String)
 }

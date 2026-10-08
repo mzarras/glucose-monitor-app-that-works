@@ -386,6 +386,41 @@ hierarchy. Not proven for our case, so not built. Instead `AlertDeliveryStatus.p
 `.alarmVolumeMuted` (≤ 0.001) and `.alarmVolumeLow` (< 0.25) from `AVAudioSession.outputVolume`
 for the Settings screen (S5). Critical Alerts, if granted, play at the volume we set regardless.
 
+**Live while the app is open (D55).** `outputVolume` is kept current only while the app's audio
+session is active; read from an inactive session it can be stale, which is why the warning used to
+clear only after a relaunch. While the app is in the foreground the active `AlertService` monitors
+the volume (`setVolumeMonitoring(true)`; off again in the background):
+
+- `PlaybackAlertAudioPlayer`, the only code that touches the shared `AVAudioSession`, holds the
+  session active in `.playback` with `.mixWithOthers` **only**: it plays nothing and never ducks or
+  interrupts another app's audio. It observes `outputVolume` with KVO (the current value at once, then
+  every change; the approach nightguard `VolumeChangeDetector.swift:22-31` and LoopFollow
+  `VolumeButtonHandler.swift:240` use, both read only) and reports `VolumeMonitoringEvent.changed`.
+- Each change updates `deliveryStatus.outputVolume`, so `problems` gains or loses
+  `.alarmVolumeLow` / `.alarmVolumeMuted` across 0.25 and 0.001, then calls
+  `onDeliveryStatusChange`; the app republishes `alertDelivery` (`.alertDelivery`), and Settings'
+  "Alarm volume" row, notice and tab dot follow. The volume is not an alert input: nothing reaches
+  the engine. Logged: `volume monitoring on/off (D55)` on each change of state, and
+  `media volume 0.19: alarm volume warning on (live, D55)` (or `off`) when the warning flips.
+- Alarm playback is unchanged. `AudioSessionPlan` (pure, host-tested in `AudioSessionPlanTests`)
+  decides every session move, with one rule: the ducking option is switched only while the session
+  is inactive (ducking starts when a ducking session activates and ends when it is deactivated;
+  Apple does not document changing the options of an active session). So an alarm starts from an
+  inactive session (monitoring deactivates first) with `.duckOthers` + `.mixWithOthers`, exactly as
+  before, and ends with `setActive(false, .notifyOthersOnDeactivation)` as before, so other audio
+  comes back up; only then does monitoring re-activate its non-ducking session. Turning monitoring on
+  or off while a sound plays leaves the sound's session alone; it is released when the sound ends.
+- Interruptions: an urgent-low loop resumes as before. With nothing to resume, monitoring
+  re-activates its session when the interruption ends, and every foreground re-activates it anyway
+  (iOS does not promise an end notice). An activation that fails is logged
+  (`volume monitoring: audio session not activated (…)`) and the last value stands: the player
+  forwards a KVO value only while its session is known to be active.
+- With the session active, the volume buttons should change the media volume (the one the in-app
+  sound plays at) while the app is open; to be confirmed on the phone (§10 item 12).
+- Not a keep-alive (§4.2): the session plays nothing, and monitoring is off in the background.
+- DEBUG `-silenceAlertAudio`: `SilentAlertAudioPlayer` forwards monitoring to the real player, so the
+  warning is live in silenced runs too; the real player is never asked to play.
+
 ### 4.4 System alarms for urgent low (D26)
 
 On iOS 26+ (deployment target stays 17.0), once the user allows alarms, urgent low rings as an
@@ -737,6 +772,11 @@ The picker's preview is `AlertService.previewSound(_:)`; it never interrupts an 
   "Urgent low alarm" row from `deliveryStatus.urgentLowAlarm`. DEBUG replay mode sets
   `AlertEngineConfiguration.acceptsReplayReadings = true`; the app holds one `AlertService` at a time
   (production, or the replay one during a run).
+- Live media volume (D55, §4.3): `setVolumeMonitoring(true)` when the app becomes active (before the
+  permission refresh, so it reads an active session's volume), `false` when it goes to the
+  background; `onDeliveryStatusChange` republishes `deliveryStatus`. The audio player has one monitor
+  at a time: before releasing a service (replay switch) call its `setVolumeMonitoring(false)`, then
+  turn the new one's on. The app does all of this in `LiveAppServices.updateVolumeMonitoring()`.
 - Use the default `AlertEngineConfiguration()`: its calendar follows the phone's time zone live, and
   the engine rebuilds pending notifications after a zone change (§3 notes).
 - System alarms (D26): pass `systemAlarms: SystemAlarmAdapter(makeStopIntent: { StopUrgentLowAlarmIntent() })`
@@ -811,3 +851,21 @@ The host tests prove the decisions; these need the phone:
       if two is unpleasant, raise it (the app could skip its own vibration in the foreground).
    d. If a silent custom sound gives no vibration at all, raise it: the fallback is a nearly
       inaudible sound file.
+12. D55 live alarm volume (§4.3; `PlaybackAlertAudioPlayer` cannot run on the host).
+   a. Media volume below 25 %, app open on Settings: the "Alarm volume" row is red and the notice and
+      tab dot show. Press volume up past 25 %: all three clear within about 1 s, with no relaunch.
+      Press down below 25 %: they come back within about 1 s; at zero the row says muted. Do it with
+      Settings › Sounds & Haptics › "Change with Buttons" on and off, and note whether the buttons
+      change the media volume while the app is open (expected: yes, the app's session is active).
+   b. Music (or a podcast) playing in another app, then open the app and move between tabs, press
+      the volume buttons, lock and unlock: the music is never ducked, paused or interrupted.
+   c. With music playing and the app open, play an alert sound (a sound preview in Settings › Alerts,
+      or a real alert): the music ducks under it and returns to full volume when the sound ends or is
+      acknowledged; volume changes afterwards still update the row live. Repeat with an urgent low
+      (replay `slowFallToUrgentLow` without `-silenceAlertAudio`, on the phone only): the 30 s loop
+      plays and vibrates as before, and the music comes back up after it.
+   d. Send the app to the background: Export diagnostics shows `[alert] volume monitoring off (D55)`
+      after each `on`; change the volume in the background, reopen: the row shows the new value at
+      once. A backgrounded urgent low still sounds (item 1).
+   e. A phone call (or Siri) while the app is open with no alarm playing: after it ends the row
+      follows the volume buttons again (otherwise: the next foreground recovers; note which).
