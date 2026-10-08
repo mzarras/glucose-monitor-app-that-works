@@ -72,6 +72,31 @@ struct ForecastStatus: Sendable, Equatable {
     var isFailing: Bool { consecutiveFailures > 0 }
 }
 
+/// What the Predict tab and Settings › Predictions say about a failed fetch. Never a value from a
+/// rejected document (D57: nothing from a rejected document is shown; a "700.0 mg/dL" would look
+/// like glucose): a validation failure names only the field. The full text goes to the diagnostic
+/// log (`ForecastService`).
+enum ForecastErrorText {
+    static func message(for error: ForecastFeedError) -> String {
+        switch error {
+        case .invalidDocument(let document):
+            switch document {
+            case .notAJSONObject:
+                return "The forecast feed did not return a JSON document."
+            case .futureDated(let field):
+                return "The forecast feed failed validation (\(field) is in the future: check the phone's date and time)."
+            case .wrongType(let field), .missingField(let field), .unparseableTimestamp(let field, _), .laterThanAsOf(let field),
+                 .valueWithoutTimestamp(let field), .implausibleForecast(let field, _), .implausibleMetric(let field, _):
+                return "The forecast feed failed validation (\(field))."
+            case .implausibleFeedGlucose:
+                return "The forecast feed failed validation (bg.mg_dl)."
+            }
+        case .transport, .httpStatus, .notModifiedWithoutCachedValue, .cancelled:
+            return error.description
+        }
+    }
+}
+
 /// Why Settings › Predictions refused a feed host: ForecastKit's `ForecastEndpointError` sentence,
 /// as an app type, so `AppServices` names no ForecastKit type (D57 import allowlist).
 struct ForecastHostRefusal: Error, Sendable, Equatable {

@@ -73,8 +73,8 @@ struct PredictMessage: Equatable, Sendable {
 
 /// A current run, ready to draw.
 struct PredictForecast: Equatable, Sendable {
-    /// "MODEL RAN 3 MIN AGO · FROM 105 AT 12:32 PM" (relative age on the UI clock; the stored reading
-    /// at the run's time if there is one, else only the time).
+    /// "MODEL RAN 12:32 PM · 3 MIN AGO · FROM 105 AT 12:32 PM": the run's time, its conservative age
+    /// on the UI clock, and the stored reading at the run's time if there is one.
     var freshnessLine: String
     /// +30 MIN, +1 HR, +2 HR.
     var columns: [PredictColumn]

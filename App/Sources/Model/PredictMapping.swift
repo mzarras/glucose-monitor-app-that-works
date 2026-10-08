@@ -143,8 +143,8 @@ enum PredictMapping {
 
     static func spokenValue(_ mgdl: Double, edge: ForecastModelBound) -> String {
         switch edge {
-        case .atOrBelowFloor: return "\(modelClip.lowerBound) or below"
-        case .atOrAboveCeiling: return "\(modelClip.upperBound) or above"
+        case .atOrBelowFloor: return "\(modelClip.lowerBound) milligrams per deciliter or below"
+        case .atOrAboveCeiling: return "\(modelClip.upperBound) milligrams per deciliter or above"
         case .within: return "\(Int(mgdl.rounded())) milligrams per deciliter"
         }
     }
@@ -191,12 +191,12 @@ enum PredictMapping {
             .min { abs($0.date.timeIntervalSince(generatedAt)) < abs($1.date.timeIntervalSince(generatedAt)) }
     }
 
-    /// "MODEL RAN 3 MIN AGO · FROM 105 AT 12:32 PM", or "… · FROM YOUR 12:32 PM READING" when this
-    /// phone has no stored reading at that time.
+    /// "MODEL RAN 12:32 PM · 3 MIN AGO · FROM 105 AT 12:32 PM": the run's time first (the same time
+    /// as the chart legend), its age, then this phone's stored reading at that time (±150 s) if
+    /// there is one; without it the line ends after the age.
     static func freshnessLine(runTime: Date, age: TimeInterval, base: GlucoseReading?, context: DisplayContext) -> String {
-        let ran = "MODEL RAN \(AgeText.upper(minutes: Int(age / 60)))"
-        let time = TimeText.time(runTime, context).uppercased()
-        guard let base else { return "\(ran) · FROM YOUR \(time) READING" }
+        let ran = "MODEL RAN \(TimeText.time(runTime, context).uppercased()) · \(AgeText.upper(minutes: Int(age / 60)))"
+        guard let base else { return ran }
         return "\(ran) · FROM \(GlucoseText.value(base.value)) AT \(TimeText.time(base.date, context).uppercased())"
     }
 

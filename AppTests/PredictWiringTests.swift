@@ -6,6 +6,7 @@ import AlertEngine
 import ForecastKit
 import Foundation
 import GlucoseCore
+import NightscoutKit
 import XCTest
 @testable import Sensor
 
@@ -145,14 +146,15 @@ final class PredictWiringTests: XCTestCase {
     // MARK: - The live services
 
     private func liveHarness(restoration: Bool = false, zen: [Int: Double] = ForecastFixtureDocuments.zen,
-                             persistence: LiveServicesHarness.Persistence) async -> (LiveServicesHarness, FakeForecastTransport, ManualSleeper) {
+                             persistence: LiveServicesHarness.Persistence,
+                             uploadTransport: (any HTTPTransport)? = nil) async -> (LiveServicesHarness, FakeForecastTransport, ManualSleeper) {
         let clock = persistence.clock
         let sleeper = ManualSleeper()
         let transport = FakeForecastTransport(latest: FakeForecastTransport.ok(ForecastTestDocuments.latest(run: clock.now.addingTimeInterval(-180), zen: zen)),
                                               metrics: FakeForecastTransport.ok(ForecastFixtureDocuments.metrics(asOf: clock.now.addingTimeInterval(-600))))
         let feed = ForecastService.Feed(buildHost: ForecastTestDocuments.host, transport: transport,
                                         sleep: { try await sleeper.sleep($0) }, clock: { ForecastFixtureDocuments.instant(clock.now) })
-        let harness = LiveServicesHarness(persistence, launchedByBluetoothRestoration: restoration, forecastFeed: feed)
+        let harness = LiveServicesHarness(persistence, launchedByBluetoothRestoration: restoration, uploadTransport: uploadTransport, forecastFeed: feed)
         return (harness, transport, sleeper)
     }
 
@@ -233,9 +235,20 @@ final class PredictWiringTests: XCTestCase {
     func test_S1_forecastNeverReachesStoreWidgetTrioOrAlerts() async throws {
         let now = Date()
         let persistence = LiveServicesHarness.Persistence(now: now)
-        let (harness, transport, sleeper) = await liveHarness(zen: [5: 45, 30: 42, 60: 40, 120: 40], persistence: persistence)
+        // Nightscout and Dexcom Share on, into a recording transport (m3: uploads too).
+        let preferences = persistence.preferences
+        preferences.nightscoutUploadEnabled = true
+        preferences.nightscoutSiteURL = "https://ns.example.invalid"
+        preferences.dexcomShareUploadEnabled = true
+        preferences.dexcomShareReceiverSerial = "SM12345678"
+        let uploads = RecordingTransport()
+        let (harness, transport, sleeper) = await liveHarness(zen: [5: 45, 30: 42, 60: 40, 120: 40], persistence: persistence, uploadTransport: uploads)
+        try harness.credentials.write("token", for: .nightscoutToken)
+        try harness.credentials.write("account", for: .dexcomShareAccountName)
+        try harness.credentials.write("password", for: .dexcomSharePassword)
         let services = harness.services
         await services.bootstrap()
+        XCTAssertEqual(services.uploads.activeUploaders.count, 2, "both uploaders run")
         await harness.deliver(state: harness.activeState)
         await transport.holdNextRequest()
         await services.handleForeground()
@@ -243,6 +256,11 @@ final class PredictWiringTests: XCTestCase {
         let reading = persistence.reading(.mgdl(120), at: now.addingTimeInterval(-10))
         await harness.deliver(reading)
         await waitUntil("idle") { services.sensorPipeline.isIdle }
+
+        await services.retryUploads()
+        await waitUntil("the reading went to Nightscout") { uploads.requests.contains { $0.url?.host() == "ns.example.invalid" } }
+        let sent = await settledUploadCount(uploads)
+        let queues = uploadQueues(persistence)
 
         let stored = try await services.readings(from: now.addingTimeInterval(-86_400), to: now.addingTimeInterval(3_600))
         let widget = harness.widget.published
@@ -264,9 +282,15 @@ final class PredictWiringTests: XCTestCase {
         XCTAssertEqual(persistence.preferences.alertEngineSnapshot, alertState, "the alert engine saw no new input")
         XCTAssertEqual(persistence.center.posted.count, posted, "no notification")
         XCTAssertEqual(services.latestLiveReading, reading, "the current value is still the reading")
+        let sentAfter = await settledUploadCount(uploads)
+        XCTAssertEqual(sentAfter, sent, "nothing uploaded for a forecast")
+        XCTAssertEqual(uploadQueues(persistence), queues, "nothing queued for upload")
 
         // A wake after the forecast arrived: still only the reading everywhere.
         await harness.wake()
+        let sentAtEnd = await settledUploadCount(uploads)
+        XCTAssertEqual(sentAtEnd, sent)
+        XCTAssertEqual(uploadQueues(persistence), queues)
         XCTAssertEqual(harness.widget.published.last, reading.id)
         XCTAssertFalse(harness.isFiring(.urgentLow))
         XCTAssertFalse(harness.isFiring(.low))
@@ -274,5 +298,25 @@ final class PredictWiringTests: XCTestCase {
         let storedAtEnd = try await services.readings(from: now.addingTimeInterval(-86_400), to: now.addingTimeInterval(3_600))
         XCTAssertEqual(storedAtEnd, stored)
         services.handleBackground()
+    }
+
+    /// The upload request count once it has stopped changing (flushes run in their own tasks).
+    private func settledUploadCount(_ uploads: RecordingTransport) async -> Int {
+        var last = -1
+        var stableFor = 0
+        while stableFor < 5 {
+            try? await Task.sleep(for: .milliseconds(50))
+            let count = uploads.requests.count
+            stableFor = count == last ? stableFor + 1 : 0
+            last = count
+        }
+        return last
+    }
+
+    /// Every upload queue file and its contents (Application Support/Uploads in the harness).
+    private func uploadQueues(_ persistence: LiveServicesHarness.Persistence) -> [String: Data] {
+        let directory = persistence.directory.appendingPathComponent("Uploads")
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return Dictionary(uniqueKeysWithValues: names.map { ($0, (try? Data(contentsOf: directory.appendingPathComponent($0))) ?? Data()) })
     }
 }

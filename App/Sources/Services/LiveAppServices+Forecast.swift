@@ -22,10 +22,14 @@ extension LiveAppServices {
         } catch {
             throw ForecastHostRefusal(message: error.description)
         }
-        guard isBootstrapped else { return }
+        // Before the first unlock after a restart the preferences can't be written: say so rather
+        // than "Saved.".
+        guard isBootstrapped else { throw ForecastHostRefusal(message: Self.notSavedBeforeUnlock) }
         preferences.forecastFeedHost = endpoint.host
         applyForecastSettings()
     }
+
+    static let notSavedBeforeUnlock = "Not saved: unlock the phone once since it restarted, then save again."
 
     func predictTabAppeared() {
         forecastService.predictTabAppeared()

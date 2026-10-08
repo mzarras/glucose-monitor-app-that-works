@@ -178,8 +178,13 @@ final class AppModel {
         forecastClock: PredictClock? = nil,
         protectedDataAvailable: @escaping @MainActor () -> Bool = { UIApplication.shared.isProtectedDataAvailable }
     ) -> AppModel {
-        // An injected `clock` (tests) also drives the Predict tab unless a forecast clock is given.
+        // The Predict tab reads both clocks (D59). DEBUG tests that inject only `clock` get a forecast
+        // clock that follows it; Release never derives one from a wall clock.
+        #if DEBUG
         let predictClock = forecastClock ?? clock.map(PredictClock.following) ?? .phone
+        #else
+        let predictClock = forecastClock ?? .phone
+        #endif
         let model = AppModel(services: services, preferences: preferences, clock: clock ?? defaultClock(services),
                              forecastClock: predictClock, protectedDataAvailable: protectedDataAvailable)
         model.calendar = calendar

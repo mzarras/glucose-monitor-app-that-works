@@ -730,7 +730,7 @@ gap in this app (the Dexcom app keeps its own history).
 #### Step 3b — Predict tab (Zen Predict, D57; any time, Release)
 
 - [ ] **Forecast within about a minute.** Open the app on the Predict tab (§4.6 host set).
-  - Expect: within about a minute "MODEL RAN N MIN AGO · FROM <value> AT <time>" with three columns
+  - Expect: within about a minute "MODEL RAN <time> · N MIN AGO · FROM <value> AT <time>" with three columns
     labelled "predicted" and a dashed line on the chart; the value matches this app's reading at that
     time (Now's chart). The model runs on readings that reach Nightscout, so in listen mode (no
     upload from this app) it follows whatever uploads to Nightscout.

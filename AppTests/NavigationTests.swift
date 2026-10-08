@@ -128,6 +128,31 @@ final class NavigationTests: XCTestCase {
         XCTAssertEqual(SettingsAttentionCause.allCases, [.alarmVolumeTooLow], "a new cause needs its own row and its own test here")
     }
 
+    /// The RootView render-loop fix (`@State clockStart`, docs/app-wiring.md). Every tick here changes
+    /// the Predict state (a clock that moves on every read moves the chart's "now"). With a 15 s
+    /// timeline rebuilt `from: .now` on each render, that re-rendered and ticked forever (the app froze
+    /// on Predict); with a fixed grid start the first render ticks once or twice and settles.
+    func test_rootViewClockSettlesWhenATickChangesState() {
+        let services = PreviewAppServices(sensorState: activeSensor)
+        services.forecast = ForecastTestDocuments.status(latest: ForecastTestDocuments.decodedLatest(run: minutes(-3), now: t0))
+        let clock = AdvancingClock(t0)
+        let preferences = AppUIPreferences(defaults: UserDefaults(suiteName: "NavigationTests.\(UUID().uuidString)")!)
+        preferences.onboardingCompleted = true
+        let model = AppModel.launch(services: services, arguments: ["-tab", "predict"], preferences: preferences, calendar: utcCalendar,
+                                    clock: { clock.read() }, protectedDataAvailable: { true })
+        let host = UIHostingController(rootView: RootView(model: model))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertNotNil(model.predict.forecast, "the Predict tab rendered a forecast")
+        let ticks = services.calls.filter { $0 == "updateClockMismatchLatch" }.count
+        XCTAssertGreaterThanOrEqual(ticks, 1, "the UI clock ticked")
+        XCTAssertLessThan(ticks, 10, "the UI clock settles instead of re-rendering and ticking forever (\(ticks) ticks in 1 s)")
+    }
+
     func test_alarmVolumeNotice() {
         XCTAssertEqual(SettingsText.alarmVolumeNotice(.tooLow(level: 0.15)), "Alarm volume 15%. Alarms may be hard to hear; turn the volume up.")
         XCTAssertEqual(SettingsText.alarmVolumeNotice(.tooLow(level: 0)), "Alarm volume 0%. Alarms may be hard to hear; turn the volume up.")
@@ -181,5 +206,16 @@ final class NavigationTests: XCTestCase {
                 XCTAssertTrue(state.chart?.forecast.isEmpty ?? true, "\(scenario): no forecast line")
             }
         }
+    }
+}
+
+/// A clock that moves one second forward on every read.
+@MainActor
+private final class AdvancingClock {
+    private var now: Date
+    init(_ start: Date) { now = start }
+    func read() -> Date {
+        now = now.addingTimeInterval(1)
+        return now
     }
 }

@@ -12,6 +12,9 @@ struct PredictionsSettingsView: View {
     let setEnabled: @MainActor (Bool) -> Void
     let saveHost: @MainActor (String) -> Void
     @State private var host = ""
+    /// The status line's 15 s grid start, fixed for the view's life (as RootView's clock: a schedule
+    /// rebuilt `from: .now` on every render hands the timeline a new date after every state change).
+    @State private var clockStart = Date()
 
     static let explanation = "Shows your own Zen Predict model's forecast on the Predict tab, read from the feed host below "
         + "(https://<host>/latest.json) while the app is open. A forecast is not a reading: it is never saved, "
@@ -79,7 +82,7 @@ struct PredictionsSettingsView: View {
     private var statusSection: some View {
         if predictions.setup.isOn {
             // Re-read every 15 s so "Last updated" keeps counting while the page is open.
-            TimelineView(.periodic(from: .now, by: 15)) { timeline in
+            TimelineView(.periodic(from: clockStart, by: 15)) { timeline in
                 SettingsValueRow(title: "Status", value: PredictMapping.lastUpdatedText(predictions.lastSuccessAt, now: timeline.date))
                     .accessibilityIdentifier("settings.predictions.status")
             }

@@ -17,14 +17,17 @@ struct PredictClock {
         PredictClock { ForecastInstant.now() }
     }
 
-    /// Tests: an injected wall clock, with a monotonic reading that follows it. Only for clocks
-    /// that move forward (a monotonic reading never goes back).
+    #if DEBUG
+    /// Tests only: an injected wall clock, with a monotonic reading that follows it (only for
+    /// clocks that move forward). Never in Release: a wall-only clock would lose D59's protection
+    /// against the phone's clock being set back.
     static func following(_ wall: @escaping @MainActor () -> Date) -> PredictClock {
         PredictClock {
             let date = wall()
             return ForecastInstant(wall: date, monotonic: date.timeIntervalSince1970)
         }
     }
+    #endif
 }
 
 enum PredictFreshness {
@@ -44,7 +47,7 @@ enum PredictFreshness {
         latest.currentRun(at: instant)
     }
 
-    /// The run's conservative age at `instant` for "MODEL RAN 3 MIN AGO" and "last model run 32 min
+    /// The run's conservative age at `instant` for "MODEL RAN 12:32 PM · 3 MIN AGO" and "last model run 32 min
     /// ago" (never negative, never lowered by a clock set back); nil without a run.
     static func runAge(_ latest: LatestForecast, at instant: ForecastInstant) -> TimeInterval? {
         latest.zenRunAge(at: instant)

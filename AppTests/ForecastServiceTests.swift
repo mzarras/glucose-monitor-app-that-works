@@ -214,20 +214,129 @@ final class ForecastServiceTests: XCTestCase {
         service.enterBackground()
     }
 
+    /// The answer is an HTTP 403 that arrives after the app left the foreground (a plain answer, not
+    /// a cancellation, so only the service's own stop guard can drop it).
     func test_D57_anAnswerAfterTheAppLeftTheForegroundIsDroppedNotCounted() async {
         let service = makeService()
-        await transport.setDefaultLatest(FakeForecastTransport.offline())
-        await transport.holdNextRequest()
+        await transport.holdNextRequest() // answers whatever happens to the request's task
         service.enterForeground()
         await waitUntil("request on its way") { await self.transport.isHolding }
         XCTAssertTrue(service.status.isFetching)
         service.enterBackground()
         XCTAssertFalse(service.status.isFetching)
+        await transport.setDefaultLatest(.success(ForecastHTTPResponse(statusCode: 403, eTag: nil, body: Data())))
         await transport.release()
         _ = await settledCount()
-        XCTAssertEqual(service.status.consecutiveFailures, 0, "a request ended by leaving the foreground is not a failure")
+        XCTAssertEqual(service.status.consecutiveFailures, 0, "an answer after leaving the foreground is not a failure")
         XCTAssertNil(service.status.lastError)
+        XCTAssertFalse(service.status.isFetching)
         XCTAssertTrue(sleeper.requested.isEmpty)
+    }
+
+    /// Host change while the old host's request is out: its 200 arrives after the change and must
+    /// not become the new host's forecast.
+    func test_D57_anOldHostsAnswerAfterAHostChangeIsDropped() async {
+        let service = makeService()
+        await transport.holdNextRequest() // zen.example.com
+        await transport.holdNextRequest() // other.example.com
+        service.enterForeground()
+        await waitUntil("old host's request out") { await self.transport.heldCount == 1 }
+        service.configure(savedHost: "other.example.com", savedEnabled: nil)
+        await waitUntil("new host's request out") { await self.transport.heldCount == 2 }
+        let hosts = await transport.hosts
+        XCTAssertEqual(hosts, [ForecastTestDocuments.host, "other.example.com"])
+
+        await transport.release() // the old host answers 200 with a current run
+        _ = await settledCount()
+        XCTAssertNil(service.status.latest, "the old host's document is never the new host's forecast")
+        XCTAssertEqual(service.status.setup, .on(host: "other.example.com"))
+        XCTAssertNil(service.status.lastSuccessAt)
+        XCTAssertEqual(service.status.consecutiveFailures, 0)
+        XCTAssertTrue(service.status.isFetching, "the new host's request is still out")
+
+        await transport.release()
+        await waitForSleep(1)
+        XCTAssertNotNil(service.status.latest, "the new host's own answer is applied")
+        service.enterBackground()
+    }
+
+    /// m2: opening the tab while a poll runs neither cancels it (single-flight requests are shared)
+    /// nor sends a second request; the answer that comes back is applied.
+    func test_D57_openingTheTabDuringAFetchNeitherCancelsNorRepeatsIt() async {
+        let service = makeService()
+        await transport.holdNextRequest(cancellable: true) // ends at once if its task is cancelled
+        service.enterForeground()
+        await waitUntil("request on its way") { await self.transport.isHolding }
+        clock.advance(by: 31)
+        service.predictTabAppeared()
+        var count = await settledCount()
+        XCTAssertEqual(count, 1, "no second request")
+        let stillHeld = await transport.isHolding
+        XCTAssertTrue(stillHeld, "the running request was not cancelled")
+        XCTAssertEqual(service.status.lastAttemptAt, t0, "the running poll is still the attempt")
+        XCTAssertTrue(service.status.isFetching)
+
+        await transport.release()
+        await waitForSleep(1)
+        XCTAssertNotNil(service.status.latest, "its answer is applied")
+        XCTAssertEqual(service.status.lastSuccessAt, t0.addingTimeInterval(31))
+        count = await transport.count
+        XCTAssertEqual(count, 2, "latest once, then metrics")
+        XCTAssertEqual(sleeper.requested, [60])
+        service.enterBackground()
+    }
+
+    /// While fetches fail, opening the tab waits out the failure backoff instead of adding requests.
+    func test_D57_openingTheTabRespectsTheFailureBackoff() async {
+        let service = makeService()
+        await transport.setDefaultLatest(FakeForecastTransport.offline())
+        service.enterForeground()
+        await waitForSleep(1)
+        for expected in [2, 3] {
+            sleeper.wake()
+            await waitForSleep(expected)
+        }
+        XCTAssertEqual(service.status.consecutiveFailures, 3)
+        XCTAssertEqual(sleeper.requested, [60, 120, 300])
+        clock.advance(by: 31)
+        service.predictTabAppeared()
+        var count = await settledCount()
+        XCTAssertEqual(count, 3, "31 s into a 300 s backoff: nothing")
+        clock.advance(by: 269) // 300 s since the last attempt
+        service.predictTabAppeared()
+        count = await settledCount()
+        XCTAssertEqual(count, 3, "still within the backoff")
+        clock.advance(by: 1)
+        service.predictTabAppeared()
+        await waitForSleep(4)
+        count = await transport.count
+        XCTAssertEqual(count, 4, "past the backoff: at once")
+        service.enterBackground()
+    }
+
+    /// m1: a document rejected for a 700 mg/dL value. The full reason goes to the diagnostic log;
+    /// the Predict tab and Settings name only the field, never the value.
+    func test_D57_aRejectedDocumentsValueIsNeverShown() async {
+        let clock = self.clock
+        let sleeper = self.sleeper
+        let logged = LogBox()
+        transport = FakeForecastTransport(
+            latest: FakeForecastTransport.ok(ForecastTestDocuments.latest(run: minutes(-3), zen: [5: 110, 30: 700, 60: 120, 120: 130])),
+            metrics: FakeForecastTransport.ok(ForecastFixtureDocuments.metrics(asOf: minutes(-10))))
+        let feed = ForecastService.Feed(buildHost: ForecastTestDocuments.host, transport: transport,
+                                        sleep: { try await sleeper.sleep($0) }, clock: { ForecastFixtureDocuments.instant(clock.now) })
+        let service = ForecastService(feed: feed) { logged.lines.append($0) }
+        service.enterForeground()
+        await waitForSleep(1)
+        XCTAssertEqual(service.status.lastError, "The forecast feed failed validation (predictions.zen.30).")
+        XCTAssertTrue(logged.lines.contains { $0.contains("700") }, "the log keeps the full reason: \(logged.lines)")
+
+        let predict = PredictMapping.make(status: service.status, readings: [], at: ForecastFixtureDocuments.instant(t0), context: testContext)
+        let settings = PredictMapping.settings(service.status)
+        let shown = [String(describing: predict), settings.lastError ?? "", settings.rowValue].joined(separator: " ")
+        XCTAssertTrue(shown.contains("predictions.zen.30"), shown)
+        XCTAssertFalse(shown.contains("700"), shown)
+        service.enterBackground()
     }
 
     func test_D57_predictTabFetchesAtOnceOnlyWhenTheLastAttemptIsOverThirtySecondsOld() async {
@@ -299,4 +408,10 @@ final class ForecastServiceTests: XCTestCase {
         XCTAssertEqual(count, 0)
         XCTAssertFalse(service.isPolling)
     }
+}
+
+/// Collects the forecast service's diagnostic lines.
+@MainActor
+private final class LogBox {
+    var lines: [String] = []
 }

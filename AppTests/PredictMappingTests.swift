@@ -50,7 +50,7 @@ final class PredictMappingTests: XCTestCase {
         XCTAssertEqual(forecast.columns[0].spoken, "Predicted 98 milligrams per deciliter in 30 minutes, typical miss 16")
         XCTAssertEqual(forecast.columns[1].spoken, "Predicted 105 milligrams per deciliter in 1 hour, typical miss 23")
         XCTAssertEqual(forecast.columns[2].spoken, "Predicted 121 milligrams per deciliter in 2 hours, typical miss 31")
-        XCTAssertEqual(plain(forecast.freshnessLine), "MODEL RAN 3 MIN AGO · FROM 105 AT 12:32 PM")
+        XCTAssertEqual(plain(forecast.freshnessLine), "MODEL RAN 12:32 PM · 3 MIN AGO · FROM 105 AT 12:32 PM")
         XCTAssertNil(state.refreshNote)
         XCTAssertEqual(state.accuracyNote, "Typical miss over the last 7 days (mean absolute error, 2,016 model runs): ±16 at 30 min, ±23 at 1 hr, ±31 at 2 hr.")
         XCTAssertEqual(state.modelVersion, "MODEL \(ForecastFixtureDocuments.modelVersion)")
@@ -90,8 +90,8 @@ final class PredictMappingTests: XCTestCase {
         XCTAssertEqual(PredictMapping.valueText(41, edge: .atOrBelowFloor), "≤40")
         XCTAssertEqual(PredictMapping.valueText(390, edge: .atOrAboveCeiling), "≥400")
         XCTAssertEqual(PredictMapping.valueText(40.5, edge: .within), "41")
-        XCTAssertEqual(PredictMapping.spokenValue(40, edge: .atOrBelowFloor), "40 or below")
-        XCTAssertEqual(PredictMapping.spokenValue(400, edge: .atOrAboveCeiling), "400 or above")
+        XCTAssertEqual(PredictMapping.spokenValue(40, edge: .atOrBelowFloor), "40 milligrams per deciliter or below")
+        XCTAssertEqual(PredictMapping.spokenValue(400, edge: .atOrAboveCeiling), "400 milligrams per deciliter or above")
         XCTAssertEqual(PredictMapping.spokenValue(98.2, edge: .within), "98 milligrams per deciliter")
         XCTAssertEqual(PredictMapping.band(41, edge: .atOrBelowFloor), .veryLow)
         XCTAssertEqual(PredictMapping.band(390, edge: .atOrAboveCeiling), .veryHigh)
@@ -110,7 +110,7 @@ final class PredictMappingTests: XCTestCase {
         let state = make(ForecastTestDocuments.status(latest: latest))
         let forecast = try XCTUnwrap(state.forecast)
         XCTAssertEqual(forecast.columns.map(\.value), ["≤40", "≤40", "48"])
-        XCTAssertEqual(forecast.columns[0].spoken, "Predicted 40 or below in 30 minutes")
+        XCTAssertEqual(forecast.columns[0].spoken, "Predicted 40 milligrams per deciliter or below in 30 minutes")
         XCTAssertEqual(try XCTUnwrap(state.chart).forecast.filter(\.isPredicted).map(\.mgdl), [52.3, 40, 40, 47.6])
 
         let high = ForecastTestDocuments.decodedLatest(run: ranAt, zen: [5: 371.2, 30: 400, 60: 400, 120: 396.4], now: t0)
@@ -124,7 +124,7 @@ final class PredictMappingTests: XCTestCase {
         let boundary = ranAt.addingTimeInterval(15 * 60)
         let atBoundary = make(status, at: boundary)
         XCTAssertNotNil(atBoundary.forecast, "age 15:00 is still current (ForecastFreshness: stale when age > 15 min)")
-        XCTAssertEqual(plain(atBoundary.forecast?.freshnessLine), "MODEL RAN 15 MIN AGO · FROM 105 AT 12:32 PM")
+        XCTAssertEqual(plain(atBoundary.forecast?.freshnessLine), "MODEL RAN 12:32 PM · 15 MIN AGO · FROM 105 AT 12:32 PM")
 
         let past = make(status, at: boundary.addingTimeInterval(0.001))
         XCTAssertNil(past.forecast)
@@ -145,7 +145,7 @@ final class PredictMappingTests: XCTestCase {
         }
         // 12 min of real time after arrival: 15 min old, still current, and its age is the real one.
         let atLimit = make(status, at: setBack(realElapsed: 12 * 60))
-        XCTAssertEqual(plain(atLimit.forecast?.freshnessLine), "MODEL RAN 15 MIN AGO · FROM 105 AT 12:32 PM", "not the wall clock's 5 min")
+        XCTAssertEqual(plain(atLimit.forecast?.freshnessLine), "MODEL RAN 12:32 PM · 15 MIN AGO · FROM 105 AT 12:32 PM", "not the wall clock's 5 min")
 
         // One second later it is out of date, although the wall clock says the run is 5 min old.
         let past = make(status, at: setBack(realElapsed: 12 * 60 + 1))
@@ -182,7 +182,7 @@ final class PredictMappingTests: XCTestCase {
         // Up to 2 minutes ahead is clock skew: current, age "just now".
         let slightlyAhead = ForecastTestDocuments.decodedLatest(run: minutes(1), now: t0)
         XCTAssertEqual(plain(make(ForecastTestDocuments.status(latest: slightlyAhead)).forecast?.freshnessLine),
-                       "MODEL RAN JUST NOW · FROM YOUR 12:36 PM READING")
+                       "MODEL RAN 12:36 PM · JUST NOW")
     }
 
     func test_failingFetchKeepsACurrentRunWithARetryNoteUntilItAgesOut() throws {
@@ -250,7 +250,7 @@ final class PredictMappingTests: XCTestCase {
         let latest = ForecastTestDocuments.decodedLatest(run: ranAt, feedGlucose: 105, now: t0)
         let state = make(ForecastTestDocuments.status(latest: latest), readings: readings(endingAt: minutes(-10)))
         let forecast = try XCTUnwrap(state.forecast)
-        XCTAssertEqual(plain(forecast.freshnessLine), "MODEL RAN 3 MIN AGO · FROM YOUR 12:32 PM READING")
+        XCTAssertEqual(plain(forecast.freshnessLine), "MODEL RAN 12:32 PM · 3 MIN AGO")
         let chart = try XCTUnwrap(state.chart)
         XCTAssertEqual(chart.forecast.first?.isPredicted, true, "without a stored reading the line starts at the first predicted point")
         XCTAssertFalse(chart.readings.contains { $0.date == ranAt }, "the feed's bg never joins the readings")
@@ -260,7 +260,7 @@ final class PredictMappingTests: XCTestCase {
         var stored = readings(endingAt: minutes(-8))
         stored.append(sensorReading(ranAt, .belowRange))
         let state = make(currentStatus(), readings: stored)
-        XCTAssertEqual(plain(try XCTUnwrap(state.forecast).freshnessLine), "MODEL RAN 3 MIN AGO · FROM LOW AT 12:32 PM")
+        XCTAssertEqual(plain(try XCTUnwrap(state.forecast).freshnessLine), "MODEL RAN 12:32 PM · 3 MIN AGO · FROM LOW AT 12:32 PM")
         let chart = try XCTUnwrap(state.chart)
         XCTAssertTrue(chart.forecast.allSatisfy(\.isPredicted), "a LOW has no number to start the line from")
         XCTAssertEqual(chart.readings.last?.value, .belowRange, "the flag stays a flag in the readings")
@@ -296,7 +296,7 @@ final class PredictMappingTests: XCTestCase {
 
     // MARK: - oref (S3: it has no time, so it is not shown in v1)
 
-    func test_S1_predictNeverShowsOref() throws {
+    func test_S3_predictNeverShowsOref() throws {
         let oref: [Int: Double] = [5: 333, 30: 277, 60: 222, 120: 188]
         // The document carries these oref values (`ForecastFixtureDocuments.latest`); the app has no
         // way to read them back (D59: `LatestForecast.oref` is internal), so check the view state.
@@ -362,9 +362,9 @@ final class PredictMappingTests: XCTestCase {
         }
         XCTAssertEqual(content(.notConfigured), .notConfigured)
         XCTAssertEqual(content(.turnedOff), .turnedOff(host: PredictFixtures.host))
-        XCTAssertEqual(plain(PredictFixtures.state(.current, at: t0, context: testContext).forecast?.freshnessLine), "MODEL RAN 3 MIN AGO · FROM 105 AT 12:32 PM")
+        XCTAssertEqual(plain(PredictFixtures.state(.current, at: t0, context: testContext).forecast?.freshnessLine), "MODEL RAN 12:32 PM · 3 MIN AGO · FROM 105 AT 12:32 PM")
         XCTAssertEqual(plain(PredictFixtures.state(.currentWithoutReading, at: t0, context: testContext).forecast?.freshnessLine),
-                       "MODEL RAN 3 MIN AGO · FROM YOUR 12:32 PM READING")
+                       "MODEL RAN 12:32 PM · 3 MIN AGO")
         #endif
     }
 }

@@ -16,8 +16,13 @@ actor FakeForecastTransport: ForecastTransport {
     /// Used when the queue for that document is empty.
     private var defaultLatest: Reply
     private var defaultMetrics: Reply
-    private var holding = false
-    private var held: CheckedContinuation<Void, Never>?
+    /// Requests still to hold, in order: `true` = the hold ends when the request's task is cancelled
+    /// (as URLSession does), `false` = it waits for `release()` whatever happens (an answer already
+    /// on its way when the app stopped asking).
+    private var holdsWanted: [Bool] = []
+    /// Held requests, oldest first; resumed with true (released) or false (cancelled).
+    private var held: [(id: UUID, continuation: CheckedContinuation<Bool, Never>)] = []
+    private var cancelledEarly: Set<UUID> = []
     private var cancelRemaining = 0
 
     init(latest: Reply, metrics: Reply) {
@@ -29,7 +34,8 @@ actor FakeForecastTransport: ForecastTransport {
     var paths: [String] { requests.map { $0.url?.lastPathComponent ?? "?" } }
     var hosts: [String] { requests.map { $0.url?.host() ?? "?" } }
     var count: Int { requests.count }
-    var isHolding: Bool { held != nil }
+    var isHolding: Bool { !held.isEmpty }
+    var heldCount: Int { held.count }
 
     func setDefaultLatest(_ reply: Reply) { defaultLatest = reply }
     func enqueueLatest(_ reply: Reply) { latestReplies.append(reply) }
@@ -41,18 +47,45 @@ actor FakeForecastTransport: ForecastTransport {
     /// task is cancelled"). The app's own polling task is not cancelled.
     func cancelNextLatestRequests(_ count: Int) { cancelRemaining = count }
 
-    /// The next request waits in `send` until `release()`.
-    func holdNextRequest() { holding = true }
+    /// The next request waits in `send` until `release()` (the oldest held one first). With
+    /// `cancellable`, cancelling its task ends it at once with a cancellation, like URLSession.
+    func holdNextRequest(cancellable: Bool = false) { holdsWanted.append(cancellable) }
     func release() {
-        held?.resume()
-        held = nil
+        guard !held.isEmpty else { return }
+        held.removeFirst().continuation.resume(returning: true)
+    }
+
+    private func cancelHeld(_ id: UUID) {
+        guard let index = held.firstIndex(where: { $0.id == id }) else {
+            cancelledEarly.insert(id)
+            return
+        }
+        held.remove(at: index).continuation.resume(returning: false)
+    }
+
+    private func hold(cancellable: Bool) async -> Bool {
+        let id = UUID()
+        let wait = { (continuation: CheckedContinuation<Bool, Never>) in
+            if self.cancelledEarly.remove(id) != nil {
+                continuation.resume(returning: false)
+            } else {
+                self.held.append((id, continuation))
+            }
+        }
+        guard cancellable else { return await withCheckedContinuation(wait) }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation(wait)
+        } onCancel: {
+            Task { await self.cancelHeld(id) }
+        }
     }
 
     func send(_ request: URLRequest) async throws(ForecastTransportError) -> ForecastHTTPResponse {
         requests.append(request)
-        if holding {
-            holding = false
-            await withCheckedContinuation { held = $0 }
+        if !holdsWanted.isEmpty, !(await hold(cancellable: holdsWanted.removeFirst())) {
+            // Cancelled while held: fail while the task is cancelled, which ForecastKit reports as
+            // `.cancelled` (what URLSession's URLError.cancelled becomes).
+            throw ForecastTransportError(message: "cancelled")
         }
         if request.url?.lastPathComponent == "latest.json", cancelRemaining > 0 {
             cancelRemaining -= 1

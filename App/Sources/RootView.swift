@@ -9,9 +9,12 @@ struct RootView: View {
     @Bindable var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
-    /// The UI clock's grid start, fixed for the view's life: a schedule rebuilt `from: .now` on every
-    /// render would hand the timeline a new date on every state change, and a tick that changes state
-    /// (the Predict tab's "now" moves every tick, D57) would then re-render forever.
+    /// The UI clock's grid start, fixed for the view's life. Do not use `.periodic(from: .now, …)`
+    /// here: a schedule rebuilt from `.now` on every render hands the timeline a new date after every
+    /// state change, and a tick that changes state (the Predict tab's "now" moves every tick, D57)
+    /// then re-renders forever (the app froze on Predict). docs/app-wiring.md "`ServiceChange` → what
+    /// is rebuilt" explains it; NavigationTests.test_rootViewClockSettlesWhenATickChangesState
+    /// guards it.
     @State private var clockStart = Date()
 
     var body: some View {

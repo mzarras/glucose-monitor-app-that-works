@@ -120,10 +120,14 @@ final class ForecastService {
     }
 
     /// The Predict tab appeared: poll at once if the last attempt is more than
-    /// `predictTabRefreshAge` old (the next poll is then a full interval later).
+    /// `predictTabRefreshAge` old (the next poll is then a full interval later). While fetches fail,
+    /// the failure backoff (60/120/300 s) holds instead: opening the tab adds no requests.
     func predictTabAppeared() {
         guard isForeground, client != nil, !pollInProgress else { return }
-        if let last = lastAttempt, feed.clock().monotonic - last.monotonic <= Self.predictTabRefreshAge { return }
+        let minimumAge = status.isFailing
+            ? ForecastPolling.delayBeforeNextLatestPoll(consecutiveFailures: status.consecutiveFailures)
+            : Self.predictTabRefreshAge
+        if let last = lastAttempt, feed.clock().monotonic - last.monotonic <= minimumAge { return }
         stopPolling()
         startPolling()
     }
@@ -197,8 +201,8 @@ final class ForecastService {
             next.lastError = nil
         case .failure(let error):
             next.consecutiveFailures += 1
-            next.lastError = error.description
-            if next.consecutiveFailures == 1 { log("forecast feed: \(error.description)") }
+            next.lastError = ForecastErrorText.message(for: error) // never a value from a rejected document
+            if next.consecutiveFailures == 1 { log("forecast feed: \(error.description)") } // full text: log only
         }
         status = next
         if case .success = result, ForecastPolling.isMetricsFetchDue(lastSuccessfulFetch: metricsFetchedAt, now: now()) {
