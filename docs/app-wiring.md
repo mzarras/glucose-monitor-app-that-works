@@ -230,7 +230,9 @@ volume while the app is in the foreground and the services publish each change a
 (p5-alerts), so they appear and clear live, with no dismiss button and no relaunch
 (`AppModelWiringTests.test_alarmVolumeNoticeAndSettingsDotFollowEveryDeliveryChange`). Critical
 delivery problems (notifications off, urgent-low alarm off, …) stay Now banners. Screenshots:
-`settings-volume-notice-{light,dark}.png`, `tabbar-{light,dark}.png` (`ScreenshotTests`).
+`settings-volume-notice-{light,dark}.png`, `tabbar-{light,dark}.png`, `predict-placeholder-{light,dark}.png`
+(`ScreenshotTests`; the simulator can't set a low volume), and from the running app
+`settings-root-app-*.png`, `predict-placeholder-app-*.png` (`test_settingsAlertsAndThePredictTab`).
 
 | Page | From | Actions |
 |---|---|---|
