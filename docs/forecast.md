@@ -34,8 +34,8 @@ A forecast is a prediction, not a measurement. S1 and S6 apply to it:
 `scripts/check.sh` (safety gate, "D57 forecast isolation"; `scripts/check-selftest.sh` plants a
 breach of each rule and an allowed importer as a negative control) fails unless:
 
-- **Packages.** Every `Packages/*/Package.swift` is read as SwiftPM reads it (`swift package
-  dump-package`). ForecastKit's has exactly the targets `ForecastKit` (regular) and
+- **Packages.** Every `Packages/*/Package.swift`, and every local package `project.yml` lists, is
+  read as SwiftPM reads it (`swift package dump-package`). ForecastKit's has exactly the targets `ForecastKit` (regular) and
   `ForecastKitTests` (test), no package dependencies, no target dependency except
   `ForecastKitTests` → `ForecastKit`, and no `unsafeFlags`, linked libraries, linked frameworks or
   plugin usages (a `binaryTarget`, `systemLibrary` or `plugin` target is another target type and
@@ -47,9 +47,10 @@ breach of each rule and an allowed importer as a negative control) fails unless:
   `App/Sources/Screens/Predict/`; `AppTests/` and `AppUITests/`; and `Packages/ForecastKit/` itself.
   A deny list is applied first and wins over those names: `Widgets/`; `App/Sources/Pipeline/`,
   `WidgetBridge/`, `Intents/`, `Screens/Now/`, `Screens/Alerts/`, `ViewState/Now*`,
-  `Composition/AlertPorts*`, `Model/ViewStateMapping*`, `Model/NowMapping*`; and any path under
-  `App/Sources/` containing `Alert`, `Trio`, `Upload`, `Sharing`, `Widget`, `Pipeline`,
-  `HistoryImport` or `SensorDevice`. Outside the allowlist, **any Swift file under the scan roots
+  `Screens/Trends/`, `Composition/AlertPorts*`, `Model/ViewStateMapping*`, `Model/NowMapping*`;
+  and any path under `App/Sources/` containing `Alert`, `Trio`, `Upload`, `Sharing`, `Widget`,
+  `Pipeline`, `HistoryImport`, `SensorDevice` or `Trends` (forecasts appear nowhere but the
+  Predict tab). Outside the allowlist, **any Swift file under the scan roots
   (`App/`, `Widgets/`, `Packages/`, `AppTests/`, `AppUITests/`; only `Packages/*/.build` skipped)
   that contains the word `ForecastKit` anywhere** (code, comment or string; any line endings) fails,
   named with its lines. That backstop is what makes the check fail-safe; the import matcher adds a
@@ -60,9 +61,13 @@ breach of each rule and an allowed importer as a negative control) fails unless:
   `AppTests/`, `AppUITests/` or `Config/`: the scans do not follow them, but the build would.
 - **The project compiles only what is scanned.** In `project.yml` as XcodeGen resolves it
   (`xcodegen dump`, so includes, YAML anchors and aliases, escapes and target templates are
-  resolved; if XcodeGen cannot resolve the spec, the check fails), every target's source paths lie
-  under `App/`, `Widgets/`, `AppTests/` or `AppUITests/`, or under `Resources/` as resources only
-  (`buildPhase: resources` or `type: folder`). Absolute paths and `..` are refused.
+  resolved; if XcodeGen cannot resolve the spec, the check fails), each target compiles only from
+  its own directory: `Sensor` from `App/`, `SensorWidgets` from `Widgets/`, `SensorTests` from
+  `AppTests/`, `SensorUITests` from `AppUITests/` (any other target from nothing); `Resources/` only
+  as resources (`buildPhase: resources` or `type: folder`). So test code, which may import
+  ForecastKit, is never compiled into the app. Absolute paths and `..` are refused. Every
+  `packages:` entry is remote (not a `file:` URL) or a local path that is exactly
+  `Packages/<name>`, so no package outside the checked ones can be linked.
 - **Linkage.** Only the targets `Sensor`, `SensorTests` and `SensorUITests` may depend on the
   ForecastKit package (under any `packages:` key whose entry names it), and in them ForecastKit
   appears only as that package dependency, never in sources, settings, config files or schemes.
@@ -85,8 +90,14 @@ module through an app type (a property, a closure). With SE-0444 `MemberImportVi
 the Sensor target enables (p5-predict), using that value's ForecastKit members in a file that does
 not import ForecastKit is a compile error, so the import rules above also hold for member access;
 passing the value along opaquely is still possible and stays a review rule: nothing outside the
-Predict UI may take a forecast value. Run-script build phases are not inspected, and without the
-build gate in the same run a flag assembled from xcconfig variables is only caught by review.
+Predict UI may take a forecast value. That SE-0444 stays on for Sensor is enforced by `check.sh`
+after the p5 merge (the setting lives in p5-predict's `project.yml`).
+
+The deny list is a heuristic: a case-sensitive substring test on the whole path. It fails safe, so
+a future Predict file whose path contains a deny word (e.g. `PredictAlertBanner.swift`) fails
+loudly and must be renamed. A flag assembled from xcconfig variables (e.g.
+`-$(A)$(B)` spelling `-module-alias`) is caught only by the build-log grep, so only in a run that
+includes the build gate (a certify run). Run-script build phases are not inspected.
 
 ## The feed
 

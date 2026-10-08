@@ -124,7 +124,10 @@ if [ $status -eq 0 ]; then echo "MISS  pass 1: check.sh exited 0"; missing=1; el
 #              (XcodeGen resolves a plain `- package: ForecastKit` to the same thing); Sensor
 #              sources `Shared` (a new root with a plain import) and
 #              `Packages/ForecastKit/Sources/ForecastKit` (ForecastKit compiled into the app);
-#              Sensor's OTHER_SWIFT_FLAGS `-module-alias Fk=ForecastKit` with `import Fk`
+#              Sensor's OTHER_SWIFT_FLAGS `-module-alias Fk=ForecastKit` with `import Fk`;
+#              Sensor sources `AppTests/Shims` (test code, allowed to import ForecastKit, compiled
+#              into the app); a local package Bridge/ outside Packages/ that depends on ForecastKit
+#              and GlucoseCore, linked to SensorWidgets
 #   flags      `-Xfrontend -import-module -Xfrontend ForecastKit` in Config/Base.xcconfig
 cat > Packages/ForecastKit/Package.swift <<'SWIFT'
 // swift-tools-version: 6.0
@@ -210,22 +213,44 @@ ln -s ../../../Stash/dir App/Sources/Pipeline/Linked
 # A new source root, ForecastKit's own sources compiled into the app, a module alias, and
 # ForecastKit linked to the widget extension through a YAML anchor on the app's own dependency and
 # an alias in the widget's (no line of the widget target mentions ForecastKit).
-mkdir -p Shared
+mkdir -p Shared AppTests/Shims Bridge/Sources/Bridge
 printf 'import ForecastKit\n' > Shared/ReadingSink.swift
+printf 'import ForecastKit\n\nextension ReadingPipeline {}\n' > AppTests/Shims/ReadingPipelineShim.swift
+cat > Bridge/Package.swift <<'SWIFT'
+// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "Bridge",
+    platforms: [.iOS(.v17), .macOS(.v14)],
+    products: [.library(name: "Bridge", targets: ["Bridge"])],
+    dependencies: [.package(path: "../Packages/ForecastKit"), .package(path: "../Packages/GlucoseCore")],
+    targets: [.target(name: "Bridge", dependencies: ["ForecastKit", "GlucoseCore"])]
+)
+SWIFT
+cat > Bridge/Sources/Bridge/Bridge.swift <<'SWIFT'
+import ForecastKit
+import GlucoseCore
+
+public func checkSelftestForecastBeside(_ latest: LatestForecast, _ reading: GlucoseReading) -> LatestForecast { latest }
+SWIFT
 printf 'import Fk\n' > App/Sources/Pipeline/CheckSelftestAlias.swift
 awk '
     { print }
     /^[A-Za-z]/ { section = $1 }
     section == "targets:" && /^  [A-Za-z]/ { target = $1 }
+    section == "packages:" && $0 == "packages:" { print "  Bridge:"; print "    path: Bridge" }
     target == "Sensor:" && /^    sources:$/ {
         print "      - path: Shared"
         print "      - path: Packages/ForecastKit/Sources/ForecastKit"
+        print "      - path: AppTests/Shims"
     }
     target == "Sensor:" && /^      base:$/ { print "        OTHER_SWIFT_FLAGS: \"$(inherited) -module-alias Fk=ForecastKit\"" }
     target == "Sensor:" && /^    dependencies:$/ { print "      - &checkSelftestForecast"; print "        package: ForecastKit" }
-    target == "SensorWidgets:" && /^    dependencies:$/ { print "      - *checkSelftestForecast" }
+    target == "SensorWidgets:" && /^    dependencies:$/ { print "      - *checkSelftestForecast"; print "      - package: Bridge" }
 ' project.yml > "$TMP/project.yml" && cp "$TMP/project.yml" project.yml
 for line in '      - \*checkSelftestForecast' '      - &checkSelftestForecast' '      - path: Shared' \
+            '      - path: AppTests/Shims' '  Bridge:' '    path: Bridge' '      - package: Bridge' \
             '      - path: Packages/ForecastKit/Sources/ForecastKit' '        OTHER_SWIFT_FLAGS: "\$(inherited) -module-alias Fk=ForecastKit"'; do
     if ! grep -q "^$line\$" project.yml; then echo "MISS  could not plant into project.yml (its layout changed): $line"; missing=1; fi
 done
@@ -269,6 +294,9 @@ expect "$OUT2" '^FAIL  D57: symbolic links .*App/Sources/Pipeline/Linked' "a sym
 expect "$OUT2" '^FAIL  D57: scan root AppUITests is missing' "a missing scan root"
 expect "$OUT2" '^FAIL  D57: target sources outside .*Sensor:Shared( |$)' "a new source root (Shared) on the Sensor target"
 expect "$OUT2" '^FAIL  D57: target sources outside .*Sensor:Packages/ForecastKit/Sources/ForecastKit' "ForecastKit's sources compiled into the Sensor target"
+expect "$OUT2" '^FAIL  D57: target sources outside .*Sensor:AppTests/Shims' "test code (AppTests/Shims) compiled into the Sensor target"
+expect "$OUT2" '^FAIL  D57: project.yml packages that are neither remote nor Packages/<name>:.* Bridge:Bridge' "a local package outside Packages/ (Bridge)"
+expect "$OUT2" '^FAIL  D57: packages depending on ForecastKit:.* Bridge' "the local package Bridge depending on ForecastKit"
 expect "$OUT2" '^FAIL  D57: project.yml links or names ForecastKit outside .*targets.Sensor\(outside-dependencies\)' "ForecastKit named in the Sensor target outside its dependencies"
 expect "$OUT2" '^FAIL  D57: project.yml links or names ForecastKit outside .*targets.SensorWidgets' "ForecastKit linked to the widget through a YAML anchor/alias"
 expect "$OUT2" '^FAIL  D57: module-alias/import-module .*project.yml:[0-9]+' "-module-alias in project.yml"
