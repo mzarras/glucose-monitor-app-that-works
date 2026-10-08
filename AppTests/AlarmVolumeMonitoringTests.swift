@@ -83,6 +83,57 @@ final class AlarmVolumeMonitoringTests: XCTestCase {
         XCTAssertEqual(services.productionAlerts?.isMonitoringVolume, true)
     }
 
+    // MARK: - Review m3: a background always wins over the foreground work
+
+    /// AppEnvironment's `.active`, then `.background` before the foreground work's Task has run (a
+    /// quick switch away): no `.playback` session is left active in the background.
+    func test_D55_aBackgroundBeforeTheForegroundWorkRunsWins() async {
+        let persistence = LiveServicesHarness.Persistence(now: Date())
+        let harness = LiveServicesHarness(persistence)
+        let services = harness.services
+        await services.bootstrap()
+        let foreground = services.sceneBecameActive() // scenePhaseChanged(to: .active)
+        XCTAssertTrue(services.isInForeground)
+        services.handleBackground() // scenePhaseChanged(to: .background), before that Task ran
+        await foreground.value
+        XCTAssertFalse(services.isInForeground)
+        XCTAssertFalse(harness.audio.isMonitoringVolume, "no monitoring session in the background")
+        XCTAssertEqual(services.productionAlerts?.isMonitoringVolume, false)
+
+        // The next activation turns it on as usual.
+        await services.sceneBecameActive().value
+        XCTAssertTrue(harness.audio.isMonitoringVolume)
+        services.handleBackground()
+        XCTAssertFalse(harness.audio.isMonitoringVolume)
+    }
+
+    /// The background arrives while the foreground work is in flight (held in bootstrap's first
+    /// permission read, after the new service has started monitoring): monitoring goes off, and
+    /// nothing later in the foreground work turns it back on.
+    func test_D55_aBackgroundDuringTheForegroundWorkWins() async {
+        let persistence = LiveServicesHarness.Persistence(now: Date())
+        let harness = LiveServicesHarness(persistence)
+        let services = harness.services
+        let gate = OpenGate()
+        let held = LiveServicesHarness.Flag(false)
+        persistence.center.holdNextPermissionRead = {
+            held.value = true
+            await gate.wait()
+        }
+        let foreground = services.sceneBecameActive()
+        await waitUntil("the foreground work is held in bootstrap") { held.value }
+        XCTAssertFalse(services.isBootstrapped)
+        XCTAssertTrue(harness.audio.isMonitoringVolume, "on while the scene is active")
+        services.handleBackground()
+        XCTAssertFalse(harness.audio.isMonitoringVolume)
+        await gate.open()
+        await foreground.value
+        XCTAssertTrue(services.isBootstrapped)
+        XCTAssertFalse(services.isInForeground)
+        XCTAssertFalse(harness.audio.isMonitoringVolume, "the rest of the foreground work leaves it off")
+        XCTAssertEqual(services.productionAlerts?.isMonitoringVolume, false)
+    }
+
     #if DEBUG
     /// One volume monitor per audio player: it moves to the replay service and back to production.
     func test_D55_aReplayRunHandsTheVolumeMonitorToTheActiveServiceAndBack() async throws {

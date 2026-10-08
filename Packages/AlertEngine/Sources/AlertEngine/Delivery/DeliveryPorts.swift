@@ -60,9 +60,14 @@ public protocol AlertAudioPlaying: AnyObject {
     /// once, then every change, each on the main actor. While monitoring, the player keeps its
     /// audio session active (`outputVolume` can be stale only while it is inactive) without ducking
     /// or interrupting other apps' audio. One monitor at a time: calling this again replaces
-    /// `onEvent` and re-activates the monitoring session (recovering from an interruption whose end
-    /// was never reported). While an alert sound plays, its session is left exactly as it is and
-    /// monitoring takes it over when the sound ends. Never starts, stops or changes an alert sound.
+    /// `onEvent` and re-activates the monitoring session if an interruption took it without an end
+    /// notice. While an alert sound is loaded its session is left exactly as it is, and monitoring
+    /// takes it over when the sound ends; until then values are reported only while that sound's
+    /// session is active. Never starts, changes or stops a sound that is playing. The one exception
+    /// to "never stops" (review m2): a loaded sound that is not playing and will not play again (a
+    /// paused one-shot, or a paused loop past its end time, whose interruption end never came) is
+    /// released first, so monitoring can take the session; a paused loop within its time keeps
+    /// waiting for the interruption's end, and the volume may stay stale until then.
     func startVolumeMonitoring(onEvent: @escaping @MainActor (VolumeMonitoringEvent) -> Void)
     /// D55: stops reporting; no event is delivered after this returns. Never stops or changes a
     /// playing alert sound: the session is released once neither a sound nor monitoring needs it.

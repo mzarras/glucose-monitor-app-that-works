@@ -93,7 +93,7 @@ final class VolumeMonitoringTests: XCTestCase {
         let (h, _) = await harness()
         h.service.setVolumeMonitoring(true)
         h.service.setVolumeMonitoring(true)
-        XCTAssertEqual(h.audio.monitoringStarts, 2, "each foreground re-activates the session")
+        XCTAssertEqual(h.audio.monitoringStarts, 2, "each foreground restarts the player's monitor")
         XCTAssertTrue(h.service.isMonitoringVolume)
         h.service.setVolumeMonitoring(false)
         h.service.setVolumeMonitoring(false)
@@ -102,6 +102,29 @@ final class VolumeMonitoringTests: XCTestCase {
         XCTAssertFalse(h.audio.isMonitoringVolume)
         // Logged once per change, for the §10 device check (docs/alerts.md item 12).
         XCTAssertEqual(h.log.messages.filter { $0.hasPrefix("volume monitoring o") }, ["volume monitoring on (D55)", "volume monitoring off (D55)"])
+    }
+
+    /// Review m1: an alert input's permission refresh reads a new volume before that change's own
+    /// monitoring report has reached the main actor. The refresh calls back (its caller publishes
+    /// nothing), and the report, which then looks unchanged, does not call back twice.
+    func test_aRefreshThatReadsAChangeBeforeItsReportStillCallsBack() async {
+        let (h, calls) = await harness()
+        h.service.setVolumeMonitoring(true)
+        h.audio.outputVolume = 0 // turned down; the KVO report is still on its way
+        await h.service.send(.tick)
+        XCTAssertEqual(h.service.deliveryStatus.problems, [.alarmVolumeMuted])
+        XCTAssertEqual(calls.value, 1, "the app hears of it at once")
+        h.audio.deliverLateReport(.changed(0))
+        XCTAssertEqual(calls.value, 1)
+        XCTAssertEqual(h.log.messages.filter { $0.contains("alarm volume warning on") }.count, 1)
+
+        // The same through a refresh whose caller reads the status itself: one callback too.
+        h.audio.outputVolume = 0.6
+        let status = await h.service.refreshDeliveryStatus()
+        XCTAssertEqual(status.problems, [])
+        XCTAssertEqual(calls.value, 2)
+        h.audio.deliverLateReport(.changed(0.6))
+        XCTAssertEqual(calls.value, 2)
     }
 
     func test_aSessionThatCannotBeActivatedIsLoggedAndTheLastVolumeStands() async {

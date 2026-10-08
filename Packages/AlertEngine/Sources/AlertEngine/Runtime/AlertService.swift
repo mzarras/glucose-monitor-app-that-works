@@ -28,9 +28,10 @@ public final class AlertService {
     /// D55: whether this service has the audio player report the media volume live
     /// (`setVolumeMonitoring(_:)`; the app turns it on in the foreground).
     public private(set) var isMonitoringVolume = false
-    /// D55: called on the main actor after a volume change reported while monitoring has changed
-    /// `deliveryStatus` (already updated when this runs). Never called while monitoring is off.
-    /// Permission refreshes do not call it: their callers read `deliveryStatus` themselves.
+    /// D55: called on the main actor after a change of the media volume while monitoring has
+    /// changed `deliveryStatus` (already updated when this runs), whichever read found the change: a
+    /// monitoring report or a permission refresh (review m1). Never called while monitoring is off:
+    /// then only refreshes read the volume, and their callers read `deliveryStatus` themselves.
     public var onDeliveryStatusChange: (@MainActor () -> Void)?
 
     /// - Parameters:
@@ -87,7 +88,7 @@ public final class AlertService {
     /// Onboarding: ask for notification permission, including Critical Alerts (D4).
     public func requestAuthorization() async -> AlertDeliveryStatus {
         permissions = await center.requestAuthorization()
-        lastOutputVolume = audio.outputVolume
+        recordOutputVolume(audio.outputVolume)
         await rebuildIfDeliveryLevelChanged()
         return deliveryStatus
     }
@@ -108,9 +109,10 @@ public final class AlertService {
     /// D55: on while the app is in the foreground, off in the background. On: the audio player keeps
     /// its session active without ducking anyone and reports the media volume live; each change
     /// updates `deliveryStatus` and calls `onDeliveryStatusChange`. Turning it on again re-activates
-    /// the player's session (it may have been lost to an interruption). Off: no further reports.
-    /// Never starts, stops or changes an alert sound. The player has one monitor at a time, so when
-    /// the app replaces its service (replay runs) it turns the old one's off first.
+    /// the player's session if an interruption took it; for an alert sound still loaded then, see
+    /// `AlertAudioPlaying.startVolumeMonitoring`. Off: no further reports. Never starts, changes or
+    /// stops a sound that is playing. The player has one monitor at a time, so when the app replaces
+    /// its service (replay runs) it turns the old one's off first.
     public func setVolumeMonitoring(_ isOn: Bool) {
         if isOn {
             if !isMonitoringVolume { log("volume monitoring on (D55)") }
@@ -154,7 +156,7 @@ public final class AlertService {
 
     private func refreshPermissions() async {
         permissions = await center.permissionState()
-        lastOutputVolume = audio.outputVolume
+        recordOutputVolume(audio.outputVolume)
         await rebuildIfDeliveryLevelChanged()
     }
 
@@ -163,18 +165,29 @@ public final class AlertService {
         guard isMonitoringVolume else { return }
         switch event {
         case .changed(let volume):
-            guard volume != lastOutputVolume else { return }
-            let wasWarning = AlertDeliveryStatus.volumeProblem(lastOutputVolume) != nil
-            lastOutputVolume = volume
-            let isWarning = AlertDeliveryStatus.volumeProblem(volume) != nil
-            if wasWarning != isWarning {
-                log("media volume \(String(format: "%.2f", volume)): alarm volume warning \(isWarning ? "on" : "off") (live, D55)")
-            }
-            onDeliveryStatusChange?()
+            recordOutputVolume(volume)
         case .sessionFailed(let reason):
             let last = lastOutputVolume.map { String(format: "%.2f", $0) } ?? "unknown"
             log("volume monitoring: audio session not activated (\(reason)); media volume stays \(last) until the next report")
         }
+    }
+
+    /// Every read of the media volume lands here. While monitoring (D55), a change calls
+    /// `onDeliveryStatusChange` whichever read found it (review m1): a refresh (every alert input
+    /// runs one) can read a new value just before that value's own monitoring report arrives, and
+    /// the report then finds nothing new; if only reports called back, the app would keep showing
+    /// the old value (e.g. no warning at volume 0) while it is open.
+    private func recordOutputVolume(_ volume: Float?) {
+        guard volume != lastOutputVolume else { return }
+        let wasWarning = AlertDeliveryStatus.volumeProblem(lastOutputVolume) != nil
+        lastOutputVolume = volume
+        guard isMonitoringVolume else { return }
+        let isWarning = AlertDeliveryStatus.volumeProblem(volume) != nil
+        if wasWarning != isWarning {
+            let shown = volume.map { String(format: "%.2f", $0) } ?? "unknown"
+            log("media volume \(shown): alarm volume warning \(isWarning ? "on" : "off") (live, D55)")
+        }
+        onDeliveryStatusChange?()
     }
 
     private func log(_ message: String) {

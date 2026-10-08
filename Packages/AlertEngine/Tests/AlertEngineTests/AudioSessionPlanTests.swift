@@ -54,14 +54,69 @@ final class AudioSessionPlanTests: XCTestCase {
         XCTAssertEqual(plan.setup, .inactive)
     }
 
+    /// Review B1: the interruption's end leaves a loaded sound's session alone, even with monitoring
+    /// on; monitoring gets it when the sound is released (`stop()`), after a deactivation.
     func test_pausedOneShotWithMonitoringHandsTheSessionBackWhenItStops() {
         var plan = AudioSessionPlan()
         _ = plan.startMonitoring()
         _ = plan.startSound()
         plan.interruptionBegan()
-        XCTAssertEqual(plan.interruptionEnded(resumeSound: false), monitoringSetup, "monitoring resumes; the sound does not")
+        XCTAssertEqual(plan.interruptionEnded(resumeSound: false), [], "the sound still holds the session")
+        XCTAssertEqual(plan.setup, .inactive)
         XCTAssertEqual(plan.endSound(), [.deactivate] + monitoringSetup)
         XCTAssertEqual(plan.setup, .monitoring)
+    }
+
+    // MARK: - B1: an interruption's end never takes a loaded sound's session (S7)
+
+    /// A call begins while the app is open with nothing playing; an urgent low starts during the
+    /// call (iOS lets a `.playback` session activate then). The call's end must not deactivate it:
+    /// that stops the sound (AVAudioSession.h, `setActive:error:`).
+    func test_S7_anAlertStartedDuringAnInterruptionKeepsItsSessionWhenItEnds() {
+        var plan = AudioSessionPlan()
+        _ = plan.startMonitoring()
+        plan.interruptionBegan()
+        XCTAssertEqual(plan.startSound(), alarmSetup, "from the session the call deactivated")
+        XCTAssertEqual(plan.interruptionEnded(resumeSound: false), [])
+        XCTAssertEqual(plan.setup, .alarm)
+        XCTAssertTrue(plan.holdsSound)
+        XCTAssertEqual(plan.startMonitoring(), [], "a foreground meanwhile leaves it alone too")
+        XCTAssertEqual(plan.endSound(), [.deactivate] + monitoringSetup, "handed over when the sound ends")
+    }
+
+    /// An urgent-low loop is interrupted, and its repeat replaces it during the call (`play` ends
+    /// the old sound first). The call's end must leave the new sound's session alone.
+    func test_S7_anAlertThatReplacedAnInterruptedLoopKeepsItsSessionWhenItEnds() {
+        var plan = AudioSessionPlan()
+        _ = plan.startMonitoring()
+        _ = plan.startSound()
+        plan.interruptionBegan()
+        XCTAssertEqual(plan.endSound(), [.deactivate] + monitoringSetup, "the old loop's stop()")
+        XCTAssertEqual(plan.startSound(), [.deactivate] + alarmSetup, "the repeat's play()")
+        XCTAssertEqual(plan.interruptionEnded(resumeSound: false), [])
+        XCTAssertEqual(plan.setup, .alarm)
+        XCTAssertTrue(plan.holdsSound)
+    }
+
+    /// The resume applies the alarm setup again exactly as before D55 (setCategory, setActive(true)),
+    /// never with a deactivation first, whatever the plan believes about the session.
+    func test_S7_resumingALoopNeverDeactivates() {
+        func loopWithMonitoringOn() -> AudioSessionPlan {
+            var plan = AudioSessionPlan()
+            _ = plan.startMonitoring()
+            _ = plan.startSound()
+            return plan
+        }
+        var interrupted = loopWithMonitoringOn()
+        interrupted.interruptionBegan()
+        let neverPaused = loopWithMonitoringOn() // a second `.ended`, or iOS did not pause it
+        var unknown = loopWithMonitoringOn()
+        unknown.stepFailed()
+        for (name, before) in [("interrupted", interrupted), ("never paused", neverPaused), ("unknown", unknown)] {
+            var plan = before
+            XCTAssertEqual(plan.interruptionEnded(resumeSound: true), alarmSetup, name)
+            XCTAssertEqual(plan.setup, .alarm, name)
+        }
     }
 
     // MARK: - Monitoring

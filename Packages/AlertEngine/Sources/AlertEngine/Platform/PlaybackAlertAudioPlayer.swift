@@ -9,9 +9,11 @@
 //
 // Interruptions (a phone call, Siri): iOS pauses our player. When the interruption ends and the
 // urgent-low loop still has time left, playback resumes for that remaining time (at least
-// `minimumResumeSeconds`), even if iOS does not suggest resuming: an unacknowledged urgent low
-// outranks the usual courtesy. A one-shot sound is not resumed. Whether iOS lets a backgrounded
-// app resume after a call is part of the §11 on-device checks.
+// `HeldAlertSound.minimumResumeSeconds`), even if iOS does not suggest resuming: an unacknowledged
+// urgent low outranks the usual courtesy. A one-shot sound is not resumed. Whether iOS lets a
+// backgrounded app resume after a call is part of the §11 on-device checks. A sound that started
+// during the interruption and is playing when it ends is left exactly as it is, session included
+// (D55 review B1). HeldAlertSound (pure, host-tested) decides each case.
 //
 // Deliberately NOT done: forcing the system volume up with the hidden MPVolumeView slider, as
 // Loop and Trio do. By their own comments it no-ops while the app is in the background (the case
@@ -45,7 +47,7 @@ public final class PlaybackAlertAudioPlayer: AlertAudioPlaying {
     private var vibrationTask: Task<Void, Never>?
     /// When the current loop is due to end; `nil` for a one-shot sound.
     private var loopEndsAt: Date?
-    /// Loop time left when an interruption began.
+    /// Loop time left when an interruption began; `nil` once it ended (or the loop was replaced).
     private var remainingAtInterruption: TimeInterval?
     private var interruptionObserver: ObserverToken?
     /// The session's setup and what holds it: a sound, monitoring (AudioSessionPlan.swift).
@@ -54,15 +56,20 @@ public final class PlaybackAlertAudioPlayer: AlertAudioPlaying {
     private var onVolumeEvent: (@MainActor (VolumeMonitoringEvent) -> Void)?
     /// D55: the KVO observation of `outputVolume` while monitoring.
     private var volumeObservation: NSKeyValueObservation?
+    /// How many interruption notices (`.began` / `.ended`) this player has handled. The hosted tests
+    /// (AppTests/PlaybackAlertAudioPlayerTests.swift) post the real notification and wait on this.
+    public private(set) var interruptionNoticesHandled = 0
+
+    /// The wall clock for loop end times (the hosted tests move it past a loop's end).
+    private let now: () -> Date
 
     /// Loop re-triggers the (≈0.4 s) system vibration this often while an alarm plays
     /// (CriticalAlertAudioPlayer.swift:41).
     private let vibrationInterval: Duration = .seconds(2)
-    /// After a call, an interrupted urgent-low loop plays at least this long again.
-    private let minimumResumeSeconds: TimeInterval = 10
 
-    public init(bundle: Bundle = .main) {
+    public init(bundle: Bundle = .main, now: @escaping () -> Date = { Date() }) {
         self.bundle = bundle
+        self.now = now
         let token = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance(), queue: .main
         ) { [weak self] notification in
@@ -98,7 +105,7 @@ public final class PlaybackAlertAudioPlayer: AlertAudioPlaying {
             }
             self.player = player
             if loopSeconds > 0 {
-                loopEndsAt = Date().addingTimeInterval(loopSeconds)
+                loopEndsAt = now().addingTimeInterval(loopSeconds)
                 startVibration()
                 scheduleStop(after: loopSeconds)
             } else {
@@ -143,7 +150,13 @@ public final class PlaybackAlertAudioPlayer: AlertAudioPlaying {
 
     public func startVolumeMonitoring(onEvent: @escaping @MainActor (VolumeMonitoringEvent) -> Void) {
         onVolumeEvent = onEvent
-        // With a sound loaded the session stays the sound's; it is handed over in `stop`.
+        // Review m2: a sound whose interruption end never came would hold the session for good.
+        // Released only if it is not playing and will not play again (HeldAlertSound.isAbandoned);
+        // `stop()` hands the session to monitoring as any sound's end does.
+        if let player, HeldAlertSound.isAbandoned(isPlaying: player.isPlaying, loopEndsIn: loopEndsIn) {
+            stop()
+        }
+        // With a sound still loaded the session stays the sound's; it is handed over in `stop`.
         performReportingFailure(plan.startMonitoring())
         observeVolume()
     }
@@ -256,36 +269,59 @@ public final class PlaybackAlertAudioPlayer: AlertAudioPlaying {
         }
     }
 
+    /// Seconds until the loaded loop's end time (negative once past); `nil` for a one-shot.
+    private var loopEndsIn: TimeInterval? {
+        loopEndsAt.map { $0.timeIntervalSince(now()) }
+    }
+
     private func handleInterruption(typeRaw: UInt?) {
+        defer { interruptionNoticesHandled += 1 }
         guard let typeRaw, let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
         switch type {
         case .began:
             // iOS has deactivated the session and paused the player. Hold the loop's remaining time
             // instead of letting the stop timer run out during the call.
             plan.interruptionBegan()
-            guard player != nil, let loopEndsAt else { return }
-            remainingAtInterruption = max(loopEndsAt.timeIntervalSinceNow, 0)
+            guard player != nil, let loopEndsIn else { return }
+            remainingAtInterruption = max(loopEndsIn, 0)
             stopTask?.cancel()
             vibrationTask?.cancel()
         case .ended:
-            guard let player, let remaining = remainingAtInterruption else {
-                // No loop to resume. D55: monitoring, if on, gets its session back.
+            guard let player else {
+                // No sound. D55: monitoring, if on, gets its session back.
                 performReportingFailure(plan.interruptionEnded(resumeSound: false))
                 return
             }
+            let action = HeldAlertSound.atInterruptionEnd(
+                isPlaying: player.isPlaying, loopSecondsLeftAtInterruption: remainingAtInterruption, loopEndsIn: loopEndsIn
+            )
             remainingAtInterruption = nil
-            let playFor = max(remaining, minimumResumeSeconds)
-            do {
-                try perform(plan.interruptionEnded(resumeSound: true))
-                guard player.play() else { stop(); return }
-                loopEndsAt = Date().addingTimeInterval(playFor)
-                startVibration()
-                scheduleStop(after: playFor)
-            } catch {
+            switch action {
+            case .leaveAlone:
+                // B1: it started during the interruption and plays on. The plan returns no steps for
+                // a loaded sound; its session is handed over in `stop()`.
+                performReportingFailure(plan.interruptionEnded(resumeSound: false))
+            case .resumeLoop(let seconds):
+                resumeLoop(player, for: seconds)
+            case .release:
                 stop()
             }
         @unknown default:
             return
+        }
+    }
+
+    /// The urgent-low loop plays on after an interruption, as before D55. If its session cannot be
+    /// set up again or the player will not start, it is released (never left loaded and silent).
+    private func resumeLoop(_ player: AVAudioPlayer, for seconds: TimeInterval) {
+        do {
+            try perform(plan.interruptionEnded(resumeSound: true))
+            guard player.play() else { stop(); return }
+            loopEndsAt = now().addingTimeInterval(seconds)
+            startVibration()
+            scheduleStop(after: seconds)
+        } catch {
+            stop()
         }
     }
 }

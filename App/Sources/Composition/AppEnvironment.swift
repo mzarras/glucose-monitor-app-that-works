@@ -173,7 +173,9 @@ final class AppEnvironment {
         guard let live else { return }
         switch phase {
         case .active:
-            Task { await live.handleForeground() }
+            // Review m3: marks the foreground synchronously before the foreground work starts in a
+            // Task, so a `.background` that follows at once wins (LiveAppServices.sceneBecameActive).
+            live.sceneBecameActive()
         case .background:
             live.handleBackground()
         case .inactive:

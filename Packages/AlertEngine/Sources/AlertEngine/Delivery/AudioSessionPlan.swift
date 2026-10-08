@@ -18,6 +18,17 @@
 // changing the options of an ACTIVE session does to ducking, so the plan never relies on it. An
 // alarm therefore always starts from an inactive session and always ends with a deactivation, as
 // before D55, and monitoring resumes only after that deactivation (so music comes back up).
+//
+// A second rule keeps an alarm audible (S7, review B1): while a sound is loaded, nothing but the
+// sound's own end (`endSound()`) deactivates the session or sets it up for anything but the alarm.
+// Deactivating a session stops the sound playing in it (AVAudioSession.h in the iOS 26.2 SDK,
+// `setActive:error:`: with I/O running "the session will be deactivated", and since iOS 26 without
+// even an error), and a sound may be playing even right after an interruption: one that started
+// during a call (iOS lets a `.playback` session activate while another app hosts a call, same doc
+// comment). So with a sound loaded the session is either inactive (an interruption took it) or set
+// up for the alarm, never for monitoring. AudioSessionPlanTests checks the first rule for every
+// move; AudioSessionSequenceTests checks the second, and that other audio is un-ducked before
+// monitoring takes the session, over every sequence of up to seven events.
 
 import Foundation
 
@@ -31,7 +42,11 @@ enum AudioSessionSetup: Sendable, Equatable {
 /// One call on `AVAudioSession.sharedInstance()`.
 enum AudioSessionStep: Sendable, Equatable {
     /// `setActive(false, options: .notifyOthersOnDeactivation)`: ducked audio returns to full volume.
-    /// Errors are ignored, as before D55.
+    /// It also stops any sound still playing in the session: with I/O running iOS deactivates the
+    /// session anyway (AVAudioSession.h, iOS 26.2 SDK, `setActive:error:`; since iOS 8 it then
+    /// returns `AVAudioSessionErrorCodeIsBusy`, since iOS 26 not even that). Hence the rule that
+    /// only a sound's own end deactivates while it is loaded (file comment). Errors are ignored, as
+    /// before D55.
     case deactivate
     /// `setCategory(.playback, mode: .default, options:)` with `[.duckOthers, .mixWithOthers]` when
     /// `ducksOthers`, else `[.mixWithOthers]` only.
@@ -47,7 +62,8 @@ struct AudioSessionPlan: Sendable, Equatable {
     private(set) var setup: AudioSessionSetup? = .inactive
     /// D55: the volume is being monitored.
     private(set) var isMonitoring = false
-    /// An alert sound is loaded: playing, or paused by an interruption.
+    /// An alert sound is loaded: playing, or paused by an interruption. Between `startSound()` and
+    /// `endSound()`; the player ends it at once when a step of its setup fails.
     private(set) var holdsSound = false
 
     /// `play`: an alert sound is about to start.
@@ -67,7 +83,9 @@ struct AudioSessionPlan: Sendable, Equatable {
 
     /// D55. With a sound loaded the session stays as the sound needs it; `endSound()` hands it over.
     /// Already monitoring: the same setup is applied again (harmless on an active session; it
-    /// re-activates a session an interruption left inactive without an end notice).
+    /// re-activates a session an interruption left inactive without an end notice). A loaded sound
+    /// whose interruption end never came is released by the player first (review m2,
+    /// `HeldAlertSound.isAbandoned`).
     mutating func startMonitoring() -> [AudioSessionStep] {
         isMonitoring = true
         return holdsSound ? [] : move(to: .monitoring)
@@ -85,10 +103,18 @@ struct AudioSessionPlan: Sendable, Equatable {
         setup = .inactive
     }
 
-    /// The interruption ended. `resumeSound`: an urgent-low loop plays on (its sound is still
-    /// loaded). Otherwise monitoring, if on, gets its session back; nothing else changes.
+    /// The interruption ended. With a sound loaded (review B1) its session is never deactivated or
+    /// handed over here: the sound may be playing (it started during the interruption) and
+    /// `endSound()` hands the session over when it ends. `resumeSound`, an interrupted urgent-low
+    /// loop plays on: the alarm setup is applied again exactly as before D55, without a
+    /// deactivation (the session is inactive or already the alarm's, so the ducking option is never
+    /// switched on an active session). With no sound loaded, monitoring, if on, gets its session back.
     mutating func interruptionEnded(resumeSound: Bool) -> [AudioSessionStep] {
-        if resumeSound, holdsSound { return move(to: .alarm) }
+        if holdsSound {
+            guard resumeSound else { return [] }
+            setup = .alarm
+            return [.setPlaybackCategory(ducksOthers: true), .activate]
+        }
         return isMonitoring ? move(to: .monitoring) : []
     }
 

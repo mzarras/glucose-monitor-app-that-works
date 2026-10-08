@@ -62,9 +62,19 @@ final class RecordingNotificationCenter: AlertNotificationCenter {
         self.clock = clock
     }
 
+    /// Awaited once, by the next permission read, then cleared: a test holds a caller mid-way there
+    /// (e.g. `handleForeground()` inside bootstrap) and lets it go later.
+    var holdNextPermissionRead: (@MainActor () async -> Void)?
+
     func registerCategories() async {}
     func requestAuthorization() async -> NotificationPermissionState { permissions }
-    func permissionState() async -> NotificationPermissionState { permissions }
+    func permissionState() async -> NotificationPermissionState {
+        if let hold = holdNextPermissionRead {
+            holdNextPermissionRead = nil
+            await hold()
+        }
+        return permissions
+    }
 
     struct NotificationsNotAllowed: Error {}
 

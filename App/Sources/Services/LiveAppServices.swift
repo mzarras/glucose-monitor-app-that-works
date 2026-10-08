@@ -110,8 +110,9 @@ final class LiveAppServices: AppServices {
     private(set) var productionStore: GlucoseStore?
     /// The production alert service; nil before bootstrap and during a DEBUG replay run.
     var productionAlerts: AlertService?
-    /// D55: true from `handleForeground()` until `handleBackground()`. The active alert service
-    /// monitors the media volume exactly while this is true (`updateVolumeMonitoring()`).
+    /// D55: true while the scene is active: set when it becomes active (`sceneBecameActive()`, or
+    /// `handleForeground()` called on its own), cleared by `handleBackground()`. The active alert
+    /// service monitors the media volume exactly while this is true (`updateVolumeMonitoring()`).
     private(set) var isInForeground = false
     #if DEBUG
     var replayRun: ReplayRun?
@@ -728,10 +729,22 @@ final class LiveAppServices: AppServices {
         }
     }
 
-    /// The app came to the foreground.
-    func handleForeground() async {
-        // Set before any await, so a `handleBackground()` that arrives meanwhile wins (D55).
+    /// The scene became active (AppEnvironment.scenePhaseChanged). Marks the app in the foreground
+    /// at once, synchronously, then starts the foreground work: a `.background` that arrives before
+    /// that work runs clears the mark again and wins, so volume monitoring (an active `.playback`
+    /// session, D55) is never left on in the background (review m3).
+    @discardableResult
+    func sceneBecameActive() -> Task<Void, Never> {
         isInForeground = true
+        return Task { await self.handleForeground(markedByScene: true) }
+    }
+
+    /// The app came to the foreground. `markedByScene`: `sceneBecameActive()` already set
+    /// `isInForeground` before starting this, and it is not set again here, because a
+    /// `handleBackground()` that ran in between must win. Called on its own (tests), it sets it.
+    func handleForeground(markedByScene: Bool = false) async {
+        // Set before any await, so a `handleBackground()` that arrives meanwhile wins (D55).
+        if !markedByScene { isInForeground = true }
         await bootstrap()
         guard isBootstrapped else { return }
         // D55: the media volume is observed live until `handleBackground()`. Before the permission
