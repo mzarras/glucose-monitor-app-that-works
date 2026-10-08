@@ -70,9 +70,11 @@ CHECK_MODE=fast FAST_RELEASE=1 GATES=build,safety scripts/check.sh       # inclu
 - Without `GATES`, a run with `ONLY_TESTING` or `PKG_FILTER` runs the tests gate only (safety
   needs every rule's tests, and the replay gate is not narrowed).
 - Both work in either mode; a run with either is never a certify run.
-- No `test-without-building`: in fast mode `xcodebuild test` already rebuilds only what changed in
-  the persistent `.derived/sim`. Skipping the build would need its own staleness check, and a wrong
-  one would silently test old code.
+- No `test-without-building`: `xcodebuild test` already rebuilds only what changed in the
+  persistent `.derived/sim` (both modes), and a no-op build measured 11 s. Skipping it would need its
+  own staleness check, and a wrong one would silently test old code.
+- Disk: the fast trees take about 0.5 GB (`fast-build`) plus 0.2 GB per package (`fast-spm`) per
+  worktree; `rm -rf .derived/fast-*` when you are done with a worktree.
 
 ## Build slots
 
@@ -114,4 +116,22 @@ launch, in UI tests or by hand, passes `-silenceAlertAudio`.
 
 ## Measured (2026-10-08, M4 10-core, 16 GB)
 
-TIMINGS
+Other agents and another project's simulator were running throughout (1-minute load average
+90–700), so treat these as rough.
+
+| Run | Wall time | Load (1 min) |
+|---|---|---|
+| certify, all gates (`scripts/check.sh`) | 1160 s | 90 → 16 |
+| fast, first run in a worktree (`GATES=build,tests APP_TESTS=1 PACKAGES=AlertEngine`, cold) | 350 s | 21 → 265 |
+| the same, after a one-line change in an app source file (two runs) | 142 s, 139 s | 493, 154 |
+| the same, no change (two runs) | 200 s, 136 s | 188 → 703, 157 |
+| fast, `ONLY_TESTING=SensorTests/AppShellTests` (10 tests) | 59 s | 219 |
+
+Steps of the certify run: Debug build 52 s, Release build 198 s, the nine `swift test` runs 346 s,
+pool simulator erase and boot 60 s, app unit tests 97 s, Release S2/S6 tests 99 s, `nm` compile-out
+builds 47 s, replay 253 s. The fast run's scope costs about 436 s of those steps in certify. In the
+fast runs the Debug build took 4–17 s, AlertEngine's tests 1–4 s, the simulator 15–41 s and the app
+tests 82–146 s, of which a no-op `build-for-testing` is 11 s.
+
+Simulator costs: create 1 s; first boot after create 39 s; boot of an existing device 12–17 s;
+shutdown 4 s; erase 1 s, then first boot 60–91 s; uninstalling the app 9 s; Keychain reset 1 s.
