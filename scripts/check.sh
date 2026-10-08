@@ -43,8 +43,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/sim-pool.sh"   # build slots and pool simulators (D60)
 
-# Mode and targeted-run settings (D60). PACKAGES_GIVEN is read before PACKAGES gets its default.
+# Mode and targeted-run settings (D60). *_GIVEN are read before GATES and PACKAGES get defaults.
 CHECK_MODE="${CHECK_MODE:-certify}"
+GATES_GIVEN="${GATES:-}"
 PACKAGES_GIVEN="${PACKAGES:-}"
 ONLY_TESTING="${ONLY_TESTING:-}"
 PKG_FILTER="${PKG_FILTER:-}"
@@ -60,7 +61,10 @@ SAFETY_RULES="${SAFETY_RULES:-S1 S2 S3 S4 S5 S6 S7 S8}"
 SIM_DEST_GIVEN="${SIM_DEST:-}"
 SIM_DEST=""
 SIM_UDID=""
-# ONLY_TESTING names hosted app tests; unless PACKAGES is given too, no package tests run.
+# A test selection without GATES runs the tests gate only (safety needs every rule's tests, and
+# replay is not narrowed). ONLY_TESTING names hosted app tests; unless PACKAGES is given too, no
+# package tests run.
+if [ -z "$GATES_GIVEN" ] && [ -n "$ONLY_TESTING$PKG_FILTER" ]; then GATES="tests"; fi
 if [ -n "$ONLY_TESTING" ] && [ -z "$PACKAGES_GIVEN" ]; then PACKAGES=""; fi
 # Set by start_run once this run holds a build slot. Certify: LOGS=.build-logs/<timestamp>,
 # BUILD_DD="$LOGS/dd" — fresh per run so every compile (and therefore every warning) is seen;

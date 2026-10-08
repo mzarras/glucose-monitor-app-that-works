@@ -67,6 +67,8 @@ CHECK_MODE=fast FAST_RELEASE=1 GATES=build,safety scripts/check.sh       # inclu
 - `PKG_FILTER`: passed to `swift test --filter` for every package in `PACKAGES`. Coverage is
   reported but its minimum is not applied. A package with no matching test still fails ("executed no
   tests"), so name the package too. With `PKG_FILTER` the app tests run only with `APP_TESTS=1`.
+- Without `GATES`, a run with `ONLY_TESTING` or `PKG_FILTER` runs the tests gate only (safety
+  needs every rule's tests, and the replay gate is not narrowed).
 - Both work in either mode; a run with either is never a certify run.
 - No `test-without-building`: in fast mode `xcodebuild test` already rebuilds only what changed in
   the persistent `.derived/sim`. Skipping the build would need its own staleness check, and a wrong

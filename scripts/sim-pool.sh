@@ -84,17 +84,20 @@ slot_try() {
 
 # One line per slot 1..$1 (and any other slot directory present): who holds it.
 slot_describe() {
-    local n="$1" d="$SLOT_ROOT/$1" pid since info wt mins state
+    local n="$1" d="$SLOT_ROOT/$1" pid since info wt held state
     if [ ! -d "$d" ]; then echo "slot $n: free"; return; fi
     pid="$(cat "$d/pid" 2>/dev/null)"
     since="$(cat "$d/since" 2>/dev/null)"
     info="$(cat "$d/info" 2>/dev/null)"
     wt="$(cat "$d/worktree" 2>/dev/null)"
-    mins="?"
-    [ -n "$since" ] && mins=$(( ($(date +%s) - since) / 60 ))
+    held="?"
+    if [ -n "$since" ]; then
+        held=$(( $(date +%s) - since ))
+        if [ "$held" -lt 120 ]; then held="$held s"; else held="$((held / 60)) min"; fi
+    fi
     state="alive"
     slot_stale "$d" && state="STALE"
-    echo "slot $n: pid ${pid:-?} ($state), ${wt##*/}, $info, for $mins min"
+    echo "slot $n: pid ${pid:-?} ($state), ${wt##*/}, $info, for $held"
 }
 
 slots_describe() {
