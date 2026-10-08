@@ -40,24 +40,34 @@ breach of each rule and an allowed importer as a negative control) fails unless:
   `unsafeFlags`, linked libraries, linked frameworks or plugin usages. A `binaryTarget`,
   `systemLibrary` or `plugin` target is another target type and fails "exactly".
 - **Foundation only.** Every import in `Packages/ForecastKit/Sources` is of Foundation.
-- **Who may import ForecastKit.** Only: files under `App/` whose name starts with `Forecast` or
-  `Predict` or ends with `+Forecast.swift` or `+Predict.swift`; anything under
+- **Who may name ForecastKit.** The allowlist: files under `App/` whose name starts with `Forecast`
+  or `Predict` or ends with `+Forecast.swift` or `+Predict.swift`; anything under
   `App/Sources/Screens/Predict/`; `AppTests/` and `AppUITests/`; and `Packages/ForecastKit/` itself.
-  Any other Swift file under `App/`, `Widgets/` or `Packages/` that imports it fails, named with its
-  line, and `@_exported import ForecastKit` fails in any scanned file, allowed or not (it would make
-  ForecastKit's names visible in every file of that module).
-- **Linkage.** In `project.yml` only the `packages:` entry and the targets `Sensor`, `SensorTests`
-  and `SensorUITests` name ForecastKit (never `SensorWidgets` or another target or template), and no
-  other package manifest names it.
-- **Nothing vacuous.** `App/`, `Widgets/`, `Packages/`, `Packages/ForecastKit/Sources` and
-  `project.yml` exist, and the import matcher finds ForecastKit's own Foundation imports.
+  A deny list is applied first and wins over those names: `App/Sources/Pipeline/`,
+  `App/Sources/WidgetBridge/`, `App/Sources/Intents/`, `App/Sources/Screens/Now/`,
+  `App/Sources/ViewState/Now*`, `App/Sources/Composition/AlertPorts*`, and under
+  `App/Sources/Services/` anything named `TrioCoordinator*`, `UploadCoordinator*`, `*Widget*` or
+  `*Alert*`, and `Widgets/`. Outside the allowlist, **any Swift file under `App/`, `Widgets/` or
+  `Packages/` that contains the word `ForecastKit` anywhere** (code, comment or string; any line
+  endings) fails, named with its lines. That backstop is what makes the check fail-safe; the import
+  matcher adds a precise "imported outside its allowlist" message for the imports it parses.
+- **No `@_exported`.** Any `@_exported` in a file under `App/`, `Widgets/` or `Packages/` fails,
+  found as raw text (no parsing): it would make a module's names visible in every file of the
+  module that imports it.
+- **Linkage.** `project.yml` as XcodeGen resolves it (`xcodegen dump`, so includes, YAML anchors and
+  aliases, escapes and target templates are resolved): only the targets `Sensor`, `SensorTests` and
+  `SensorUITests` may depend on the ForecastKit package (under any `packages:` key whose entry names
+  it) or name it; nothing else outside `packages:` may name it. If XcodeGen cannot resolve the spec,
+  the check fails. No other package manifest names ForecastKit.
+- **Nothing vacuous.** A missing or Swift-free scan root (`App/`, `Widgets/`, `Packages/`), a
+  missing `project.yml`, and a matcher that finds no import in ForecastKit's own sources each fail.
 
-One import matcher serves both import checks. It reads each file twice, as written and with `//` and
-`/* */` comments removed, and handles attributes (`@testable`, `@_spi(…)`, `@_exported`,
+The import matcher normalises CRLF and CR-only line endings, reads each file twice (as written and
+with `//` and `/* */` comments removed), and handles attributes (`@testable`, `@_spi(…)`,
 `@preconcurrency`, `@_implementationOnly`), access modifiers (`internal import`), import kinds
 (`import struct ForecastKit.X`), backticks, several statements on a line (`;`), trailing comments
-and a declaration split over lines. It is textual and errs towards failing: an import inside
-`#if false`, a block comment or a multi-line string counts too.
+and a declaration split over lines. It is not proof against a string holding `//` or `/*` combined
+with a comment between the tokens (`let s = "//"; import/**/ForecastKit`); the backstop is.
 
 **What it cannot see:** the import rules keep ForecastKit's names out of other files, but an allowed
 file can still hand a forecast value to other code in the same module (e.g. through a property of
@@ -94,14 +104,16 @@ In the live format, with synthetic values (the test fixture `synthetic_latest_li
 | `bg` | newest Nightscout entry at publish time (`_current_bg`: `ts`, `int(sgv)`, `direction`) | `feedGlucose: FeedGlucose?`, informational |
 | `predictions.generated_at` | newest **live** Zen run = the timestamp of the CGM reading it ran on (predict.py writes `target_time = generated_at + horizon`) | `zenRunTime`; `ForecastRun.generatedAt` |
 | `predictions.zen` | that run's predicted mg/dL per horizon, two decimals (predict.py `round(…, 2)`) | `currentRun(at:) -> ForecastRun?`, nil unless current |
-| `predictions.oref` | Trio's oref forecast: per horizon, the median of its predBG scenario curves (zen-predict `oref_points.median_curve`) | `oref: OrefForecast?` |
+| `predictions.oref` | Trio's oref forecast: per horizon, the median of its predBG scenario curves (zen-predict `oref_points.median_curve`) | `oref` (internal: not in v1, see below) |
 | `model_version` | the model that made the Zen run | `modelVersion` |
 
 **oref has no published time.** `build_latest` selects oref's newest archived run by oref's own
 `generated_at` (the Trio loop time, archived from Nightscout devicestatus by the score Lambda) and
 publishes only its values. That run is not the Zen run, and it can be as old as the 48 h history
-window (`HISTORY_WINDOW_HOURS`). `OrefForecast` therefore carries no date at all, and the UI must
-not attach one (S3: timestamps are derived, never assumed). See Open items.
+window (`HISTORY_WINDOW_HOURS`). `OrefForecast` therefore carries no date at all, and
+`LatestForecast.oref` is internal: the app cannot reach these timeless, ungated values, and v1 does
+not show oref (D58 (3)). It becomes public, with its own freshness, once the feed publishes
+`oref_generated_at` (S3: timestamps are derived, never assumed). See Open items.
 
 **`bg.mg_dl` is a Nightscout `sgv`,** which encodes the sensor's flags as numbers: 39 = LOW,
 above 400 = HIGH, below 39 = a Dexcom error code (cgm-remote-monitor 15.0.8 `lib/sandbox.js:248-256`,
@@ -227,7 +239,8 @@ an error instead of following to another host), **bodies over 512 KiB refused** 
 or while reading; the real documents are 330 and 540 bytes). **One request per URL at a time**: a
 fetch that starts while another for the same document is in flight waits for it and gets its result,
 so overlapping polls cannot return an older document after a newer one or bring back a document
-after a rejection. Cancelling a caller cancels that shared request. The transport owns its
+after a rejection. Cancelling a caller cancels that shared request; a caller that arrives after
+that does not join it, but waits for it to unwind and sends its own. The transport owns its
 `URLSession` and invalidates it when released (a new host in Settings means a new client).
 
 Errors: `ForecastFeedError.transport` (no usable response, including an oversized body),
@@ -308,7 +321,7 @@ if let run = latest.currentRun(at: now) {
 } else {
     // no forecast yet
 }
-latest.oref?.points                  // comparison only, no time
+// oref: internal until the feed publishes oref_generated_at (then public, with its own freshness)
 latest.feedGlucose                   // informational; .value is FeedGlucoseValue (LOW/HIGH as flags)
 latest.modelVersion, accuracy.sevenDays?.accuracy(at:), accuracy.thirtyDays, …
 ```

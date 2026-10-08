@@ -39,6 +39,9 @@ actor MockForecastTransport: ForecastTransport {
 
 /// Holds every request until the test answers it, in any order (the overlap scenario of the
 /// review of 79c2c40, m1). Records the most requests that were ever outstanding at once.
+/// Like URLSession, a request whose task was cancelled fails when it finishes; unlike URLSession it
+/// finishes only when the test answers it, so a cancelled request can linger (review of 4bfb5a5,
+/// minor 1).
 actor GatedTransport: ForecastTransport {
     private var waiting: [Int: CheckedContinuation<ForecastHTTPResponse, Never>] = [:]
     private(set) var requests: [URLRequest] = []
@@ -50,10 +53,12 @@ actor GatedTransport: ForecastTransport {
     func send(_ request: URLRequest) async throws(ForecastTransportError) -> ForecastHTTPResponse {
         let index = requests.count
         requests.append(request)
-        return await withCheckedContinuation { continuation in
+        let response = await withCheckedContinuation { continuation in
             waiting[index] = continuation
             mostOutstanding = max(mostOutstanding, waiting.count)
         }
+        if Task.isCancelled { throw ForecastTransportError(message: "cancelled before the answer arrived") }
+        return response
     }
 
     func answer(_ index: Int, with response: ForecastHTTPResponse) {

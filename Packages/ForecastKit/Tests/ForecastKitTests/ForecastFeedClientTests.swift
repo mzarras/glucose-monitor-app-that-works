@@ -272,6 +272,51 @@ final class ForecastFeedClientTests: XCTestCase {
         XCTAssertEqual(started, 1)
     }
 
+    func testANewCallerDoesNotJoinACancelledRequest() async throws {
+        // Review of 4bfb5a5, minor 1: A's request is cancelled but is still unwinding when B (never
+        // cancelled) asks. B must not inherit A's cancellation: it waits for A's request to finish
+        // and then sends its own, still one request per URL at a time.
+        let transport = GatedTransport()
+        let client = client(transport)
+        let a = Task { try await client.fetchLatest() }
+        await transport.waitUntilSent(1)
+        a.cancel()
+        let b = Task { try await client.fetchLatest() }
+        for _ in 0..<1_000 { await Task.yield() }   // give b every chance to join a's request
+        let body = latestBody
+        await transport.answerAll { _, _ in ForecastHTTPResponse(statusCode: 200, eTag: "\"l1\"", body: body) }
+        do {
+            _ = try await a.value
+            XCTFail("the cancelled caller got a value")
+        } catch {
+            XCTAssertEqual(error as? ForecastFeedError, .cancelled)
+        }
+        let latest = try await b.value
+        XCTAssertEqual(latest.zenRunTime, FeedFixtures.now.addingTimeInterval(-120))
+        let sent = await transport.sent
+        XCTAssertEqual(sent.count, 2, "b sends its own request after a's unwinds")
+        let most = await transport.mostOutstanding
+        XCTAssertEqual(most, 1, "one request per URL at a time")
+    }
+
+    func testANewCallerDoesNotJoinACancelledAccuracyRequest() async throws {
+        let transport = GatedTransport()
+        let client = client(transport)
+        let a = Task { try await client.fetchAccuracy() }
+        await transport.waitUntilSent(1)
+        a.cancel()
+        let b = Task { try await client.fetchAccuracy() }
+        for _ in 0..<1_000 { await Task.yield() }
+        let body = metricsBody
+        await transport.answerAll { _, _ in ForecastHTTPResponse(statusCode: 200, eTag: nil, body: body) }
+        let result = await a.result
+        XCTAssertThrowsError(try result.get())
+        let accuracy = try await b.value
+        XCTAssertEqual(accuracy.typicalMiss(at: .thirtyMinutes), 16.4)
+        let most = await transport.mostOutstanding
+        XCTAssertEqual(most, 1)
+    }
+
     func testAlreadyCancelledCallerSendsNothing() async throws {
         let transport = MockForecastTransport([MockForecastTransport.ok(latestBody)])
         let client = client(transport)

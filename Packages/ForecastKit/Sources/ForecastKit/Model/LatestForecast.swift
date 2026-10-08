@@ -15,8 +15,10 @@ public struct LatestForecast: Sendable, Equatable {
     /// The newest Zen Predict run, or nil when the feed has none yet (`generated_at` null or every
     /// value null). Internal: use `currentRun(at:)`.
     let zen: ForecastRun?
-    /// Trio's oref forecast for comparison, or nil. Has no time; see `OrefForecast`.
-    public let oref: OrefForecast?
+    /// Trio's oref forecast for comparison, or nil. Internal: it has no time (see `OrefForecast`),
+    /// may be up to 48 h old, and is not shown in v1 (PROGRESS D58 (3)). It can become public with
+    /// its own freshness once the feed publishes `oref_generated_at`.
+    let oref: OrefForecast?
     /// The newest CGM reading the feed had (`bg`), informational only; nil when not published.
     public let feedGlucose: FeedGlucose?
     /// The model that made the Zen run (`model_version`).

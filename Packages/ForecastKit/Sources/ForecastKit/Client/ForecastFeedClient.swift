@@ -6,7 +6,8 @@
 // One request per URL at a time (review of 79c2c40, m1): a fetch that starts while another for the
 // same URL is in flight waits for that one and gets its result. Without this, overlapping fetches
 // could finish out of order and return (or remember) an older document after a newer one, or bring
-// back a document after a later response had been rejected.
+// back a document after a later response had been rejected. A request that was cancelled is not
+// joined (review of 4bfb5a5, minor 1): a new caller waits for it to unwind, then sends its own.
 
 import Foundation
 
@@ -74,10 +75,14 @@ public actor ForecastFeedClient {
     ///
     /// A 304 returns the document validated earlier from the same ETag **with its original receipt
     /// instant**: re-stamping it would restart its age from the phone's clock at the 304, so after
-    /// the clock was set back the run would look younger again. Joins a fetch already in flight.
-    /// If the calling task is cancelled the shared request is cancelled, and every caller waiting
-    /// on it gets `.cancelled`.
+    /// the clock was set back the run would look younger again. Joins a fetch already in flight,
+    /// unless that fetch was cancelled: then waits for it to unwind and starts a new one. If the
+    /// calling task is cancelled the shared request is cancelled, and every caller that had joined
+    /// it gets `.cancelled`.
     public func fetchLatest() async throws(ForecastFeedError) -> LatestForecast {
+        while let cancelled = latestInFlight, cancelled.isCancelled {
+            _ = await cancelled.value   // it clears `latestInFlight` as it finishes
+        }
         let task: Task<Result<LatestForecast, ForecastFeedError>, Never>
         if let inFlight = latestInFlight {
             task = inFlight
@@ -91,6 +96,9 @@ public actor ForecastFeedClient {
     /// GETs metrics.json. A 304 returns the document validated earlier from the same ETag. Joins a
     /// fetch already in flight; cancellation as for `fetchLatest()`.
     public func fetchAccuracy() async throws(ForecastFeedError) -> ForecastAccuracy {
+        while let cancelled = accuracyInFlight, cancelled.isCancelled {
+            _ = await cancelled.value   // it clears `accuracyInFlight` as it finishes
+        }
         let task: Task<Result<ForecastAccuracy, ForecastFeedError>, Never>
         if let inFlight = accuracyInFlight {
             task = inFlight
