@@ -48,6 +48,10 @@ packages:
     path: Packages/ReplayKit
   WidgetCore:
     path: Packages/WidgetCore
+  # Zen Predict feed for the Predict tab (D57). Not linked to any target yet: the app workstream
+  # adds it to Sensor. Never a dependency of a reading/alert/Trio/upload/widget package (check.sh).
+  ForecastKit:
+    path: Packages/ForecastKit
 
 targets:
   Sensor:

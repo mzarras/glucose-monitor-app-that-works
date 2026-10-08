@@ -15,7 +15,11 @@
 #           minimums; "0 tests executed" fails; the app's hosted unit tests (SensorTests) on the simulator.
 #   safety  ≥ 1 passing `test_S<n>_…` for every rule S1…S8, none failing or skipped, no XCTSkip /
 #           XCTExpectFailure in files that hold safety tests; S6 compile-out checks (ReplayKit and
-#           `validateAllowingReplay` absent from Release objects, present in Debug); S6 caller checks.
+#           `validateAllowingReplay` absent from Release objects, present in Debug); S6 caller checks;
+#           D57 forecast isolation (ForecastKit's manifest: its two targets only, no dependencies,
+#           unsafe flags, linked libraries or plugins; its sources import only Foundation; only an
+#           allowlist of App files (Forecast*/Predict*, Screens/Predict) imports it, never @_exported;
+#           project.yml links it only to Sensor and its test targets, never the widget).
 #   replay  SensorUITests (app launched on each ReplayKit scenario) and SensorTests/ReplayScenarioTests
 #           (alert assertions) on the iOS simulator; both suites must run and pass.
 #
@@ -27,7 +31,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 GATES="${GATES:-build,tests,safety,replay}"
-ALL_PACKAGES="GlucoseCore G7Kit GlucoseStore GlucoseStats AlertEngine TrioBridge NightscoutKit ReplayKit WidgetCore"
+ALL_PACKAGES="GlucoseCore G7Kit GlucoseStore GlucoseStats AlertEngine TrioBridge NightscoutKit ReplayKit WidgetCore ForecastKit"
 PACKAGES="${PACKAGES:-$ALL_PACKAGES}"
 SAFETY_RULES="${SAFETY_RULES:-S1 S2 S3 S4 S5 S6 S7 S8}"
 SIM_DEST="${SIM_DEST:-platform=iOS Simulator,name=iPhone 17,OS=latest}"
@@ -64,6 +68,7 @@ coverage_min() {
         AlertEngine)  echo 90 ;;
         TrioBridge)   echo 90 ;;
         G7Kit)        echo 90 ;;
+        ForecastKit)  echo 90 ;;
         *)            echo "" ;;
     esac
 }
@@ -364,6 +369,261 @@ gate_safety() {
     else
         pass "S6: .replay/.mock construction outside ReplayKit is DEBUG-guarded"
     fi
+
+    forecast_isolation_checks
+}
+
+# ---------------------------------------------------------------------------------------------
+# D57 forecast isolation (run at the end of gate 3). A forecast is never a reading.
+#   Manifest  Packages/ForecastKit/Package.swift as SwiftPM reads it (`swift package dump-package`):
+#             exactly the targets ForecastKit (regular) and ForecastKitTests (test); no package
+#             dependencies; no target dependency except ForecastKitTests -> ForecastKit; no
+#             unsafeFlags, linkedLibrary, linkedFramework or plugin usage. Binary, system-library and
+#             plugin targets have other target types, so they fail "exactly".
+#   Imports   one matcher (forecast_imports) lists every import declaration in the Swift files under
+#             App/, Widgets/ and Packages/:
+#             - ForecastKit's sources may import Foundation only;
+#             - ForecastKit may be imported only by files under App/ named Forecast*, Predict*,
+#               *+Forecast.swift or *+Predict.swift, by anything under App/Sources/Screens/Predict/,
+#               and by Packages/ForecastKit/ itself (AppTests/ and AppUITests/ are not scanned: they
+#               may import it);
+#             - `@_exported import ForecastKit` fails everywhere: it would make ForecastKit's names
+#               visible in every file of the importing module.
+#   Linkage   in project.yml only the `packages:` entry and the targets Sensor, SensorTests and
+#             SensorUITests may name ForecastKit (never SensorWidgets or any other target, template
+#             or section); no other package manifest names it.
+#   Vacuity   App/, Widgets/, Packages/ and Packages/ForecastKit/Sources must exist and hold Swift
+#             files, project.yml must exist, and the matcher must find ForecastKit's own Foundation
+#             imports; otherwise the check fails rather than passing on nothing.
+# Limits: the import checks are textual and fail safe (an import inside `#if false`, a block comment
+# or a multi-line string counts too). They keep ForecastKit's names out of other files; they cannot
+# stop an allowed file from handing a forecast value to other code of the same module, which stays a
+# review rule (docs/forecast.md "Enforcement"). Files pulled in by a project.yml `include:` are not read.
+FORECAST_SCAN_DIRS="App Widgets Packages"
+
+# Every import declaration, one per line: "path:line<TAB>module<TAB>1 if @_exported, else 0".
+# With strip=1 each file is read with its // and /* */ comments removed (nested block comments are
+# tracked across lines); with strip=0 as written. forecast_imports lists the union of both, so
+# neither a comment between the tokens nor a "//" or "/*" inside a string literal hides an import.
+# Each line is split into statements at ";", backticks become blanks, and a statement holding only
+# attributes, access modifiers, `import` and an import kind (no module yet) is joined with the next
+# non-empty one, so a declaration split over several lines is read whole. Grammar: The Swift
+# Programming Language, "Declarations > Import Declaration" (import-kind: typealias, struct, class,
+# enum, protocol, let, var, func), plus access-level imports (SE-0409).
+FORECAST_IMPORTS_AWK='
+BEGIN {
+    ATTR = "@[A-Za-z_][A-Za-z0-9_]*([[:space:]]*[(][^)]*[)])?"
+    MOD = "(public|internal|package|private|fileprivate|open)"
+    KIND = "(typealias|struct|class|enum|protocol|let|var|func)"
+    LEAD = "((" ATTR ")[[:space:]]*|" MOD "[[:space:]]+)*"
+    HEAD = "^" LEAD "import[[:space:]]+(" KIND "[[:space:]]+)?"
+    PREFIX_ONLY = "^" LEAD "(import[[:space:]]+(" KIND "[[:space:]]+)?)?$"
+}
+function without_comments(text,    out, i, n, two, at) {
+    if (depth == 0 && index(text, "/*") == 0) {
+        at = index(text, "//")
+        return at ? substr(text, 1, at - 1) : text
+    }
+    out = ""; n = length(text); i = 1
+    while (i <= n) {
+        two = substr(text, i, 2)
+        if (depth > 0) {
+            if (two == "/*") { depth++; i += 2 }
+            else if (two == "*/") { depth--; i += 2; if (depth == 0) out = out " " }
+            else i++
+            continue
+        }
+        if (two == "//") break
+        if (two == "/*") { depth = 1; i += 2; continue }
+        out = out substr(text, i, 1); i++
+    }
+    return out
+}
+FNR == 1 { pending = ""; depth = 0 }
+{
+    text = $0
+    if (FNR == 1 && substr(text, 1, 3) == "\357\273\277") text = substr(text, 4)
+    if (strip) text = without_comments(text)
+    gsub(/`/, " ", text)
+    n = split(text, parts, ";")
+    for (p = 1; p <= n; p++) {
+        s = parts[p]
+        sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s)
+        if (s == "") continue
+        if (pending != "") { s = pending " " s; pending = "" }
+        if ((s " ") ~ PREFIX_ONLY) { pending = s; continue }
+        if (match(s, HEAD)) {
+            head = substr(s, 1, RLENGTH)
+            rest = substr(s, RLENGTH + 1)
+            if (match(rest, /^[A-Za-z_][A-Za-z0-9_]*/))
+                printf "%s:%d\t%s\t%d\n", FILENAME, FNR, substr(rest, 1, RLENGTH), (head ~ /@_exported/)
+        }
+    }
+}'
+
+# The import declarations in every Swift file under the given directories (build output skipped).
+forecast_imports() {
+    for strip in 0 1; do
+        find "$@" -name '*.swift' -not -path '*/.build/*' \
+            -exec env LC_ALL=C awk -v strip="$strip" "$FORECAST_IMPORTS_AWK" {} +
+    done | sort -u
+}
+
+# Succeeds if the file at repo-relative path $1 may import ForecastKit (the allowlist above).
+forecast_import_allowed() {
+    case "$1" in
+        Packages/ForecastKit/*|App/Sources/Screens/Predict/*|AppTests/*|AppUITests/*) return 0 ;;
+        App/*) ;;
+        *) return 1 ;;
+    esac
+    case "${1##*/}" in
+        Forecast*|Predict*|*+Forecast.swift|*+Predict.swift) return 0 ;;
+    esac
+    return 1
+}
+
+forecast_import_checks() {
+    missing=""
+    for dir in $FORECAST_SCAN_DIRS Packages/ForecastKit/Sources; do
+        if [ ! -d "$dir" ] || [ -z "$(find "$dir" -name '*.swift' -not -path '*/.build/*' | head -n 1)" ]; then
+            missing="$missing $dir"
+        fi
+    done
+    if [ -n "$missing" ]; then
+        fail "D57: forecast import checks cannot run, no Swift files in:$missing"
+        return
+    fi
+    imports="$LOGS/forecast-imports.tsv"
+    forecast_imports $FORECAST_SCAN_DIRS > "$imports"
+    tab="$(printf '\t')"
+    own=0; foreign=""; allowed=0; outside=""; exported=""
+    while IFS="$tab" read -r place module reexports; do
+        file="${place%:*}"
+        case "$file" in
+            Packages/ForecastKit/Sources/*)
+                if [ "$module" = "Foundation" ]; then own=$((own + 1)); else foreign="$foreign $place($module)"; fi ;;
+        esac
+        [ "$module" = "ForecastKit" ] || continue
+        if [ "$reexports" = "1" ]; then exported="$exported $place"; fi
+        if forecast_import_allowed "$file"; then allowed=$((allowed + 1)); else outside="$outside $place"; fi
+    done < "$imports"
+
+    if [ -n "$foreign" ]; then
+        fail "D57: ForecastKit imports modules other than Foundation:$foreign"
+    elif [ "$own" -eq 0 ]; then
+        fail "D57: the import matcher found no import in ForecastKit's sources; the import checks would pass vacuously"
+    else
+        pass "D57: ForecastKit sources import only Foundation ($own imports)"
+    fi
+    if [ -n "$outside" ]; then
+        fail "D57: ForecastKit imported outside its allowlist:$outside"
+    fi
+    if [ -n "$exported" ]; then
+        fail "D57: @_exported import ForecastKit re-exports it to a whole module:$exported"
+    fi
+    if [ -z "$outside$exported" ]; then
+        pass "D57: ForecastKit imported only from its allowlist ($allowed imports), never @_exported"
+    fi
+}
+
+# `plutil -extract KEYPATH raw` prints a string, or an array's element count; nothing if absent.
+forecast_manifest_field() { plutil -extract "$2" raw -o - "$1" 2>/dev/null; }
+
+forecast_manifest_check() {
+    manifest="$LOGS/forecastkit-manifest.json"
+    if ! (cd "$ROOT/Packages/ForecastKit" && swift package dump-package) > "$manifest" 2> "$LOGS/forecastkit-manifest.log"; then
+        fail "D57: could not read Packages/ForecastKit/Package.swift (see $LOGS/forecastkit-manifest.log)"
+        return
+    fi
+    problems=0
+    deps="$(forecast_manifest_field "$manifest" dependencies)"
+    if [ "$deps" != "0" ]; then
+        fail "D57: ForecastKit declares ${deps:-unknown} package dependencies; it must depend on nothing"
+        problems=1
+    fi
+    count="$(forecast_manifest_field "$manifest" targets)"
+    targets=""; edges=""; i=0
+    while [ "$i" -lt "${count:-0}" ]; do
+        name="$(forecast_manifest_field "$manifest" "targets.$i.name")"
+        targets="$targets $name($(forecast_manifest_field "$manifest" "targets.$i.type"))"
+        n="$(forecast_manifest_field "$manifest" "targets.$i.dependencies")"
+        j=0
+        while [ "$j" -lt "${n:-0}" ]; do
+            dep=""
+            for kind in byName target product; do
+                found="$(forecast_manifest_field "$manifest" "targets.$i.dependencies.$j.$kind.0")"
+                if [ -n "$found" ]; then dep="$kind:$found"; break; fi
+            done
+            case "$name->$dep" in
+                "ForecastKitTests->byName:ForecastKit"|"ForecastKitTests->target:ForecastKit") ;;
+                *) edges="$edges $name->${dep:-unknown}" ;;
+            esac
+            j=$((j + 1))
+        done
+        plugins="$(forecast_manifest_field "$manifest" "targets.$i.pluginUsages")"
+        if [ -n "$plugins" ] && [ "$plugins" != "0" ]; then edges="$edges $name->plugins"; fi
+        i=$((i + 1))
+    done
+    targets="$(printf '%s\n' $targets | sort | tr '\n' ' ')"
+    if [ "$targets" != "ForecastKit(regular) ForecastKitTests(test) " ]; then
+        fail "D57: ForecastKit's targets are: ${targets}but must be exactly ForecastKit(regular) ForecastKitTests(test)"
+        problems=1
+    fi
+    if [ -n "$edges" ]; then
+        fail "D57: ForecastKit has target dependencies other than ForecastKitTests->ForecastKit:$edges"
+        problems=1
+    fi
+    settings="$(grep -oE '"(unsafeFlags|linkedLibrary|linkedFramework)"' "$manifest" | tr -d '"' | sort -u | tr '\n' ' ')"
+    if [ -n "$settings" ]; then
+        fail "D57: ForecastKit's manifest uses settings it may not: $settings"
+        problems=1
+    fi
+    if [ "$problems" -eq 0 ]; then
+        pass "D57: ForecastKit manifest: targets ForecastKit and ForecastKitTests only, no dependencies, no unsafe flags, linked libraries or plugins"
+    fi
+}
+
+# Prints "project.yml:LINE(section target)" for each mention of ForecastKit outside the `packages:`
+# entry and the targets Sensor, SensorTests and SensorUITests. YAML comments are ignored; a target
+# is a key at the first indentation under `targets:`.
+FORECAST_PROJECT_AWK='
+{
+    line = $0
+    sub(/^#.*/, "", line); sub(/[[:space:]]#.*/, "", line)
+    if (line ~ /^[^[:space:]]/) {
+        section = line; sub(/:.*/, "", section); target = ""; indent = -1
+    } else if (section == "targets" && line ~ /[^[:space:]]/) {
+        match(line, /^[[:space:]]*/)
+        if (indent < 0) indent = RLENGTH
+        if (RLENGTH == indent) { target = line; sub(/^[[:space:]]*/, "", target); sub(/:.*/, "", target) }
+    }
+    if (line !~ /ForecastKit/ || section == "packages") next
+    if (section == "targets" && (target == "Sensor" || target == "SensorTests" || target == "SensorUITests")) next
+    printf "project.yml:%d(%s%s) ", FNR, section, (target == "" ? "" : " " target)
+}'
+
+forecast_linkage_check() {
+    if [ ! -f project.yml ]; then
+        fail "D57: project.yml is missing; the linkage check cannot run"
+        return
+    fi
+    links="$(LC_ALL=C awk "$FORECAST_PROJECT_AWK" project.yml)"
+    manifests="$(grep -l 'ForecastKit' Packages/*/Package.swift 2>/dev/null | grep -v '^Packages/ForecastKit/Package.swift$')"
+    if [ -n "$links" ]; then
+        fail "D57: ForecastKit linked outside the Sensor app and its test targets: $(echo $links)"
+    fi
+    if [ -n "$manifests" ]; then
+        fail "D57: other package manifests name ForecastKit: $(echo $manifests)"
+    fi
+    if [ -z "$links$manifests" ]; then
+        pass "D57: ForecastKit linked only by the Sensor app and its test targets (project.yml); no other package depends on it"
+    fi
+}
+
+forecast_isolation_checks() {
+    forecast_manifest_check
+    forecast_import_checks
+    forecast_linkage_check
 }
 
 # ---------------------------------------------------------------------------------------------
