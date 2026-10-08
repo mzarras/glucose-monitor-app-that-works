@@ -22,4 +22,9 @@ TRIO_APP_GROUP_ID = group.org.nightscout.$(DEVELOPMENT_TEAM).trio.trio-app-group
 //   App/Sensor+CriticalAlerts.entitlements  — adds com.apple.developer.usernotifications.critical-alerts
 SENSOR_APP_ENTITLEMENTS = App/Sensor.entitlements
 
+// Zen Predict forecast feed host for the Predict tab (D57), e.g. zen.example.com; the app reads
+// https://<host>/latest.json and /metrics.json. A host, not a URL: `//` starts an xcconfig comment.
+// Empty = predictions not configured (Settings › Predictions can still set one).
+ZEN_PREDICT_FEED_HOST =
+
 #include? "Signing.xcconfig"
