@@ -146,11 +146,13 @@ final class NavigationTests: XCTestCase {
         window.isHidden = false
         defer { window.isHidden = true }
         host.view.layoutIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        RunLoop.main.run(until: Date().addingTimeInterval(2))
         XCTAssertNotNil(model.predict.forecast, "the Predict tab rendered a forecast")
         let ticks = services.calls.filter { $0 == "updateClockMismatchLatch" }.count
+        print("RootView clock: \(ticks) ticks in 2 s")
         XCTAssertGreaterThanOrEqual(ticks, 1, "the UI clock ticked")
-        XCTAssertLessThan(ticks, 10, "the UI clock settles instead of re-rendering and ticking forever (\(ticks) ticks in 1 s)")
+        // Fixed grid start: 2 ticks measured. With `from: .now` this host measured 9–12 and rising.
+        XCTAssertLessThanOrEqual(ticks, 4, "the UI clock settles instead of re-rendering and ticking forever (\(ticks) ticks in 2 s)")
     }
 
     func test_alarmVolumeNotice() {
