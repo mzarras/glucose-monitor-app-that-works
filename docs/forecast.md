@@ -44,8 +44,8 @@ breach of each rule and an allowed importer as a negative control) fails unless:
   `Predict` or ends with `+Forecast.swift` or `+Predict.swift`; anything under
   `App/Sources/Screens/Predict/`; `AppTests/` and `AppUITests/`; and `Packages/ForecastKit/` itself.
   Any other Swift file under `App/`, `Widgets/` or `Packages/` that imports it fails, named with its
-  line, and `@_exported import ForecastKit` fails everywhere (it would make ForecastKit's names
-  visible in every file of a module).
+  line, and `@_exported import ForecastKit` fails in any scanned file, allowed or not (it would make
+  ForecastKit's names visible in every file of that module).
 - **Linkage.** In `project.yml` only the `packages:` entry and the targets `Sensor`, `SensorTests`
   and `SensorUITests` name ForecastKit (never `SensorWidgets` or another target or template), and no
   other package manifest names it.
