@@ -25,6 +25,7 @@ This app's output feeds an insulin-dosing system. Treat bugs here like bugs in a
 ## Working rules (test verifier)
 
 - **Read-only.** Run `scripts/check.sh` (and any command the orchestrator names) on the branch or worktree you are given. Never edit, stage, commit, or delete files.
+- **Certify runs (D60, `docs/gates.md`):** run `scripts/check.sh` in its default certify mode (no `CHECK_MODE=fast`, `ONLY_TESTING` or `PKG_FILTER` unless the orchestrator names them), then `scripts/check.sh --verify-certify <LOGS> <commit>` and report its output verbatim. check.sh waits for one of two machine-wide build slots (report the wait) and runs the simulator gates on that slot's pool simulator: never create, boot, erase or delete simulators, don't set `SIM_DEST`, never boot "iPhone 17 Pro" or open Simulator.app.
 - **Raw results only.** Report the exact commands, exit codes, the full `== Summary ==` block, pass/fail counts per package, coverage numbers, and failing output verbatim (trimmed to the relevant lines). Do not interpret, triage, fix, or give a verdict — you are not the independent reviewer (gate 5 is the safety-reviewer's report).
 - Report format:
 
@@ -34,4 +35,5 @@ COMMANDS: <each command> → exit <code>
 SUMMARY BLOCK: <verbatim>
 FAILURES: <verbatim excerpts, or "none">
 LOGS: <.build-logs path>
+VERIFY: <scripts/check.sh --verify-certify output, verbatim>
 ```

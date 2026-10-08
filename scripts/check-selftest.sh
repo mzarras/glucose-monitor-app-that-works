@@ -92,3 +92,50 @@ if [ $missing -ne 0 ]; then
     exit 1
 fi
 echo "check-selftest: all planted defects were caught."
+
+# ---------------------------------------------------------------------------------------------
+# D60: a fast run announces itself, still fails when a check fails, and its logs never pass
+# `check.sh --verify-certify`, even with the MODE file rewritten; nor do pass 1's logs (a certify
+# run of only some gates, with failures). Runs after the planted-defect passes, in the same worktree.
+# ---------------------------------------------------------------------------------------------
+BANNER='FAST MODE: incremental; warnings in unchanged files are not re-reported; NOT valid for merge'
+mode_missing=0
+mode_ok()   { echo "ok    $*"; }
+mode_miss() { echo "MISS  $*"; mode_missing=1; }
+logs_of()   { sed -n 's/^== Summary (\(.*\)) ==$/\1/p' "$1" | tail -n 1; }
+
+OUT_FAST="$TMP/out-fast.txt"
+CHECK_MODE=fast GATES=safety PACKAGES=GlucoseCore SAFETY_RULES=S5 scripts/check.sh > "$OUT_FAST" 2>&1
+status=$?
+if [ "$(head -n 1 "$OUT_FAST")" = "$BANNER" ]; then mode_ok "fast mode: the banner is the first line"; else mode_miss "fast mode: the first line is not the banner"; fi
+if [ "$(tail -n 1 "$OUT_FAST")" = "$BANNER" ]; then mode_ok "fast mode: the banner is the last line"; else mode_miss "fast mode: the last line is not the banner"; fi
+if [ $status -ne 0 ]; then mode_ok "fast mode: exited $status on a failing check"; else mode_miss "fast mode: exited 0 although a check failed"; fi
+FAST_LOGS="$(logs_of "$OUT_FAST")"
+case "$FAST_LOGS" in
+    *-fast) mode_ok "fast mode: log directory name ends in -fast" ;;
+    *) mode_miss "fast mode: log directory '$FAST_LOGS' is not named *-fast" ;;
+esac
+if [ "$(cat "$FAST_LOGS/MODE" 2>/dev/null)" = "fast" ]; then mode_ok "fast mode: MODE file says fast"; else mode_miss "fast mode: MODE file does not say fast"; fi
+
+# verify_rejects <log dir> <regex the rejection must print> <label>
+verify_rejects() {
+    if scripts/check.sh --verify-certify "$1" > "$TMP/verify.txt" 2>&1; then
+        mode_miss "--verify-certify accepted $3"; cat "$TMP/verify.txt"; return
+    fi
+    if grep -qE "$2" "$TMP/verify.txt"; then mode_ok "--verify-certify rejects $3"
+    else mode_miss "--verify-certify rejected $3 without reporting: $2"; cat "$TMP/verify.txt"; fi
+}
+verify_rejects "$FAST_LOGS" '^  - mode is fast' "a fast run's logs"
+FORGED="$TMP/fast-logs-relabelled"
+cp -R "$FAST_LOGS" "$FORGED" && echo certify > "$FORGED/MODE"
+verify_rejects "$FORGED" '^  - RUN record says mode=fast' "fast logs relabelled certify (run record)"
+verify_rejects "$FORGED" '^  - build trees not fresh: generic-iOS derived data was .*/\.derived/fast-build' "fast logs relabelled certify (build trees)"
+verify_rejects "$(logs_of "$OUT")" '^  - gates were ' "pass 1's certify logs (some gates only)"
+verify_rejects "$(logs_of "$OUT")" '^  - exit status 1' "pass 1's certify logs (exit 1)"
+
+if [ $mode_missing -ne 0 ]; then
+    echo "check-selftest: FAILED (D60 mode checks) — fast-mode output in $OUT_FAST"
+    cp "$OUT_FAST" "$ROOT/.build-logs/check-selftest-last-fast.txt" 2>/dev/null
+    exit 1
+fi
+echo "check-selftest: fast runs are marked and never pass --verify-certify."

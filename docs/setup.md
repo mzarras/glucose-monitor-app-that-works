@@ -208,6 +208,8 @@ scripts/check-selftest.sh                                # plants defects in a t
 | `replay` | `SensorUITests` (the DEBUG app launched in the simulator on every ReplayKit scenario, and with no sensor) and `SensorTests/ReplayScenarioTests` (alert assertions through the app's own `ReplayRun` wiring); both suites must run | the wired app starts on each scenario and alerts fire when, and only when, expected |
 
 Logs go to `.build-logs/<timestamp>/`. Gate 5 of HANDOFF §10 (independent review) is not a script.
+Fast incremental runs, targeted tests, build slots, the simulator pool and checking that a log is a
+full certify run (D60): [`gates.md`](gates.md).
 The UI tests launch the app with DEBUG `-silenceAlertAudio`, so nothing plays. If you run the DEBUG
 app in the simulator yourself, alarms play on the Mac's speakers: add `-silenceAlertAudio` to the
 scheme's Run arguments, and `xcrun simctl shutdown all` when done.
