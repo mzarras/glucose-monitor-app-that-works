@@ -18,21 +18,28 @@ a log is a full certify run.
 | Log directory | `.build-logs/<timestamp>/` | `.build-logs/<timestamp>-fast/` |
 | Valid for merge | yes, if `--verify-certify` accepts it | **no** |
 
-Both modes run the same checks with the same pass/fail rules and exit non-zero on any failure.
-Fast mode prints this as its first and last line:
+Fast mode runs the same checks with the same pass/fail rules except the Release-configuration
+steps in the table, which it skips (with a `SKIP` line) unless `FAST_RELEASE=1`, and it re-reports
+warnings only for the files it recompiles. Both modes exit non-zero on any failure. Fast mode
+prints this as its first and last line:
 
 ```
 FAST MODE: incremental; warnings in unchanged files are not re-reported; NOT valid for merge
 ```
 
-Every log directory holds `MODE` (`certify` or `fast`), `RUN` (settings, commit, whether the
-worktree was clean, build-tree paths, simulator, slot, load average, timings), `git-status.txt`,
-`summary.txt` and `EXIT_STATUS`.
+Every log directory holds `MODE` (`certify` or `fast`), `RUN` (settings, commit and whether the
+worktree was clean at the start and at the end, build-tree paths, simulator, slot, load average,
+timings, `complete=yes|no`), `git-status.txt`, `git-status-end.txt`, `summary.txt` and
+`EXIT_STATUS`. A run stopped by a signal (Ctrl-C, `kill`, a closed terminal, or `| head` closing
+its output) records `EXIT_STATUS` as `interrupted (exit <n>)` and `complete=no`.
 
 ## Who runs what (D60)
 
 - **Authors** iterate with `CHECK_MODE=fast` (narrowed as below). The final run before reporting is
   a certify run of the reported commit on a clean worktree; the report names its log directory.
+- A certify run takes about 20 minutes, longer than an agent's Bash tool allows in the foreground
+  (600 s): agents start it with `run_in_background` and wait for its completion notice. Long fast
+  runs (the replay gate alone is about 4 minutes) go in the background too.
 - **Reviewers** don't re-run the full clean suite. They check the author's certify log, then run
   targeted fast runs on whatever they doubt:
 
@@ -46,9 +53,16 @@ worktree was clean, build-tree paths, simulator, slot, load average, timings), `
 `--verify-certify` accepts a log directory only if: `MODE` and `RUN` say certify; the gates were
 build, tests, safety and replay; the packages were all of `ALL_PACKAGES` and the rules S1–S8; no
 `ONLY_TESTING` or `PKG_FILTER`; the build trees were the run's own fresh ones; the worktree had no
-uncommitted changes; the exit status was 0; `summary.txt` has no `FAIL` or `SKIP` line and has the
-`PASS` line of every build, package, app suite, safety rule and compile-out check; and, if a commit
-is given, the run was of that commit. Otherwise it lists every reason and exits 1.
+uncommitted changes at the start or the end, and HEAD did not move; the log was made by this
+`scripts/check.sh` (same blob); the run reached its summary and exited 0; `summary.txt` has no
+`FAIL` or `SKIP` line and has every required `PASS` line; and, if a commit is given, the run was of
+that commit. Otherwise it lists every reason and exits 1. It warns, but accepts, when no commit is
+given and when the run used the caller's `SIM_DEST` instead of an erased pool simulator.
+
+The required `PASS` lines (`scripts/check.sh --certify-requirements`) are derived, not listed: one
+per build configuration, package (its tests, and its coverage where it has a minimum), safety rule,
+Release-safety package, `compiled_out_check` and replay suite, plus every `pass` call in the gate
+code whose label starts with fixed text (the lint checks, and any check added later).
 
 ## Targeted runs
 
@@ -69,7 +83,8 @@ CHECK_MODE=fast FAST_RELEASE=1 GATES=build,safety scripts/check.sh       # inclu
   tests"), so name the package too. With `PKG_FILTER` the app tests run only with `APP_TESTS=1`.
 - Without `GATES`, a run with `ONLY_TESTING` or `PKG_FILTER` runs the tests gate only (safety
   needs every rule's tests, and the replay gate is not narrowed).
-- Both work in either mode; a run with either is never a certify run.
+- Both need `CHECK_MODE=fast`. A certify run with either set exits 2 before doing anything, so an
+  exported variable can't quietly narrow a merge run.
 - No `test-without-building`: `xcodebuild test` already rebuilds only what changed in the
   persistent `.derived/sim` (both modes), and a no-op build measured 11 s. Skipping it would need its
   own staleness check, and a wrong one would silently test old code.
@@ -81,16 +96,20 @@ CHECK_MODE=fast FAST_RELEASE=1 GATES=build,safety scripts/check.sh       # inclu
 Each run holds one of `CHECK_SLOTS` (default 2) machine-wide slots for its whole length, so at
 most two build-heavy runs share the Mac (D60). Slots are `mkdir` locks under
 `~/Library/Caches/sensor-check/slots/<n>/` (per user, the same for every worktree and `TMPDIR`)
-holding the holder's pid, process start time and worktree. A waiting run prints who holds each
-slot every 30 s. A slot whose pid is dead, or whose pid now belongs to a process with a different
-start time, is stale and taken over. `CHECK_SLOTS=0` runs without a slot. Two runs in the same
-worktree at once still share `.derived/sim` (and the fast-mode trees); don't.
+holding the holder's pid, process start time (read with `LC_ALL=C TZ=UTC`, so every checker sees
+the same text) and worktree. A waiting run prints who holds each slot every 30 s. A slot whose pid
+is dead, or whose pid now belongs to a process with a different start time, is stale; a waiting run
+takes it over and first shuts down that slot's pool simulator (a holder killed with `kill -9` never
+ran its exit trap). A live pid whose start time can't be read is never judged stale.
+`CHECK_SLOTS=0` runs without a slot and therefore without a pool simulator: simulator gates then
+need `SIM_DEST`, and check.sh exits 2 without it. Two runs in the same worktree at once still share
+`.derived/sim` (and the fast-mode trees); don't.
 
 ## Simulator pool
 
 Slot *n* runs the simulator gates on `sensor-check-<n>`: an iPhone 17 on the newest installed iOS
-26.x runtime, created on first use and reused (`sensor-check-0` for `CHECK_SLOTS=0`). check.sh
-boots it for the run and shuts it down at exit, so nothing is left booted to play alarms;
+26.x runtime, created on first use and reused. check.sh boots it for the run and shuts it down at
+exit (also after Ctrl-C, `kill` or a closed terminal), so nothing is left booted to play alarms;
 `KEEP_SIM_BOOTED=1` leaves it booted. An explicit `SIM_DEST` still wins; check.sh then neither
 resets nor shuts down that device.
 
@@ -104,13 +123,14 @@ resets nor shuts down that device.
   the UI-test runner, whatever their bundle IDs) and resets the Keychain.
 
 ```sh
-scripts/sim-pool.sh status      # the slots (who holds each) and the pool simulators
+scripts/sim-pool.sh status      # the slots (who holds each), the pool simulators, any left booted
 scripts/sim-pool.sh shutdown    # shut down every pool simulator (not one a live run holds; --force)
 scripts/sim-pool.sh delete      # delete the pool (same rule); check.sh recreates it on demand
 ```
 
 Rules for agents: never create, boot, erase or delete simulators yourself, and don't set `SIM_DEST`;
-use the pool through check.sh. Never boot "iPhone 17 Pro" and never open Simulator.app (activating
+use the pool through check.sh. Running `swift test` or `xcodebuild` directly bypasses the build
+slots and the pool; use `CHECK_MODE=fast` with `ONLY_TESTING` or `PKG_FILTER` instead. Never boot "iPhone 17 Pro" and never open Simulator.app (activating
 it boots its default iPhone 17 Pro, which costs memory and can play real alarm sounds). Every app
 launch, in UI tests or by hand, passes `-silenceAlertAudio`.
 

@@ -8,8 +8,9 @@
 #   scripts/check-selftest.sh              proves the gates fail on planted defects
 #   CHECK_MODE=fast scripts/check.sh       incremental run for iteration; NOT valid for merge (D60)
 #   CHECK_MODE=fast ONLY_TESTING=SensorTests/AppShellTests scripts/check.sh   chosen app tests only
-#   PACKAGES=AlertEngine PKG_FILTER=UrgentLowSnoozeEndTests GATES=tests scripts/check.sh   swift test --filter
+#   CHECK_MODE=fast PACKAGES=AlertEngine PKG_FILTER=UrgentLowSnoozeEndTests scripts/check.sh   swift test --filter
 #   scripts/check.sh --verify-certify .build-logs/<dir> [<commit>]   is that log a full certify run?
+#   scripts/check.sh --certify-requirements   the PASS lines a complete certify run must print
 #
 # Modes (D60; docs/gates.md):
 #   certify (default)  what merges rely on (D18): fresh build trees, every check below.
@@ -17,11 +18,12 @@
 #                      warnings in unchanged files are not re-reported; the Release build, the S2/S6
 #                      Release-configuration tests and the S6 compile-out checks run only with
 #                      FAST_RELEASE=1. Logs go to .build-logs/<timestamp>-fast/; --verify-certify
-#                      rejects them.
-#   Every run holds one of CHECK_SLOTS (default 2) machine-wide build slots (CHECK_SLOTS=0: none) and,
-#   unless SIM_DEST is given, runs the simulator gates on its slot's pool simulator sensor-check-<n>
+#                      rejects them. ONLY_TESTING and PKG_FILTER work only here (certify exits 2).
+#   Every run holds one of CHECK_SLOTS (default 2) machine-wide build slots and, unless SIM_DEST is
+#   given, runs the simulator gates on its slot's pool simulator sensor-check-<n>
 #   (scripts/sim-pool.sh): certify erases it first, fast uninstalls the test apps and resets its
-#   Keychain. The simulator is shut down at exit unless KEEP_SIM_BOOTED=1.
+#   Keychain. The simulator is shut down at exit unless KEEP_SIM_BOOTED=1. CHECK_SLOTS=0 takes no
+#   slot and so no pool simulator: simulator gates then need SIM_DEST.
 #
 # Gates:
 #   build   xcodegen generate; plist/entitlement lint; xcodebuild app scheme for generic/platform=iOS,
@@ -61,6 +63,9 @@ SAFETY_RULES="${SAFETY_RULES:-S1 S2 S3 S4 S5 S6 S7 S8}"
 SIM_DEST_GIVEN="${SIM_DEST:-}"
 SIM_DEST=""
 SIM_UDID=""
+APP_TEST_ARGS=()
+ALL_SAFETY_RULES="S1 S2 S3 S4 S5 S6 S7 S8"
+RUN_COMPLETE=0
 # A test selection without GATES runs the tests gate only (safety needs every rule's tests, and
 # replay is not narrowed). ONLY_TESTING names hosted app tests; unless PACKAGES is given too, no
 # package tests run.
@@ -113,15 +118,34 @@ spm_scratch() {
 # certify, and in fast mode only with FAST_RELEASE=1.
 release_checks_wanted() { [ "$CHECK_MODE" = "certify" ] || [ "$FAST_RELEASE" = "1" ]; }
 
-# -only-testing/-skip-testing arguments for the hosted app tests: ONLY_TESTING (comma-separated
-# test identifiers) when given, else all of SensorTests except the replay suite (gate 4 runs it).
+# The app's hosted tests run with the full package list (unless PKG_FILTER narrows a fast run),
+# with APP_TESTS=1, or when ONLY_TESTING names some of them.
+app_tests_wanted() {
+    { [ "$PACKAGES" = "$ALL_PACKAGES" ] && [ -z "$PKG_FILTER" ]; } || [ "${APP_TESTS:-}" = "1" ] \
+        || [ -n "$ONLY_TESTING" ]
+}
+
+# Succeeds if this run uses a simulator: the app's hosted tests (gate 2) or the replay gate.
+needs_simulator() { wants replay || { wants tests && app_tests_wanted; }; }
+
+# Sets APP_TEST_ARGS, the -only-testing/-skip-testing arguments of the hosted app tests:
+# ONLY_TESTING (comma-separated test identifiers) when given, else all of SensorTests except the
+# replay suite (gate 4 runs it).
 app_test_selection() {
+    local ids id
+    APP_TEST_ARGS=()
     if [ -z "$ONLY_TESTING" ]; then
-        echo "-only-testing:SensorTests -skip-testing:SensorTests/ReplayScenarioTests"
-    else
-        printf '%s\n' "$ONLY_TESTING" | tr ',' '\n' \
-            | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e 's/^/-only-testing:/' | tr '\n' ' '
+        APP_TEST_ARGS=(-only-testing:SensorTests -skip-testing:SensorTests/ReplayScenarioTests)
+        return 0
     fi
+    IFS=, read -r -a ids <<EOF
+$ONLY_TESTING
+EOF
+    for id in ${ids[@]+"${ids[@]}"}; do
+        id="$(printf '%s' "$id" | tr -d '[:space:]')"
+        if [ -n "$id" ]; then APP_TEST_ARGS[${#APP_TEST_ARGS[@]}]="-only-testing:$id"; fi
+    done
+    return 0
 }
 
 # Appends key=value to the run record ($LOGS/RUN) that --verify-certify reads.
@@ -137,11 +161,16 @@ load_average() { sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | sed 's/^ *//; s
 # booted here and shut down at exit (alarm noise, D60). docs/gates.md has the measurements.
 sim_prepare() {
     [ -n "$SIM_DEST" ] && return 0
-    local plog="$LOGS/sim-pool.log" idx="${SLOT:-0}" t0 action app left
+    local plog="$LOGS/sim-pool.log" idx="${SLOT:-}" t0 action app left
     if [ -n "$SIM_DEST_GIVEN" ]; then
         SIM_DEST="$SIM_DEST_GIVEN"
-        record sim "caller's SIM_DEST: $SIM_DEST_GIVEN (not reset or shut down by check.sh)"
+        record sim "caller's SIM_DEST: $SIM_DEST_GIVEN (not erased or shut down by check.sh)"
         return 0
+    fi
+    # The pool simulator belongs to a slot; start_run refuses CHECK_SLOTS=0 runs that need one.
+    if [ -z "$idx" ]; then
+        fail "simulator pool: this run holds no build slot (CHECK_SLOTS=0), so it has no pool simulator; give SIM_DEST"
+        return 1
     fi
     t0="$(date +%s)"
     if ! pool_sim_ensure "$idx" >> "$plog" 2>&1; then
@@ -169,10 +198,13 @@ sim_prepare() {
         for app in $(pool_user_apps "$SIM_UDID"); do
             xcrun simctl uninstall "$SIM_UDID" "$app" >> "$plog" 2>&1
         done
-        xcrun simctl keychain "$SIM_UDID" reset >> "$plog" 2>&1
         left="$(pool_user_apps "$SIM_UDID")"
         if [ -n "$left" ]; then
             fail "simulator pool: could not uninstall from $POOL_PREFIX$idx: $(echo $left)"
+            return 1
+        fi
+        if ! xcrun simctl keychain "$SIM_UDID" reset >> "$plog" 2>&1; then
+            fail "simulator pool: could not reset the Keychain of $POOL_PREFIX$idx (see $plog)"
             return 1
         fi
     fi
@@ -191,22 +223,40 @@ sim_release() {
     xcrun simctl shutdown "$SIM_UDID" >> "$LOGS/sim-pool.log" 2>&1
 }
 
+# Exit trap: deletes the fresh build trees, shuts the pool simulator down, releases the slot and
+# completes the run record. A run that never reached its summary (a signal: INT, TERM, HUP, or
+# PIPE when the reader of its output went away) has EXIT_STATUS "interrupted (exit <n>)" and
+# complete=no, never a bare exit status that could read as 0.
 on_exit() {
     local status=$?
+    trap '' HUP INT TERM PIPE   # finish the bookkeeping even if the terminal or the pipe is gone
+    # A write that failed (SIGPIPE) leaves its text in bash's stdout buffer, and the next builtin
+    # output would flush it into whatever file that output goes to (EXIT_STATUS). Discard it.
+    echo > /dev/null 2>&1
     cleanup_build_dirs
     sim_release
     slot_release
     if [ -n "$LOGS" ] && [ -d "$LOGS" ]; then
-        printf '%s\n' "$status" > "$LOGS/EXIT_STATUS"
+        if [ "$RUN_COMPLETE" = "1" ]; then
+            printf '%s\n' "$status" > "$LOGS/EXIT_STATUS"
+            record complete yes
+        else
+            printf 'interrupted (exit %s)\n' "$status" > "$LOGS/EXIT_STATUS"
+            record complete no
+        fi
         printf '%b\n' "$SUMMARY" | sed '/^$/d' > "$LOGS/summary.txt"
+        git status --porcelain > "$LOGS/git-status-end.txt" 2>&1
+        record commit_end "$(git rev-parse HEAD 2>/dev/null)"
+        record dirty_end "$(wc -l < "$LOGS/git-status-end.txt" | tr -d ' ')"
         record finished "$(date '+%Y-%m-%d %H:%M:%S')"
         record elapsed_seconds "$(( $(date +%s) - RUN_START ))"
         record load_end "$(load_average)"
     fi
-    if [ "$CHECK_MODE" = "fast" ]; then note "$FAST_BANNER"; fi
+    if [ "$CHECK_MODE" = "fast" ]; then note "$FAST_BANNER" 2>/dev/null; fi
 }
 
-# Validates the settings, waits for a build slot, creates the log directory and the run record.
+# Validates the settings (exit 2 before any work if they are wrong), waits for a build slot,
+# creates the log directory and the run record.
 start_run() {
     local suffix="" dirty
     case "$CHECK_MODE" in
@@ -214,14 +264,33 @@ start_run() {
         *) echo "check.sh: CHECK_MODE must be certify or fast, not '$CHECK_MODE'" >&2; exit 2 ;;
     esac
     case "$CHECK_SLOTS" in ''|*[!0-9]*) echo "check.sh: CHECK_SLOTS must be a number" >&2; exit 2 ;; esac
+    # A certify run is what merges rely on (D18): an exported ONLY_TESTING or PKG_FILTER must not
+    # quietly narrow it.
+    if [ "$CHECK_MODE" = "certify" ] && [ -n "$ONLY_TESTING$PKG_FILTER" ]; then
+        echo "check.sh: ONLY_TESTING/PKG_FILTER select tests; targeted runs need CHECK_MODE=fast (a certify run runs everything)" >&2
+        exit 2
+    fi
+    app_test_selection
+    if [ "${#APP_TEST_ARGS[@]}" -eq 0 ]; then
+        echo "check.sh: ONLY_TESTING='$ONLY_TESTING' names no tests" >&2
+        exit 2
+    fi
+    # Pool simulators belong to slots: an unslotted run sharing one could be erased under another.
+    if [ "$CHECK_SLOTS" -eq 0 ] && [ -z "$SIM_DEST_GIVEN" ] && needs_simulator; then
+        echo "check.sh: CHECK_SLOTS=0 runs get no pool simulator; give SIM_DEST, or leave CHECK_SLOTS unset" >&2
+        exit 2
+    fi
     if [ "$CHECK_MODE" = "fast" ]; then note "$FAST_BANNER"; fi
     RUN_START="$(date +%s)"
     trap on_exit EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    trap 'exit 129' HUP
+    # Caught, not ignored: an ignored SIGPIPE is inherited by every child (`sort: Broken pipe`).
+    trap 'exit 141' PIPE
     SLOT=""; SLOT_WAITED=0
     if [ "$CHECK_SLOTS" -gt 0 ]; then
-        slot_acquire "$CHECK_SLOTS" "$CHECK_MODE $GATES" || { echo "check.sh: could not create $SLOT_ROOT" >&2; exit 2; }
+        slot_acquire "$CHECK_SLOTS" "$CHECK_MODE $GATES" || { echo "check.sh: could not take a build slot under $SLOT_ROOT" >&2; exit 2; }
     fi
     RUN_START="$(date +%s)"
     STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -253,17 +322,60 @@ start_run() {
     record fast_release "$FAST_RELEASE"
     record build_dd "$BUILD_DD"
     record spm_scratch "$(spm_scratch '<pkg>')"
+    record sim_dest_given "$SIM_DEST_GIVEN"
     record slot "${SLOT:-none} of $CHECK_SLOTS (waited $SLOT_WAITED s)"
     record started "$(date '+%Y-%m-%d %H:%M:%S')"
     record load_start "$(load_average)"
     note "check.sh: $CHECK_MODE run, build slot ${SLOT:-none} of $CHECK_SLOTS (waited $SLOT_WAITED s), load $(load_average), logs $LOGS"
 }
 
+# The PASS lines of a complete certify run, one pattern per line: the text after "PASS  " up to
+# where the line may go on, with <n> standing for a number (`--certify-requirements` prints them).
+# Derived, never listed by hand, so a check added to the gates becomes required by itself:
+#   - from the configuration: each build configuration; each package's tests, and its coverage
+#     where coverage_min sets a minimum; the app unit tests; each safety rule; each
+#     Release-safety package; each compiled_out_check call in this file; each replay suite;
+#   - from this file's gate code: every pass call whose label starts with literal text (up to its
+#     first $) that no pattern above already starts with. Those are the lint checks (S4 sentinel,
+#     S6 callers and .mock guard, ...) and any check added later.
+certify_requirements() {
+    local config pkg min rule label suite prefix configured
+    configured="$(
+        for config in Debug Release; do echo "build $config (clean), zero warnings"; done
+        for pkg in $ALL_PACKAGES; do
+            echo "$pkg tests — <n> executed, 0 failures"
+            min="$(coverage_min "$pkg")"
+            if [ -n "$min" ]; then echo "$pkg line coverage <n>% (min $min%, $(coverage_scope "$pkg"))"; fi
+        done
+        echo "app unit tests — <n> executed, 0 failures, 0 skipped"
+        for rule in $ALL_SAFETY_RULES; do echo "$rule: <n> passing safety test(s)"; done
+        for pkg in $RELEASE_SAFETY_PACKAGES; do echo "S2/S6 Release-configuration tests in $pkg: <n> passing"; done
+        sed -n 's/^[[:space:]]*compiled_out_check [A-Za-z].*"\([^"]*\)"[[:space:]]*$/\1/p' "$ROOT/scripts/check.sh" \
+            | while IFS= read -r label; do echo "S6: $label absent from Release (<n> symbols in Debug)"; done
+        for suite in $REPLAY_SUITES; do echo "replay run — suite $suite passed"; done
+    )"
+    printf '%s\n' "$configured"
+    # pass in command position only (line start, or after then/else/do/;/&&/||/{), comments skipped.
+    grep -v '^[[:space:]]*#' "$ROOT/scripts/check.sh" \
+        | grep -oE '(^[[:space:]]*|(then|else|do|;|&&|[|][|]|[{])[[:space:]]+)pass "[^"$]*' \
+        | sed -E 's/.*pass "//' | sed '/^$/d' | sort -u | while IFS= read -r prefix; do
+            case "
+$configured" in *"
+$prefix"*) ;; *) printf '%s\n' "$prefix" ;; esac
+        done
+}
+
+# A requirement pattern as an extended regular expression: metacharacters escaped, <n> a number.
+requirement_regex() { printf '%s' "$1" | sed -e 's/[][\.*^$+?(){}|]/\\&/g' -e 's/<n>/[0-9.]+/g'; }
+
 # --verify-certify <log directory> [<commit>]: succeeds only for a complete certify run — every
-# gate, every package and safety rule, no test selection, fresh build trees, a clean worktree,
-# exit 0, no FAIL or SKIP — optionally of the given commit. Reviewers use it on an author's logs.
+# gate, every package and safety rule, no test selection, fresh build trees, a worktree clean at
+# start and end on one commit, made by this check.sh, run to its end with exit 0, no FAIL or SKIP
+# line, every certify_requirements PASS line — and, if given, of that commit. Reviewers use it on
+# an author's logs.
 verify_certify() {
-    local dir="${1:-}" want="${2:-}" problems="" lacking="" mode gates exit_status want_sha commit pkg rule re n f
+    local dir="${1:-}" want="${2:-}" problems="" warnings="" lacking="" mode gates exit_status
+    local want_sha commit here pat n f
     if [ -z "$dir" ] || [ ! -d "$dir" ]; then
         echo "usage: scripts/check.sh --verify-certify <.build-logs/directory> [<commit>]" >&2
         return 2
@@ -271,6 +383,8 @@ verify_certify() {
     dir="$(cd "$dir" && pwd)"
     problem() { problems="$problems
   - $*"; }
+    warning() { warnings="$warnings
+  ! $*"; }
     run_field() { sed -n "s/^$1=//p" "$dir/RUN" 2>/dev/null | tail -n 1; }
 
     mode="$(cat "$dir/MODE" 2>/dev/null)"
@@ -280,26 +394,37 @@ verify_certify() {
         "")   problem "no MODE file: not written by a D60 check.sh, so its mode and build trees are unknown" ;;
         *)    problem "unknown mode '$mode'" ;;
     esac
+    commit=""
     if [ ! -f "$dir/RUN" ]; then
         problem "no RUN record"
     else
+        commit="$(run_field commit)"
         [ "$(run_field mode)" = "certify" ] || problem "RUN record says mode=$(run_field mode)"
         gates="$(run_field gates | tr ',' '\n' | sed '/^$/d' | sort -u | tr '\n' ',')"
         [ "$gates" = "build,replay,safety,tests," ] || problem "gates were '$(run_field gates)', not build,tests,safety,replay"
         [ "$(run_field packages)" = "$ALL_PACKAGES" ] || problem "packages were '$(run_field packages)', not all of '$ALL_PACKAGES'"
-        [ "$(run_field safety_rules)" = "S1 S2 S3 S4 S5 S6 S7 S8" ] || problem "safety rules were '$(run_field safety_rules)', not S1…S8"
+        [ "$(run_field safety_rules)" = "$ALL_SAFETY_RULES" ] || problem "safety rules were '$(run_field safety_rules)', not $ALL_SAFETY_RULES"
         [ -z "$(run_field only_testing)" ] || problem "ONLY_TESTING was set: $(run_field only_testing)"
         [ -z "$(run_field pkg_filter)" ] || problem "PKG_FILTER was set: $(run_field pkg_filter)"
         [ "$(run_field build_dd)" = "$(run_field logs)/dd" ] || problem "build trees not fresh: generic-iOS derived data was $(run_field build_dd), not the run's own $(run_field logs)/dd"
         [ "$(run_field spm_scratch)" = "$(run_field logs)/spm-<pkg>" ] || problem "build trees not fresh: SwiftPM scratch paths were $(run_field spm_scratch)"
-        [ "$(run_field dirty)" = "0" ] || problem "the worktree had $(run_field dirty) uncommitted change(s) (git-status.txt), so this is not a run of commit $(run_field commit)"
-        commit="$(run_field commit)"
+        [ "$(run_field complete)" = "yes" ] || problem "the run did not reach its summary (complete=$(run_field complete)): interrupted"
+        [ "$(run_field dirty)" = "0" ] || problem "the worktree had $(run_field dirty) uncommitted change(s) at the start (git-status.txt), so this is not a run of commit $commit"
+        [ "$(run_field dirty_end)" = "0" ] || problem "the worktree had '$(run_field dirty_end)' uncommitted change(s) at the end (git-status-end.txt)"
+        [ "$(run_field commit_end)" = "$commit" ] || problem "HEAD moved during the run: $commit at the start, '$(run_field commit_end)' at the end"
+        here="$(git hash-object scripts/check.sh 2>/dev/null)"
+        [ "$(run_field check_sh)" = "$here" ] || problem "made by another scripts/check.sh (blob $(run_field check_sh)) than this one ($here): verify with the check.sh of commit $commit"
         if [ -n "$want" ]; then
             want_sha="$(git rev-parse --verify -q "$want^{commit}" 2>/dev/null)"
             case "$commit" in
                 "${want_sha:-$want}"*) ;;
                 *) problem "commit is $commit, not $want" ;;
             esac
+        else
+            warning "no commit given: this shows the run was of commit $commit; pass the reviewed commit to check it is that one"
+        fi
+        if [ -n "$(run_field sim_dest_given)" ]; then
+            warning "simulator: the caller's SIM_DEST ($(run_field sim_dest_given)), not an erased pool simulator"
         fi
     fi
     exit_status="$(cat "$dir/EXIT_STATUS" 2>/dev/null)"
@@ -310,34 +435,21 @@ verify_certify() {
     else
         n="$(grep -c '^FAIL' "$f")"; [ "$n" = "0" ] || problem "$n FAIL line(s) in summary.txt"
         n="$(grep -c '^SKIP' "$f")"; [ "$n" = "0" ] || problem "$n SKIP line(s) in summary.txt"
-        for re in 'Info.plist and entitlements lint' 'build Debug \(clean\), zero warnings' \
-            'build Release \(clean\), zero warnings' 'app unit tests — [0-9]+ executed' \
-            'no XCTSkip/XCTExpectFailure in safety-test files' \
-            'S6: test_S6_releaseBuildRefusesReplayReadings ran in Release and passed' \
-            'S6: ReplayKit absent from Release' 'S6: LiveReadingGate.validateAllowingReplay absent from Release' \
-            'S6: GlucoseStore replay role absent from Release' \
-            'replay run — suite ReplayScenarioTests passed' 'replay run — suite SensorUITests.xctest passed'; do
-            grep -qE "^PASS  $re" "$f" || lacking="$lacking; $(printf '%s' "$re" | sed -e 's/\\//g' -e 's/ — \[0-9\]+ executed$//')"
-        done
-        for pkg in $ALL_PACKAGES; do
-            grep -qE "^PASS  $pkg tests — [0-9]+ executed" "$f" || lacking="$lacking; $pkg tests"
-        done
-        for pkg in $RELEASE_SAFETY_PACKAGES; do
-            grep -qE "^PASS  S2/S6 Release-configuration tests in $pkg:" "$f" || lacking="$lacking; $pkg Release-configuration S2/S6 tests"
-        done
-        for rule in S1 S2 S3 S4 S5 S6 S7 S8; do
-            grep -qE "^PASS  $rule: [0-9]+ passing" "$f" || lacking="$lacking; $rule safety tests"
-        done
+        while IFS= read -r pat; do
+            grep -qE "^PASS  $(requirement_regex "$pat")" "$f" || lacking="$lacking; $pat"
+        done <<EOF
+$(certify_requirements)
+EOF
         [ -z "$lacking" ] || problem "summary.txt has no PASS line for: ${lacking#; }"
     fi
     if [ -n "$problems" ]; then
-        echo "verify-certify: NOT a complete certify run: $dir$problems"
+        echo "verify-certify: NOT a complete certify run: $dir$problems$warnings"
         return 1
     fi
     echo "verify-certify: OK, a complete certify run: $dir"
-    echo "  commit $commit ($(run_field branch)), clean worktree; gates build,tests,safety,replay; all packages; S1–S8"
-    echo "  fresh build trees ($(run_field build_dd)); exit 0; no FAIL or SKIP"
-    echo "  started $(run_field started), elapsed $(run_field elapsed_seconds) s, load $(run_field load_start) → $(run_field load_end); simulator $(run_field sim) ($(run_field sim_reset))"
+    echo "  commit $commit ($(run_field branch)), clean worktree at start and end; gates build,tests,safety,replay; all packages; S1–S8"
+    echo "  fresh build trees ($(run_field build_dd)); ran to its end, exit 0; no FAIL or SKIP; all $(certify_requirements | wc -l | tr -d ' ') required PASS lines"
+    echo "  started $(run_field started), elapsed $(run_field elapsed_seconds) s, load $(run_field load_start) → $(run_field load_end); simulator $(run_field sim) ($(run_field sim_reset))$warnings"
 }
 
 # Minimum line coverage per package (HANDOFF §10 gate 2). Empty = report only.
@@ -484,7 +596,7 @@ app_tests() {
     sim_prepare || return
     xcodebuild test -project Sensor.xcodeproj -scheme Sensor -destination "$SIM_DEST" \
         -derivedDataPath "$SIM_DD" -clonedSourcePackagesDirPath "$SPM_CHECKOUTS" \
-        $(app_test_selection) \
+        "${APP_TEST_ARGS[@]}" \
         $SIM_SIGNING > "$log" 2>&1
     status=$?
     count="$(executed_count "$log")"
@@ -503,12 +615,7 @@ app_tests() {
 gate_tests() {
     note "== Gate 2: unit tests =="
     for pkg in $PACKAGES; do package_tests "$pkg"; done
-    # The app's hosted tests run with the full package list (unless PKG_FILTER narrows the run),
-    # with APP_TESTS=1, or when ONLY_TESTING names some of them.
-    if { [ "$PACKAGES" = "$ALL_PACKAGES" ] && [ -z "$PKG_FILTER" ]; } || [ "${APP_TESTS:-}" = "1" ] \
-        || [ -n "$ONLY_TESTING" ]; then
-        app_tests
-    fi
+    if app_tests_wanted; then app_tests; fi
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -666,6 +773,8 @@ gate_safety() {
 # ---------------------------------------------------------------------------------------------
 # Gate 4 — replay run in the simulator
 # ---------------------------------------------------------------------------------------------
+REPLAY_SUITES="ReplayScenarioTests SensorUITests.xctest"
+
 gate_replay() {
     note "== Gate 4: replay run =="
     xcodegen_generate || return
@@ -681,7 +790,7 @@ gate_replay() {
         grep -E "error:|failed" "$log" | head -20
         return
     fi
-    for suite in ReplayScenarioTests SensorUITests.xctest; do
+    for suite in $REPLAY_SUITES; do
         if grep -qE "Test Suite '$suite' passed" "$log"; then
             pass "replay run — suite $suite passed"
         else
@@ -690,10 +799,10 @@ gate_replay() {
     done
 }
 
-if [ "${1:-}" = "--verify-certify" ]; then
-    verify_certify "${2:-}" "${3:-}"
-    exit $?
-fi
+case "${1:-}" in
+    --verify-certify)       verify_certify "${2:-}" "${3:-}"; exit $? ;;
+    --certify-requirements) certify_requirements; exit 0 ;;
+esac
 start_run
 
 wants build  && gate_build
@@ -705,6 +814,7 @@ note ""
 note "Elapsed $(( $(date +%s) - RUN_START )) s in build slot ${SLOT:-none} of $CHECK_SLOTS (waited $SLOT_WAITED s); load now $(load_average)"
 note "== Summary ($LOGS) =="
 printf '%b\n' "$SUMMARY" | sed '/^$/d'
+RUN_COMPLETE=1
 if [ "$FAILURES" -ne 0 ]; then
     note "$FAILURES gate check(s) failed."
     exit 1

@@ -11,14 +11,15 @@
 # Build slots. check.sh holds one of CHECK_SLOTS (default 2) slots for its whole run, so at most two
 # build-heavy runs share the Mac. Slot <n> is the directory ~/Library/Caches/sensor-check/slots/<n>,
 # taken with mkdir (atomic; no flock on macOS) and holding the files pid, start-time (the holder's
-# `ps -o lstart=`), worktree, since (epoch seconds) and info. The path is per user and fixed, not
-# under $TMPDIR, because agents may run with different TMPDIRs. A slot is stale when its pid is dead
+# `ps -o lstart=` in LC_ALL=C, TZ=UTC), worktree, since (epoch seconds) and info. The path is per
+# user and fixed, not under $TMPDIR, because agents may run with different TMPDIRs. A slot is stale when its pid is dead
 # (`kill -0`) or reused (the process now under that pid started at another time); a waiting run
-# takes a stale slot over.
+# takes a stale slot over and first shuts down that slot's pool simulator.
 #
 # Pool simulators. Slot <n> runs its simulator gates on sensor-check-<n> (iPhone 17, the newest
-# installed iOS 26.x runtime), created on first use and reused; CHECK_SLOTS=0 runs use
-# sensor-check-0. check.sh boots it for the run and shuts it down at exit (docs/gates.md).
+# installed iOS 26.x runtime), created on first use and reused. A CHECK_SLOTS=0 run holds no slot
+# and so gets no pool simulator (it must give SIM_DEST). check.sh boots the simulator for the run
+# and shuts it down at exit; `status` flags a pool simulator left booted with no live holder.
 #
 # Bash 3.2 (macOS /bin/bash), BSD userland.
 
@@ -32,15 +33,18 @@ POOL_RUNTIME_MAJOR=26
 # Build slots
 # ---------------------------------------------------------------------------------------------
 
-# Start time of process $1 as `ps` prints it ("Thu Oct  8 17:02:11 2026"); empty if none.
-proc_start() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
+# Start time of process $1 ("Thu Oct  8 21:02:11 2026"), empty if none. Fixed locale and time zone:
+# `ps -o lstart=` follows LC_ALL/LANG and TZ, and a holder and a checker may run with different ones.
+proc_start() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
 
-# Succeeds if slot directory $1 exists and its holder is gone: the pid is dead (`kill -0` fails and
-# `ps` has no such process; kill -0 alone also fails on another user's live process), or it was
-# reused (the process now under that pid started at another time). A slot without a pid file is
-# being taken (the pid file is written last); it counts as stale only after 60 s.
+# Succeeds if slot directory $1 exists and its holder is gone: its pid is dead (`kill -0` fails with
+# anything but EPERM, which a live process of another user gives), or the pid was reused (the
+# process under it now started at another time). A live pid whose start time can't be read, or a
+# slot with no recorded start time, is never stale: a wrong "stale" lets a second run take the slot
+# and erase the simulator in use. A slot without a pid file is being taken (the pid file is written
+# last); it counts as stale only after 60 s.
 slot_stale() {
-    local d="$1" pid mtime started
+    local d="$1" pid mtime err started recorded
     [ -d "$d" ] || return 1
     pid="$(cat "$d/pid" 2>/dev/null)"
     if [ -z "$pid" ]; then
@@ -48,9 +52,13 @@ slot_stale() {
         [ $(( $(date +%s) - mtime )) -gt 60 ]
         return
     fi
+    if ! err="$(LC_ALL=C kill -0 "$pid" 2>&1)"; then
+        case "$err" in *"not permitted"*) ;; *) return 0 ;; esac
+    fi
     started="$(proc_start "$pid")"
-    if ! kill -0 "$pid" 2>/dev/null && [ -z "$started" ]; then return 0; fi
-    [ "$started" != "$(cat "$d/start-time" 2>/dev/null)" ]
+    recorded="$(cat "$d/start-time" 2>/dev/null)"
+    if [ -z "$started" ] || [ -z "$recorded" ]; then return 1; fi
+    [ "$started" != "$recorded" ]
 }
 
 # Removes slot directory $1 if it is stale. Breakers are serialised by the mkdir lock .break and
@@ -68,14 +76,21 @@ slot_break_if_stale() {
     return $rc
 }
 
-# Tries to take slot $1 for this process ($$), recording $2 as what the run is doing.
+# Tries to take slot $1 for this process ($$), recording $2 as what the run is doing. Taking over a
+# stale slot first shuts down the slot's pool simulator: a holder killed with SIGKILL never ran its
+# exit trap, so its simulator may still be booted (alarm noise, D60).
 slot_try() {
-    local n="$1" info="$2" d="$SLOT_ROOT/$1"
+    local n="$1" info="$2" d="$SLOT_ROOT/$1" started old=""
+    started="$(proc_start "$$")"
+    if [ -z "$started" ]; then echo "check.sh: cannot read this process's start time (ps)" >&2; return 1; fi
     if ! mkdir "$d" 2>/dev/null; then
+        old="$(cat "$d/pid" 2>/dev/null)"
         slot_break_if_stale "$d" || return 1
         mkdir "$d" 2>/dev/null || return 1
+        echo "check.sh: took over stale slot $n (holder pid ${old:-?} is gone)"
+        pool_shutdown_index "$n"
     fi
-    proc_start "$$" > "$d/start-time"
+    printf '%s\n' "$started" > "$d/start-time"
     printf '%s\n' "$ROOT" > "$d/worktree"
     date +%s > "$d/since"
     printf '%s\n' "$info" > "$d/info"
@@ -168,6 +183,7 @@ pool_devices() {
             if (index(line, prefix) != 1) next
             if (!match(line, / \([0-9A-F-]+\) \(/)) next
             name = substr(line, 1, RSTART - 1)
+            if (name !~ ("^" prefix "[0-9]+$")) next
             udid = substr(line, RSTART + 2, RLENGTH - 5)
             state = substr(line, RSTART + RLENGTH); sub(/\).*/, "", state)
             print name "|" udid "|" state "|" rt
@@ -201,9 +217,15 @@ EOF
     fi
 }
 
-# State of device $1 ("Booted", "Shutdown", ...).
-pool_state() {
-    xcrun simctl list devices 2>/dev/null | grep -F "($1)" | sed -E 's/.*\) \(([^)]*)\).*/\1/' | head -n 1
+# Shuts down every pool device named sensor-check-$1 that is not shut down.
+pool_shutdown_index() {
+    local dname dudid dstate drt
+    while IFS='|' read -r dname dudid dstate drt; do
+        [ "$dname" = "$POOL_PREFIX$1" ] && [ "$dstate" != "Shutdown" ] || continue
+        xcrun simctl shutdown "$dudid" >/dev/null 2>&1 && echo "check.sh: shut down $dname ($dudid), left $dstate by that holder"
+    done <<EOF
+$(pool_devices)
+EOF
 }
 
 # Bundle ids of the user-installed apps on booted device $1 (`simctl listapps` prints an old-style
@@ -220,14 +242,27 @@ pool_user_apps() {
 # ---------------------------------------------------------------------------------------------
 
 pool_main() {
-    local cmd="${1:-status}" force=0 dname dudid dstate drt idx d
+    local cmd="${1:-status}" force=0 dname dudid dstate drt idx d found flag
     [ "${2:-}" = "--force" ] && force=1
     case "$cmd" in
         status)
             echo "Build slots ($SLOT_ROOT):"
             slots_describe "${CHECK_SLOTS:-2}" | sed 's/^/  /'
             echo "Pool simulators (iPhone 17, newest iOS $POOL_RUNTIME_MAJOR.x: $(pool_runtime | sed 's/|.*//')):"
-            pool_devices | awk -F'|' '{ printf "  %-16s %s  %-9s %s\n", $1, $2, $3, $4 } END { if (NR == 0) print "  (none yet; check.sh creates them on first use)" }'
+            found=0
+            while IFS='|' read -r dname dudid dstate drt; do
+                [ -n "$dname" ] || continue
+                found=1
+                idx="${dname#$POOL_PREFIX}"
+                flag=""
+                if [ "$dstate" != "Shutdown" ] && ! slot_held "$idx"; then
+                    flag="  <- $dstate with no live holder: scripts/sim-pool.sh shutdown"
+                fi
+                printf '  %-16s %s  %-9s %s%s\n' "$dname" "$dudid" "$dstate" "$drt" "$flag"
+            done <<EOF
+$(pool_devices)
+EOF
+            [ "$found" = 1 ] || echo "  (none yet; check.sh creates them on first use)"
             ;;
         shutdown|delete)
             while IFS='|' read -r dname dudid dstate drt; do
@@ -247,7 +282,7 @@ EOF
             if [ "$cmd" = delete ]; then
                 for d in "$SLOT_ROOT"/*; do
                     [ -d "$d" ] || continue
-                    if slot_stale "$d"; then rm -rf "$d" && echo "removed stale slot ${d##*/}"; fi
+                    if slot_break_if_stale "$d"; then echo "removed stale slot ${d##*/}"; fi
                 done
             fi
             ;;
