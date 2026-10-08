@@ -1,4 +1,6 @@
 import AlertEngine
+import SwiftUI
+import UIKit
 import XCTest
 @testable import Sensor
 
@@ -72,6 +74,33 @@ final class NavigationTests: XCTestCase {
         var unknown = fine
         unknown.delivery.alarmVolume = .unknown
         XCTAssertEqual(TabAttention.tabs(nowBanners: [], settings: unknown), [], "not measured yet is not a problem to show")
+    }
+
+    /// The real tab bar inside RootView follows a Settings change without anything else happening
+    /// (no relaunch, no clock tick): the dot is drawn once the volume becomes too low. The model's
+    /// `.alertDelivery` handling, which makes that change, is AppModelWiringTests'.
+    func test_settingsTabDotFollowsTheSettingsStateInRootView() {
+        #if DEBUG
+        let model = AppModel.fixtures()
+        XCTAssertFalse(model.settings.needsAttention)
+        var reported: Set<String> = []
+        let root = RootView(model: model)
+            .environment(\.layoutProbe, LayoutProbe { name, _ in reported.insert(name) })
+        let host = UIHostingController(rootView: root)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(reported.contains("tab.title.settings"), "the tab bar rendered")
+        XCTAssertFalse(reported.contains("tab.dot.settings"), "no dot while the volume is fine")
+
+        model.settings.delivery.alarmVolume = .tooLow(level: 0.1)
+        host.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(reported.contains("tab.dot.settings"), "the dot appears when the state changes")
+        #endif
     }
 
     func test_alarmVolumeNotice() {
