@@ -45,36 +45,73 @@ final class ScreenshotTests: XCTestCase {
     @MainActor
     func test_renderNowScreens() throws {
         for scheme in [ColorScheme.light, .dark] {
-            try render(phone(tab: .now, hasProblems: false) { nowContent(.normal) }, name: "now-\(scheme.name)", scheme: scheme)
+            try render(phone(tab: .now) { nowContent(.normal) }, name: "now-\(scheme.name)", scheme: scheme)
         }
-        try render(phone(tab: .now, hasProblems: true) { nowContent(.stale) }, name: "now-stale-light", scheme: .light)
-        try render(phone(tab: .now, hasProblems: false) { nowContent(.lowFlag) }, name: "now-low-flag-light", scheme: .light)
-        try render(phone(tab: .now, hasProblems: true) { nowContent(.manyProblems) }, name: "now-banners-light", scheme: .light, height: nil)
-        try render(phone(tab: .now, hasProblems: false) { nowContent(.warmUp) }, name: "now-warm-up-dark", scheme: .dark)
-        try render(phone(tab: .now, hasProblems: true) { nowContent(.clockMismatch) }, name: "now-clock-mismatch-light", scheme: .light)
+        try render(phone(tab: .now, attention: [.now]) { nowContent(.stale) }, name: "now-stale-light", scheme: .light)
+        try render(phone(tab: .now) { nowContent(.lowFlag) }, name: "now-low-flag-light", scheme: .light)
+        // D55: the fixture's 15 % alarm volume is Settings' dot, not a banner here.
+        try render(phone(tab: .now, attention: [.now, .settings]) { nowContent(.manyProblems) }, name: "now-banners-light", scheme: .light, height: nil)
+        try render(phone(tab: .now) { nowContent(.warmUp) }, name: "now-warm-up-dark", scheme: .dark)
+        try render(phone(tab: .now, attention: [.now]) { nowContent(.clockMismatch) }, name: "now-clock-mismatch-light", scheme: .light)
         // D43: the grace-period countdown, light and dark.
         for scheme in [ColorScheme.light, .dark] {
-            try render(phone(tab: .now, hasProblems: true) { nowContent(.gracePeriod) }, name: "now-grace-period-\(scheme.name)", scheme: scheme, height: nil)
+            try render(phone(tab: .now, attention: [.now]) { nowContent(.gracePeriod) }, name: "now-grace-period-\(scheme.name)", scheme: scheme, height: nil)
         }
         // Review B1: the hero at the largest accessibility text size.
-        try render(phone(tab: .now, hasProblems: false) { nowContent(.lowFlag) }.environment(\.dynamicTypeSize, .accessibility5),
+        try render(phone(tab: .now) { nowContent(.lowFlag) }.environment(\.dynamicTypeSize, .accessibility5),
                    name: "now-low-flag-ax5-light", scheme: .light, height: nil)
-        try render(phone(tab: .now, hasProblems: false) { nowContent(.normal) }.environment(\.dynamicTypeSize, .accessibility5),
+        try render(phone(tab: .now) { nowContent(.normal) }.environment(\.dynamicTypeSize, .accessibility5),
                    name: "now-ax5-dark", scheme: .dark, height: nil)
     }
 
     @MainActor
     func test_renderTrendsScreens() throws {
         for scheme in [ColorScheme.light, .dark] {
-            try render(phone(tab: .trends, hasProblems: false) { trendsContent(.fourteenDays) }, name: "trends-14d-\(scheme.name)", scheme: scheme, height: nil)
+            try render(phone(tab: .trends) { trendsContent(.fourteenDays) }, name: "trends-14d-\(scheme.name)", scheme: scheme, height: nil)
         }
-        try render(phone(tab: .trends, hasProblems: false) { trendsContent(.threeDays) }, name: "trends-3d-light", scheme: .light, height: nil)
-        try render(phone(tab: .trends, hasProblems: false) { trendsContent(.thirtyDays) }, name: "trends-30d-low-coverage-dark", scheme: .dark, height: nil)
-        try render(phone(tab: .trends, hasProblems: false) { trendsContent(.fourteenDays) }.environment(\.dynamicTypeSize, .accessibility5),
+        try render(phone(tab: .trends) { trendsContent(.threeDays) }, name: "trends-3d-light", scheme: .light, height: nil)
+        try render(phone(tab: .trends) { trendsContent(.thirtyDays) }, name: "trends-30d-low-coverage-dark", scheme: .dark, height: nil)
+        try render(phone(tab: .trends) { trendsContent(.fourteenDays) }.environment(\.dynamicTypeSize, .accessibility5),
                    name: "trends-14d-ax5-light", scheme: .light, height: nil)
-        try render(phone(tab: .settings, hasProblems: false) { SettingsContent(state: Fixtures.settings(at: now), now: now, actions: .noop, context: context) }
+        try render(phone(tab: .settings) { SettingsContent(state: Fixtures.settings(at: now), alerts: Fixtures.alerts, now: now, actions: .noop, context: context) }
                     .environment(\.dynamicTypeSize, .accessibility5),
                    name: "settings-ax5-light", scheme: .light, height: nil)
+    }
+
+    /// D55: the alarm-volume notice at the top of Settings and the Settings tab's dot; D56: the
+    /// ALERTS group first, the four-tab bar, the Predict placeholder. Settings is drawn in a window
+    /// inside a real `NavigationStack` (`renderHosted`): `ImageRenderer` can't draw one, and its
+    /// links would look disabled without it.
+    @MainActor
+    func test_renderSettingsAndTabBar() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            let settings = VStack(spacing: 0) {
+                NavigationStack {
+                    ScrollView {
+                        SettingsContent(state: Fixtures.settingsVolumeLow(at: now), alerts: Fixtures.alerts, now: now, actions: .noop, context: context)
+                    }
+                    .editorialScreen()
+                    .toolbar(.hidden, for: .navigationBar)
+                }
+                SensorTabBar(selected: .settings, attention: [.settings], select: { _ in })
+            }
+            .editorialScreen()
+            try renderHosted(settings, name: "settings-volume-notice-\(scheme.name)", scheme: scheme)
+            try render(phone(tab: .predict) { PredictContent() }, name: "predict-placeholder-\(scheme.name)", scheme: scheme)
+            // Every tab selected in turn; no dot, Settings' dot (D55), Now's and Settings' dots.
+            let bars = VStack(spacing: 12) {
+                ForEach(AppTab.allCases) { tab in
+                    SensorTabBar(selected: tab, attention: [], select: { _ in })
+                }
+                SensorTabBar(selected: .now, attention: [.settings], select: { _ in })
+                SensorTabBar(selected: .settings, attention: [.now, .settings], select: { _ in })
+                SensorTabBar(selected: .trends, attention: [.settings], select: { _ in })
+                    .environment(\.dynamicTypeSize, .accessibility5)
+            }
+            .padding(.vertical, 12)
+            .editorialScreen()
+            try render(bars, name: "tabbar-\(scheme.name)", scheme: scheme, height: nil)
+        }
     }
 
     @MainActor
@@ -190,13 +227,14 @@ final class ScreenshotTests: XCTestCase {
             .editorialScreen()
     }
 
-    /// A phone-sized page: content from the top, text tab bar at the bottom.
+    /// A phone-sized page: content from the top, text tab bar at the bottom with a dot on each tab in
+    /// `attention`.
     @MainActor
-    private func phone<Content: View>(tab: AppTab, hasProblems: Bool, @ViewBuilder content: () -> Content) -> some View {
+    private func phone<Content: View>(tab: AppTab, attention: Set<AppTab> = [], @ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 0) {
             content().padding(.top, 20)
             Spacer(minLength: 0)
-            SensorTabBar(selected: tab, nowHasProblems: hasProblems, select: { _ in })
+            SensorTabBar(selected: tab, attention: attention, select: { _ in })
                 .padding(.bottom, 20)
         }
         .frame(width: 390)
@@ -213,6 +251,36 @@ final class ScreenshotTests: XCTestCase {
             .padding(16)
     }
 
+    /// Draws `view` in a phone-sized window of the test host's scene (safe areas included), for
+    /// views `ImageRenderer` can't draw (NavigationStack).
+    @MainActor
+    private func renderHosted<V: View>(_ view: V, name: String, scheme: ColorScheme, width: CGFloat = 390, height: CGFloat = 844) throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first, "no window scene")
+        let host = UIHostingController(rootView: view
+            .environment(\.colorScheme, scheme)
+            .environment(\.accentChoice, .forest))
+        host.overrideUserInterfaceStyle = scheme == .dark ? .dark : .light
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: width, height: height)
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 2
+        format.preferredRange = .standard
+        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        XCTAssertGreaterThan(image.size.height, 100, name)
+        guard Self.shouldWrite else { return }
+        try FileManager.default.createDirectory(at: Self.outputDirectory, withIntermediateDirectories: true)
+        let data = try XCTUnwrap(image.pngData(), "\(name): no PNG")
+        try data.write(to: Self.outputDirectory.appendingPathComponent("\(name).png"))
+    }
+
     @MainActor
     private func render<V: View>(_ view: V, name: String, scheme: ColorScheme, width: CGFloat = 390, height: CGFloat? = 844) throws {
         let content = view
@@ -223,10 +291,12 @@ final class ScreenshotTests: XCTestCase {
         let renderer = ImageRenderer(content: content)
         renderer.proposedSize = ProposedViewSize(width: width, height: height)
         // 2× unless the page is very tall (accessibility sizes), where the bitmap would exceed
-        // what the PNG encoder accepts; keep it under ~10k pixels.
+        // what the PNG encoder accepts; keep it under ~10k pixels. Above 8,192 pixels (the
+        // simulator's largest Metal texture) ImageRenderer returns a blank image without an error:
+        // the AX5 Settings page crossed it once Alerts moved into Settings (D56).
         renderer.scale = 1
         let pointHeight = try XCTUnwrap(renderer.uiImage, "\(name) did not render").size.height
-        renderer.scale = min(2, max(1, 10_000 / pointHeight))
+        renderer.scale = min(2, max(1, 8_000 / pointHeight))
         let image = try XCTUnwrap(renderer.uiImage, "\(name) did not render")
         XCTAssertGreaterThan(image.size.height, 100, name)
         guard Self.shouldWrite else { return }

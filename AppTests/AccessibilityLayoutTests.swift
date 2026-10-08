@@ -138,21 +138,31 @@ final class AccessibilityLayoutTests: XCTestCase {
         }
     }
 
+    /// D56: four titles ("Now · Predict · Trends · Settings") fit whole in their columns at every
+    /// supported size, on a 375-pt phone, with the red dot on every tab that can show one (D55:
+    /// Now and Settings) and each tab selected in turn (semibold is the widest).
     @MainActor
     func test_tabTitlesNeverClipOrWrapAtAccessibilitySizes() {
+        XCTAssertEqual(AppTab.allCases.count, 4)
+        let width: CGFloat = 375
+        let column = width / CGFloat(AppTab.allCases.count)
+        let dotAndSpacing: CGFloat = 5 + 6 // SensorTabBar: HStack spacing 5, 6-pt dot
         for typeSize in typeSizes {
-            let width: CGFloat = 375
-            let sizes = LayoutHarness.probe(SensorTabBar(selected: .settings, nowHasProblems: true, select: { _ in }), width: width, typeSize: typeSize)
-            for tab in AppTab.allCases {
-                guard let title = sizes["tab.title.\(tab.rawValue)"] else {
-                    XCTFail("\(typeSize): \(tab) not rendered")
-                    continue
+            for selected in AppTab.allCases {
+                let sizes = LayoutHarness.probe(SensorTabBar(selected: selected, attention: Set(AppTab.allCases), select: { _ in }),
+                                                width: width, typeSize: typeSize)
+                for tab in AppTab.allCases {
+                    guard let title = sizes["tab.title.\(tab.rawValue)"] else {
+                        XCTFail("\(typeSize): \(tab) not rendered")
+                        continue
+                    }
+                    XCTAssertNotNil(sizes["tab.dot.\(tab.rawValue)"], "\(typeSize): \(tab) dot not rendered")
+                    let font = Typography.body(size: 13, weight: tab == selected ? .semibold : .regular)
+                    let ideal = LayoutHarness.idealSize(Text(verbatim: tab.title).font(font), typeSize: min(typeSize, SensorTabBar.maxTypeSize))
+                    XCTAssertGreaterThanOrEqual(title.width + 0.5, ideal.width, "\(typeSize): \(tab) clipped (selected \(selected))")
+                    XCTAssertLessThanOrEqual(title.height, ideal.height + 0.5, "\(typeSize): \(tab) wrapped (selected \(selected))")
+                    XCTAssertLessThanOrEqual(title.width + dotAndSpacing, column, "\(typeSize): \(tab) and its dot wider than its column")
                 }
-                let font = Typography.body(size: 13, weight: tab == .settings ? .semibold : .regular)
-                let ideal = LayoutHarness.idealSize(Text(verbatim: tab.title).font(font), typeSize: min(typeSize, SensorTabBar.maxTypeSize))
-                XCTAssertGreaterThanOrEqual(title.width + 0.5, ideal.width, "\(typeSize): \(tab) clipped")
-                XCTAssertLessThanOrEqual(title.height, ideal.height + 0.5, "\(typeSize): \(tab) wrapped")
-                XCTAssertLessThanOrEqual(title.width, width / 4, "\(typeSize): \(tab) wider than its column")
             }
         }
     }

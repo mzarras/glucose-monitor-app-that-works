@@ -104,6 +104,8 @@ struct ServiceHealth: Equatable, Sendable {
     var nightscout: UploadStatus
     var dexcomShare: UploadStatus
     var notifications: NotificationPermission
+    /// Not a Now banner (PROGRESS D55): Settings shows it (`SettingsViewState.needsAttention`, from
+    /// the same `alertDelivery` report). Kept here so Now and Settings read one mapping.
     var alarmVolume: AlarmVolumeStatus
     /// D26: AlarmKit authorization for urgent low.
     var urgentLowAlarm: UrgentLowAlarmStatus
