@@ -182,6 +182,7 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Now: forecast round-3 re-review (01b48dc), p5-predict review (2fa93ad), certify run on 2fa93ad (`wt-certify-p5`).
 - p5-forecast 01b48dc re-review **PASS** (rewrite verified; backstop/deny/linkage/no-join-after-cancel verified by running). New MAJOR: the lint reads only Swift text in App/Widgets/Packages, but project.yml source paths (a new folder, or ForecastKit's own sources compiled into the app) and symlinks reach the build; minors: `-module-alias`/`-import-module` flags, deny list gaps (ViewStateMapping, Alerts, Sharing, HistoryImport). → WS7 lint round 4 (last planned for v1).
 - p5-tooling fb99729 done: certify/fast modes, `--verify-certify`, build slots, pooled simulators (certify erases, fast uninstalls), agent guidance. Measured: certify 1160 s; fast after a one-line change 142 s; fast targeted 59 s. → safety review. The stock "iPhone 17 Pro" simulator is Michael's other project (Maestro); not ours to shut down.
+- **Certify run on p5-predict 2fa93ad: all gates PASS first time** (`wt-certify-p5/.build-logs/20261008-180726`, 1234 s): builds zero warnings; 1289 package tests + 364 app tests; S1 72, S2 93, S3 76, S4 54, S5 166, S6 40, S7 74, S8 5; S6 compile-out and D57 lint PASS; replay 7 + 20 UI tests.
 
 ### 2026-10-07 — Vibrate-only alerts (D53/D54) and p3c services fixes
 - p4-stage cfeb31f = p3c-services f22b75f (n1 keep-on-switch, n2 pair resolves the setting, GlucoseStats best-of-5 timing) + p4-alerts 2310f37/05bcb18 + p4-app c5b95d6/059f737/1e65564.
