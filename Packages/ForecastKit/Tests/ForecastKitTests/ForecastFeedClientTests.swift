@@ -205,7 +205,7 @@ final class ForecastFeedClientTests: XCTestCase {
         await transport.waitUntilSent(2)
         for _ in 0..<1_000 { await Task.yield() }
         let latestBody = latestBody, metricsBody = metricsBody
-        await transport.answerAll { request, _ in
+        await transport.answerAll(expecting: 2) { request, _ in
             request.url == latestURL
                 ? ForecastHTTPResponse(statusCode: 200, eTag: "\"l1\"", body: latestBody)
                 : ForecastHTTPResponse(statusCode: 200, eTag: "\"m1\"", body: metricsBody)
@@ -220,7 +220,7 @@ final class ForecastFeedClientTests: XCTestCase {
 
         // Once it finished, the next fetch sends a new request.
         let d = Task { try await client.fetchLatest() }
-        await transport.answerAll { _, _ in ForecastHTTPResponse(statusCode: 304, eTag: "\"l1\"", body: Data()) }
+        await transport.answerAll(expecting: 3) { _, _ in ForecastHTTPResponse(statusCode: 304, eTag: "\"l1\"", body: Data()) }
         let third = try await d.value
         XCTAssertEqual(third, first)
         let conditions = await transport.sent
@@ -234,7 +234,7 @@ final class ForecastFeedClientTests: XCTestCase {
         await transport.waitUntilSent(1)
         let b = Task { try await client.fetchAccuracy() }
         for _ in 0..<1_000 { await Task.yield() }
-        await transport.answerAll { _, _ in ForecastHTTPResponse(statusCode: 503, eTag: nil, body: Data()) }
+        await transport.answerAll(expecting: 1) { _, _ in ForecastHTTPResponse(statusCode: 503, eTag: nil, body: Data()) }
         for task in [a, b] {
             do {
                 _ = try await task.value
@@ -284,7 +284,7 @@ final class ForecastFeedClientTests: XCTestCase {
         let b = Task { try await client.fetchLatest() }
         for _ in 0..<1_000 { await Task.yield() }   // give b every chance to join a's request
         let body = latestBody
-        await transport.answerAll { _, _ in ForecastHTTPResponse(statusCode: 200, eTag: "\"l1\"", body: body) }
+        await transport.answerAll(expecting: 2) { _, _ in ForecastHTTPResponse(statusCode: 200, eTag: "\"l1\"", body: body) }
         do {
             _ = try await a.value
             XCTFail("the cancelled caller got a value")
@@ -308,7 +308,7 @@ final class ForecastFeedClientTests: XCTestCase {
         let b = Task { try await client.fetchAccuracy() }
         for _ in 0..<1_000 { await Task.yield() }
         let body = metricsBody
-        await transport.answerAll { _, _ in ForecastHTTPResponse(statusCode: 200, eTag: nil, body: body) }
+        await transport.answerAll(expecting: 2) { _, _ in ForecastHTTPResponse(statusCode: 200, eTag: nil, body: body) }
         let result = await a.result
         XCTAssertThrowsError(try result.get())
         let accuracy = try await b.value

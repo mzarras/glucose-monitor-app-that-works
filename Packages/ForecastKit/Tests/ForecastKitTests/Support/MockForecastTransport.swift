@@ -66,12 +66,19 @@ actor GatedTransport: ForecastTransport {
     }
 
     /// Answers every outstanding request, newest first and one at a time, including requests sent
-    /// meanwhile, until none has appeared for a while. `respond` gets the request and how many
-    /// were answered before it. Nothing is left waiting, so a client bug fails a test instead of
-    /// hanging it.
-    func answerAll(_ respond: @Sendable (_ request: URLRequest, _ answeredBefore: Int) -> ForecastHTTPResponse) async {
+    /// meanwhile, until none has appeared for a while. Before each answer it first waits until at
+    /// least `expected` requests have been sent in all, so a slow (loaded) client still gets its
+    /// later requests answered; the wait has a large yield budget, so a client that never sends
+    /// them fails the test instead of hanging it. `respond` gets the request and how many were
+    /// answered before it.
+    func answerAll(expecting expected: Int, _ respond: @Sendable (_ request: URLRequest, _ answeredBefore: Int) -> ForecastHTTPResponse) async {
         var answered = 0
         while true {
+            var budget = 1_000_000
+            while requests.count < expected, budget > 0 {
+                await Task.yield()
+                budget -= 1
+            }
             for _ in 0..<200 { await Task.yield() }
             guard let index = waiting.keys.max() else { return }
             let response = respond(requests[index], answered)
