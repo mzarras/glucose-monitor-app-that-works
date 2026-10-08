@@ -428,11 +428,17 @@ the volume (`setVolumeMonitoring(true)`; off again in the background):
   before). With no sound loaded, monitoring re-activates its session.
 - iOS does not promise an interruption's end notice (review m2). Each foreground re-applies
   monitoring's setup when no sound is loaded. A loaded sound blocks that, so when monitoring starts,
-  a loaded sound that is not playing and will not play again (a paused one-shot, or a paused loop
-  past its end time) is released first through the normal stop, which hands the session to
-  monitoring. A playing sound is never touched, and a paused loop within its time keeps waiting for
-  the end notice (it plays on then); until then the volume can be stale, and a playing alarm's active
-  session still reports it. An activation that fails is logged
+  a paused one-shot (never resumed) is released first through the normal stop, which hands the
+  session to monitoring. A playing sound is never touched, and a paused loop is never given up
+  (round 2 B2): its remaining time is frozen when the interruption begins and it plays on when the
+  interruption ends, however long that was, so opening the app during a call never cancels the
+  urgent-low resume. Without an end notice a paused loop still ends, through the next repeat
+  (which stops it first) or the alert's acknowledgement, snooze or clearing, so it holds the session
+  for at most one repeat interval; until then the volume can be stale, while a playing
+  alarm's active session still reports it. A second `.began` before any `.ended` keeps the time
+  recorded at the first. If the session cannot be set up again for the resume, a loop that is still
+  sounding (iOS never paused it) plays on rather than being stopped (round 2 m1; it was stopped
+  before D55 too). An activation that fails is logged
   (`volume monitoring: audio session not activated (…)`) and the last value stands: the player
   forwards a KVO value only while its session is known to be active.
 - With the session active, the volume buttons should change the media volume (the one the in-app
@@ -906,3 +912,8 @@ The host tests prove the decisions; these need the phone:
    h. With the app open, the volume buttons change the **media** volume (the one the in-app sound
       plays at, shown in the row), not the ringer volume; outside the app they behave as before.
       Note it, as this changes what the buttons do while the app is open.
+   i. **Round 2 B2 check.** An in-app urgent-low loop is playing (no AlarmKit, no Critical Alerts;
+      on the phone only, as in f) when a phone call comes in. Stay on the call longer than 30 s,
+      switch to the app during the call (it comes to the foreground), then end the call: the loop
+      plays on after the call (for the time it had left, at least 10 s). Repeat with Siri for a few
+      seconds near the end of the loop, returning to the app before Siri closes.

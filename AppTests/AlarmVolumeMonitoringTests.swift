@@ -99,12 +99,15 @@ final class AlarmVolumeMonitoringTests: XCTestCase {
         XCTAssertFalse(services.isInForeground)
         XCTAssertFalse(harness.audio.isMonitoringVolume, "no monitoring session in the background")
         XCTAssertEqual(services.productionAlerts?.isMonitoringVolume, false)
+        XCTAssertNil(services.foregroundTicker, "no foreground ticker on background wakes (round 2)")
 
-        // The next activation turns it on as usual.
+        // The next activation turns both on as usual.
         await services.sceneBecameActive().value
         XCTAssertTrue(harness.audio.isMonitoringVolume)
+        XCTAssertNotNil(services.foregroundTicker)
         services.handleBackground()
         XCTAssertFalse(harness.audio.isMonitoringVolume)
+        XCTAssertNil(services.foregroundTicker)
     }
 
     /// The background arrives while the foreground work is in flight (held in bootstrap's first
@@ -132,6 +135,7 @@ final class AlarmVolumeMonitoringTests: XCTestCase {
         XCTAssertFalse(services.isInForeground)
         XCTAssertFalse(harness.audio.isMonitoringVolume, "the rest of the foreground work leaves it off")
         XCTAssertEqual(services.productionAlerts?.isMonitoringVolume, false)
+        XCTAssertNil(services.foregroundTicker, "and does not start the foreground ticker (round 2)")
     }
 
     #if DEBUG

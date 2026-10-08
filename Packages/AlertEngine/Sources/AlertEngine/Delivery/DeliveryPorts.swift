@@ -63,11 +63,12 @@ public protocol AlertAudioPlaying: AnyObject {
     /// `onEvent` and re-activates the monitoring session if an interruption took it without an end
     /// notice. While an alert sound is loaded its session is left exactly as it is, and monitoring
     /// takes it over when the sound ends; until then values are reported only while that sound's
-    /// session is active. Never starts, changes or stops a sound that is playing. The one exception
-    /// to "never stops" (review m2): a loaded sound that is not playing and will not play again (a
-    /// paused one-shot, or a paused loop past its end time, whose interruption end never came) is
-    /// released first, so monitoring can take the session; a paused loop within its time keeps
-    /// waiting for the interruption's end, and the volume may stay stale until then.
+    /// session is active. Never starts, changes or stops a sound that is playing, and never gives up
+    /// a loop (an urgent low) paused by an interruption, however long ago it began: it plays on when
+    /// the interruption ends, and the volume may stay stale until then (at most until the loop ends
+    /// through its next repeat or acknowledgement). The one exception to "never stops" (review m2):
+    /// a paused one-shot, which is never resumed, is released first if its interruption end never
+    /// came, so monitoring can take the session.
     func startVolumeMonitoring(onEvent: @escaping @MainActor (VolumeMonitoringEvent) -> Void)
     /// D55: stops reporting; no event is delivered after this returns. Never stops or changes a
     /// playing alert sound: the session is released once neither a sound nor monitoring needs it.

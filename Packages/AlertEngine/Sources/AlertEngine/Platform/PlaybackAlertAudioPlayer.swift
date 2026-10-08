@@ -45,8 +45,9 @@ public final class PlaybackAlertAudioPlayer: AlertAudioPlaying {
     private var player: AVAudioPlayer?
     private var stopTask: Task<Void, Never>?
     private var vibrationTask: Task<Void, Never>?
-    /// When the current loop is due to end; `nil` for a one-shot sound.
-    private var loopEndsAt: Date?
+    /// When the current loop is due to end; `nil` for a one-shot sound or none. Readable for the
+    /// hosted tests (AppTests/PlaybackAlertAudioPlayerTests.swift).
+    public private(set) var loopEndsAt: Date?
     /// Loop time left when an interruption began; `nil` once it ended (or the loop was replaced).
     private var remainingAtInterruption: TimeInterval?
     private var interruptionObserver: ObserverToken?
@@ -150,10 +151,11 @@ public final class PlaybackAlertAudioPlayer: AlertAudioPlaying {
 
     public func startVolumeMonitoring(onEvent: @escaping @MainActor (VolumeMonitoringEvent) -> Void) {
         onVolumeEvent = onEvent
-        // Review m2: a sound whose interruption end never came would hold the session for good.
-        // Released only if it is not playing and will not play again (HeldAlertSound.isAbandoned);
-        // `stop()` hands the session to monitoring as any sound's end does.
-        if let player, HeldAlertSound.isAbandoned(isPlaying: player.isPlaying, loopEndsIn: loopEndsIn) {
+        // Review m2: a paused one-shot whose interruption end never came would hold the session for
+        // good. Released only if it is not playing and is not a loop (HeldAlertSound.isAbandoned:
+        // a loop waits for the end notice however long it takes); `stop()` hands the session to
+        // monitoring as any sound's end does.
+        if let player, HeldAlertSound.isAbandoned(isPlaying: player.isPlaying, isLoop: loopEndsAt != nil) {
             stop()
         }
         // With a sound still loaded the session stays the sound's; it is handed over in `stop`.
@@ -280,10 +282,14 @@ public final class PlaybackAlertAudioPlayer: AlertAudioPlaying {
         switch type {
         case .began:
             // iOS has deactivated the session and paused the player. Hold the loop's remaining time
-            // instead of letting the stop timer run out during the call.
+            // instead of letting the stop timer run out during the call. A second `.began` before
+            // any `.ended` (Siri during a call) keeps the time recorded at the first: by the wall
+            // clock the loop has not been playing since (round 2).
             plan.interruptionBegan()
             guard player != nil, let loopEndsIn else { return }
-            remainingAtInterruption = max(loopEndsIn, 0)
+            if remainingAtInterruption == nil {
+                remainingAtInterruption = max(loopEndsIn, 0)
+            }
             stopTask?.cancel()
             vibrationTask?.cancel()
         case .ended:
@@ -311,18 +317,26 @@ public final class PlaybackAlertAudioPlayer: AlertAudioPlaying {
         }
     }
 
-    /// The urgent-low loop plays on after an interruption, as before D55. If its session cannot be
-    /// set up again or the player will not start, it is released (never left loaded and silent).
+    /// The urgent-low loop plays on after an interruption, as before D55. Kept whenever it is
+    /// sounding afterwards (HeldAlertSound.keepsLoopAfterResumeAttempt, round 2 m1): restarted by
+    /// `play()`, or never paused by iOS while its session could not be set up again (the plan then
+    /// records the setup as unknown; the sound's end deactivates the session as always). A silent
+    /// loop is released, never left loaded.
     private func resumeLoop(_ player: AVAudioPlayer, for seconds: TimeInterval) {
         do {
             try perform(plan.interruptionEnded(resumeSound: true))
-            guard player.play() else { stop(); return }
-            loopEndsAt = now().addingTimeInterval(seconds)
-            startVibration()
-            scheduleStop(after: seconds)
+            _ = player.play()
         } catch {
-            stop()
+            // The setup failed; `play()` is not tried. Whether the loop is kept depends only on
+            // whether it is still sounding.
         }
+        guard HeldAlertSound.keepsLoopAfterResumeAttempt(isPlaying: player.isPlaying) else {
+            stop()
+            return
+        }
+        loopEndsAt = now().addingTimeInterval(seconds)
+        startVibration()
+        scheduleStop(after: seconds)
     }
 }
 

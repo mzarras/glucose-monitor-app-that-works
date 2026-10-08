@@ -137,18 +137,45 @@ final class PlaybackAlertAudioPlayerTests: XCTestCase {
         XCTAssertTrue(player.play(fileName: silentSound, loopSeconds: 30), "the next sound plays")
     }
 
-    // MARK: - m2: an interruption end that never comes
+    // MARK: - m2 and round-2 B2: a start of monitoring never drops an interrupted loop
 
-    /// A loop paused by an interruption whose end never came, past its end time: the next start of
-    /// monitoring (a foreground) releases it, so monitoring gets the session and reports again.
-    func test_aPausedLoopPastItsEndIsReleasedWhenMonitoringStarts() async {
-        XCTAssertTrue(player.play(fileName: silentSound, loopSeconds: 30))
-        await post(.began)
-        XCTAssertFalse(player.isPlaying)
-        clock.now += 600 // no `.ended`
+    /// The app is opened (monitoring starts) during a call that has outlasted the interrupted
+    /// loop's remaining time; when the call ends the loop plays on, as it does without monitoring.
+    /// Round-2 B2: at c32eeef the start of monitoring released the loop and it never resumed.
+    private func assertForegroundDuringCallKeepsTheLoop(callSecondsBeforeForeground: TimeInterval,
+                                                        file: StaticString = #filePath, line: UInt = #line) async {
+        XCTAssertTrue(player.play(fileName: silentSound, loopSeconds: 30), file: file, line: line)
+        await post(.began) // remaining time recorded: 30 s
+        XCTAssertFalse(player.isPlaying, "paused by the call", file: file, line: line)
+        clock.now += callSecondsBeforeForeground
+        startMonitoring() // the app comes to the foreground during the call
+        XCTAssertEqual(sessionOptions, alarmOptions, "still the sound's session", file: file, line: line)
+        await post(.ended)
+        XCTAssertTrue(player.isPlaying, "the urgent-low loop plays on after the call", file: file, line: line)
+        XCTAssertEqual(player.loopEndsAt, clock.now.addingTimeInterval(30), "for the 30 s it had left", file: file, line: line)
+    }
+
+    func test_S7_aForegroundDuringA40SecondCallKeepsTheInterruptedLoop() async {
+        await assertForegroundDuringCallKeepsTheLoop(callSecondsBeforeForeground: 40)
+    }
+
+    func test_S7_aForegroundDuringATenMinuteCallKeepsTheInterruptedLoop() async {
+        await assertForegroundDuringCallKeepsTheLoop(callSecondsBeforeForeground: 600)
+    }
+
+    /// The reviewer's case: monitoring on, the loop has played 25 of its 30 s, Siri for 8 s, and the
+    /// scene's `.active` is handled before the interruption's `.ended`.
+    func test_S7_aForegroundDuringAShortSiriKeepsALoopNearItsEnd() async {
         startMonitoring()
-        XCTAssertEqual(sessionOptions, monitoringOptions, "monitoring has the session")
-        await waitUntil("the current volume is reported", timeout: 5) { !self.events.isEmpty }
+        XCTAssertTrue(player.play(fileName: silentSound, loopSeconds: 30))
+        clock.now += 25
+        await post(.began) // 5 s left
+        clock.now += 8
+        startMonitoring()
+        XCTAssertEqual(sessionOptions, alarmOptions)
+        await post(.ended)
+        XCTAssertTrue(player.isPlaying)
+        XCTAssertEqual(player.loopEndsAt, clock.now.addingTimeInterval(10), "the 10 s minimum")
     }
 
     /// Within its time the paused loop keeps waiting for the interruption's end, and then plays on.
@@ -160,6 +187,31 @@ final class PlaybackAlertAudioPlayerTests: XCTestCase {
         XCTAssertEqual(sessionOptions, alarmOptions, "still the sound's")
         await post(.ended)
         XCTAssertTrue(player.isPlaying)
+    }
+
+    /// A one-shot paused by an interruption whose end never came is never resumed: the next start
+    /// of monitoring (a foreground) releases it, so monitoring gets the session and reports again.
+    func test_aPausedOneShotIsReleasedWhenMonitoringStarts() async {
+        XCTAssertTrue(player.play(fileName: silentSound, loopSeconds: 0))
+        await post(.began)
+        XCTAssertFalse(player.isPlaying)
+        startMonitoring() // before its stop timer (1.25 s of real time) fires
+        XCTAssertEqual(sessionOptions, monitoringOptions, "monitoring has the session")
+        await waitUntil("the current volume is reported", timeout: 5) { !self.events.isEmpty }
+    }
+
+    // MARK: - Round-2: a second interruption notice
+
+    /// A second `.began` before any `.ended` (Siri during a call) keeps the time recorded at the
+    /// first: the loop plays on for that, not for the 10 s minimum.
+    func test_S7_aSecondBeganKeepsTheLoopsRecordedTime() async {
+        XCTAssertTrue(player.play(fileName: silentSound, loopSeconds: 30))
+        await post(.began) // 30 s left
+        clock.now += 20
+        await post(.began)
+        await post(.ended)
+        XCTAssertTrue(player.isPlaying)
+        XCTAssertEqual(player.loopEndsAt, clock.now.addingTimeInterval(30))
     }
 
     /// A loop playing past its end time (it started during an interruption, its stop timer runs on

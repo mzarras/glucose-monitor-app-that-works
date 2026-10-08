@@ -63,7 +63,8 @@ struct AudioSessionPlan: Sendable, Equatable {
     /// D55: the volume is being monitored.
     private(set) var isMonitoring = false
     /// An alert sound is loaded: playing, or paused by an interruption. Between `startSound()` and
-    /// `endSound()`; the player ends it at once when a step of its setup fails.
+    /// `endSound()`. When a step of its setup fails the player ends it at once, except a resumed loop
+    /// that is still sounding (round 2 m1), which keeps the session it has.
     private(set) var holdsSound = false
 
     /// `play`: an alert sound is about to start.
@@ -83,9 +84,9 @@ struct AudioSessionPlan: Sendable, Equatable {
 
     /// D55. With a sound loaded the session stays as the sound needs it; `endSound()` hands it over.
     /// Already monitoring: the same setup is applied again (harmless on an active session; it
-    /// re-activates a session an interruption left inactive without an end notice). A loaded sound
-    /// whose interruption end never came is released by the player first (review m2,
-    /// `HeldAlertSound.isAbandoned`).
+    /// re-activates a session an interruption left inactive without an end notice). A paused one-shot
+    /// whose interruption end never came is released by the player first; a loop never is (review
+    /// m2, round 2 B2, `HeldAlertSound.isAbandoned`).
     mutating func startMonitoring() -> [AudioSessionStep] {
         isMonitoring = true
         return holdsSound ? [] : move(to: .monitoring)

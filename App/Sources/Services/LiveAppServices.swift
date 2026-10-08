@@ -127,7 +127,7 @@ final class LiveAppServices: AppServices {
     var g7Started = false
     private var storeOpenError: String?
     private var isOpeningStore = false
-    private var foregroundTicker: Task<Void, Never>?
+    private(set) var foregroundTicker: Task<Void, Never>?
     private var storeChangesTask: Task<Void, Never>?
     private var calibrationTask: Task<Void, Never>?
     private var protectedDataObserver: NSObjectProtocol?
@@ -768,7 +768,9 @@ final class LiveAppServices: AppServices {
         await purgeIfDue()
         updateClockMismatchLatch(now: now())
         writePipelineHeartbeat()
-        startForegroundTicker()
+        // Only while still in the foreground: a `handleBackground()` that ran during the work above
+        // has stopped the ticker, and it must not start again on background wakes.
+        if isInForeground { startForegroundTicker() }
     }
 
     func handleBackground() {

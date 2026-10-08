@@ -1,7 +1,7 @@
 import XCTest
 @testable import AlertEngine
 
-/// Reviews B1 and m2 of D55: what `PlaybackAlertAudioPlayer` (iOS only; its hosted tests are
+/// Reviews B1 and m2 of D55 (and round 2 B2, m1): what `PlaybackAlertAudioPlayer` (iOS only; its hosted tests are
 /// AppTests/PlaybackAlertAudioPlayerTests.swift) does with a loaded sound when an interruption ends,
 /// and when volume monitoring may give up a sound whose interruption end never came.
 final class HeldAlertSoundTests: XCTestCase {
@@ -38,23 +38,29 @@ final class HeldAlertSoundTests: XCTestCase {
         XCTAssertEqual(HeldAlertSound.atInterruptionEnd(isPlaying: false, loopSecondsLeftAtInterruption: nil, loopEndsIn: nil), .release)
     }
 
-    // MARK: - Abandoned (review m2: volume monitoring starts with a sound still loaded)
+    // MARK: - Abandoned (review m2, round 2 B2: volume monitoring starts with a sound still loaded)
 
     func test_S7_aPlayingSoundIsNeverAbandoned() {
-        for loopEndsIn in [30.0, 0, -600, nil] as [TimeInterval?] {
-            XCTAssertFalse(HeldAlertSound.isAbandoned(isPlaying: true, loopEndsIn: loopEndsIn), "\(String(describing: loopEndsIn))")
-        }
+        XCTAssertFalse(HeldAlertSound.isAbandoned(isPlaying: true, isLoop: true))
+        XCTAssertFalse(HeldAlertSound.isAbandoned(isPlaying: true, isLoop: false))
     }
 
-    /// A paused loop within its time is still waiting for the interruption's end to play on.
-    func test_S7_aPausedLoopWithinItsTimeIsNotAbandoned() {
-        XCTAssertFalse(HeldAlertSound.isAbandoned(isPlaying: false, loopEndsIn: 0.5))
-        XCTAssertFalse(HeldAlertSound.isAbandoned(isPlaying: false, loopEndsIn: 29))
+    /// Round 2 B2: a paused loop waits for the interruption's end however long the interruption
+    /// lasts (its time is frozen when it begins), so a foreground never gives it up.
+    func test_S7_aPausedLoopIsNeverAbandoned() {
+        XCTAssertFalse(HeldAlertSound.isAbandoned(isPlaying: false, isLoop: true))
     }
 
-    func test_aPausedLoopPastItsEndAndAPausedOneShotAreAbandoned() {
-        XCTAssertTrue(HeldAlertSound.isAbandoned(isPlaying: false, loopEndsIn: 0))
-        XCTAssertTrue(HeldAlertSound.isAbandoned(isPlaying: false, loopEndsIn: -120))
-        XCTAssertTrue(HeldAlertSound.isAbandoned(isPlaying: false, loopEndsIn: nil))
+    func test_aPausedOneShotIsAbandoned() {
+        XCTAssertTrue(HeldAlertSound.isAbandoned(isPlaying: false, isLoop: false))
+    }
+
+    // MARK: - After the resume was tried (round 2 m1)
+
+    /// A loop still sounding is kept even when its session could not be set up again; only a
+    /// silent one is released.
+    func test_S7_aLoopStillSoundingIsKeptAfterAFailedResume() {
+        XCTAssertTrue(HeldAlertSound.keepsLoopAfterResumeAttempt(isPlaying: true))
+        XCTAssertFalse(HeldAlertSound.keepsLoopAfterResumeAttempt(isPlaying: false))
     }
 }

@@ -1,14 +1,18 @@
 // What the in-app player does with an alert sound it has loaded when an interruption (a phone call,
 // Siri) ends, and when it may let go of one whose interruption end never came (reviews B1, m2 of
-// D55). Pure and platform-neutral so the host tests cover every case (HeldAlertSoundTests);
-// Platform/PlaybackAlertAudioPlayer.swift applies the rules. The session steps themselves are
-// AudioSessionPlan's.
+// D55; round 2 B2, m1). Pure and platform-neutral so the host tests cover every case
+// (HeldAlertSoundTests); Platform/PlaybackAlertAudioPlayer.swift applies the rules. The session
+// steps themselves are AudioSessionPlan's.
 //
-// One principle runs through both (S7): a sound that is playing is never stopped or touched here.
-// A loop (only urgent alerts loop, DeliveryPolicy.swift) that is not playing is played again rather
-// than dropped while its time lasts. Only a sound that will never play again is released: loaded but
-// silent, it would report `isPlaying == false` (so `AlertDeliveryExecutor.playInApp` already lets
-// another alert take its place) while still holding the audio session that volume monitoring needs.
+// One principle runs through all of them (S7): a sound that is playing is never stopped or touched
+// here, and a loop (only urgent alerts loop, DeliveryPolicy.swift) is never given up while it waits
+// for an interruption's end, however long that takes: it plays on then, for the time it had left.
+// Only a one-shot that will never play again is released: loaded but silent, it would report
+// `isPlaying == false` (so `AlertDeliveryExecutor.playInApp` already lets another alert take its
+// place) while still holding the audio session that volume monitoring needs. A paused loop whose end
+// notice never comes still ends: through the next repeat's `play` (which stops it first) or the
+// alert's acknowledgement, snooze or clearing (`AlertDeliveryExecutor`: `.cancel`, `.dismiss`,
+// `.stopSound`), so it holds the session for at most one repeat interval.
 
 import Foundation
 
@@ -49,17 +53,26 @@ enum HeldAlertSound {
         return .release
     }
 
-    /// Review m2. Whether a loaded sound that may still be waiting for an interruption's end is given
-    /// up when volume monitoring starts (each foreground). iOS does not promise an end notice, and
-    /// without one a paused sound would hold the session for good: monitoring could never take it
-    /// and the Settings volume would stay stale.
+    /// Review m2, round 2 B2. Whether a loaded sound that may still be waiting for an interruption's
+    /// end is given up when volume monitoring starts (each foreground). iOS does not promise an end
+    /// notice, and without one a paused one-shot would hold the session for good.
     ///   - playing: never (S7);
-    ///   - a one-shot that is not playing: yes, it is never resumed;
-    ///   - a loop that is not playing: only once its end time has passed. Until then it is waiting
-    ///     for the interruption's end to play on (`atInterruptionEnd`).
-    static func isAbandoned(isPlaying: Bool, loopEndsIn: TimeInterval?) -> Bool {
-        if isPlaying { return false }
-        guard let loopEndsIn else { return true }
-        return loopEndsIn <= 0
+    ///   - a loop: never (S7). Its remaining time is frozen when the interruption begins and it plays
+    ///     on when the interruption ends, however long that was (`atInterruptionEnd`), so its wall-clock
+    ///     end time says nothing. At c32eeef a loop past that end time was released here, so opening
+    ///     the app during a call longer than the loop's time left (or during 8 s of Siri near its end)
+    ///     silenced the urgent low for good;
+    ///   - a one-shot that is not playing: yes, it is never resumed.
+    static func isAbandoned(isPlaying: Bool, isLoop: Bool) -> Bool {
+        !isPlaying && !isLoop
+    }
+
+    /// Round 2 m1. Whether the interrupted loop is kept once its resume has been tried: whenever it
+    /// is sounding, including when its session could not be set up again but iOS had never paused it
+    /// (it still plays in the session it has). Kept, its stop timer and vibration are armed again; a
+    /// silent loop is released, never left loaded. Before, a failed setup stopped a loop that was
+    /// still sounding (since before D55).
+    static func keepsLoopAfterResumeAttempt(isPlaying: Bool) -> Bool {
+        isPlaying
     }
 }
