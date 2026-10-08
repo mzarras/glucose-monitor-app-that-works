@@ -13,6 +13,7 @@ public final class AlertService {
     private let center: AlertNotificationCenter
     private let audio: AlertAudioPlaying
     private let alarms: SystemAlarmScheduling?
+    private let diagnostics: DiagnosticLog
     private let onSnapshot: @MainActor (AlertEngineSnapshot) -> Void
     /// The last batch of actions being executed. Each batch waits for the previous one, so a
     /// cancel can never overtake the post it is meant to remove.
@@ -23,6 +24,15 @@ public final class AlertService {
     /// notifications were allowed (`nil` until first read). When either changes they are rebuilt:
     /// adds made while notifications were not allowed failed (D43 review B1).
     private var builtFor: (critical: Bool, alarms: Bool, authorized: Bool?) = (false, false, nil)
+
+    /// D55: whether this service has the audio player report the media volume live
+    /// (`setVolumeMonitoring(_:)`; the app turns it on in the foreground).
+    public private(set) var isMonitoringVolume = false
+    /// D55: called on the main actor after a change of the media volume while monitoring has
+    /// changed `deliveryStatus` (already updated when this runs), whichever read found the change: a
+    /// monitoring report or a permission refresh (review m1). Never called while monitoring is off:
+    /// then only refreshes read the volume, and their callers read `deliveryStatus` themselves.
+    public var onDeliveryStatusChange: (@MainActor () -> Void)?
 
     /// - Parameters:
     ///   - snapshot: what `onSnapshot` last delivered, or `nil` on first launch.
@@ -49,6 +59,7 @@ public final class AlertService {
         self.center = notificationCenter
         self.audio = audio
         self.alarms = systemAlarms
+        self.diagnostics = diagnostics
         self.onSnapshot = onSnapshot
     }
 
@@ -77,7 +88,7 @@ public final class AlertService {
     /// Onboarding: ask for notification permission, including Critical Alerts (D4).
     public func requestAuthorization() async -> AlertDeliveryStatus {
         permissions = await center.requestAuthorization()
-        lastOutputVolume = audio.outputVolume
+        recordOutputVolume(audio.outputVolume)
         await rebuildIfDeliveryLevelChanged()
         return deliveryStatus
     }
@@ -93,6 +104,28 @@ public final class AlertService {
     public func refreshDeliveryStatus() async -> AlertDeliveryStatus {
         await refreshPermissions()
         return deliveryStatus
+    }
+
+    /// D55: on while the app is in the foreground, off in the background. On: the audio player keeps
+    /// its session active without ducking anyone and reports the media volume live; each change
+    /// updates `deliveryStatus` and calls `onDeliveryStatusChange`. Turning it on again re-activates
+    /// the player's session if an interruption took it; for an alert sound still loaded then, see
+    /// `AlertAudioPlaying.startVolumeMonitoring`. Off: no further reports. Never starts, changes or
+    /// stops a sound that is playing. The player has one monitor at a time, so when the app replaces
+    /// its service (replay runs) it turns the old one's off first.
+    public func setVolumeMonitoring(_ isOn: Bool) {
+        if isOn {
+            if !isMonitoringVolume { log("volume monitoring on (D55)") }
+            isMonitoringVolume = true
+            audio.startVolumeMonitoring { [weak self] event in
+                self?.volumeMonitoringReported(event)
+            }
+        } else {
+            guard isMonitoringVolume else { return }
+            isMonitoringVolume = false
+            audio.stopVolumeMonitoring()
+            log("volume monitoring off (D55)")
+        }
     }
 
     /// Everything the Settings screen shows about whether alerts can be heard (S5).
@@ -123,8 +156,42 @@ public final class AlertService {
 
     private func refreshPermissions() async {
         permissions = await center.permissionState()
-        lastOutputVolume = audio.outputVolume
+        recordOutputVolume(audio.outputVolume)
         await rebuildIfDeliveryLevelChanged()
+    }
+
+    /// D55. A report that arrives after monitoring was turned off is dropped.
+    private func volumeMonitoringReported(_ event: VolumeMonitoringEvent) {
+        guard isMonitoringVolume else { return }
+        switch event {
+        case .changed(let volume):
+            recordOutputVolume(volume)
+        case .sessionFailed(let reason):
+            let last = lastOutputVolume.map { String(format: "%.2f", $0) } ?? "unknown"
+            log("volume monitoring: audio session not activated (\(reason)); media volume stays \(last) until the next report")
+        }
+    }
+
+    /// Every read of the media volume lands here. While monitoring (D55), a change calls
+    /// `onDeliveryStatusChange` whichever read found it (review m1): a refresh (every alert input
+    /// runs one) can read a new value just before that value's own monitoring report arrives, and
+    /// the report then finds nothing new; if only reports called back, the app would keep showing
+    /// the old value (e.g. no warning at volume 0) while it is open.
+    private func recordOutputVolume(_ volume: Float?) {
+        guard volume != lastOutputVolume else { return }
+        let wasWarning = AlertDeliveryStatus.volumeProblem(lastOutputVolume) != nil
+        lastOutputVolume = volume
+        guard isMonitoringVolume else { return }
+        let isWarning = AlertDeliveryStatus.volumeProblem(volume) != nil
+        if wasWarning != isWarning {
+            let shown = volume.map { String(format: "%.2f", $0) } ?? "unknown"
+            log("media volume \(shown): alarm volume warning \(isWarning ? "on" : "off") (live, D55)")
+        }
+        onDeliveryStatusChange?()
+    }
+
+    private func log(_ message: String) {
+        diagnostics.record(DiagnosticEvent(date: clock.now, category: .alert, message: message))
     }
 
     private func rebuildIfDeliveryLevelChanged() async {

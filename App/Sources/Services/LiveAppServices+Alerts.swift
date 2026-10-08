@@ -1,7 +1,7 @@
 // Alerts in the live services (docs/alerts.md §9): settings, delivery status and permissions,
-// sound preview, in-app and notification actions, the AlarmKit Stop intent bridge, and the Trio
-// bridge status input. Imports AlertEngine but not TrioBridge: `TrioBridgeStatus` here is
-// AlertEngine's alert input.
+// the live media volume (D55), sound preview, in-app and notification actions, the AlarmKit Stop
+// intent bridge, and the Trio bridge status input. Imports AlertEngine but not TrioBridge:
+// `TrioBridgeStatus` here is AlertEngine's alert input.
 
 import AlertEngine
 import Foundation
@@ -36,6 +36,23 @@ extension LiveAppServices {
         _ = await alerts.refreshDeliveryStatus()
         alertDelivery = AlertDeliveryReport(of: alerts)
         send(.alertDelivery)
+    }
+
+    // MARK: - Live alarm volume (D55)
+
+    /// D55: the active alert service observes the media volume exactly while the app is in the
+    /// foreground (`isInForeground`), and each change it reports reaches Settings at once (the
+    /// volume warning and its tab dot clear without a relaunch). Call whenever `isInForeground` or
+    /// the active service changes. The audio player has one monitor at a time: a service that is
+    /// about to be replaced is turned off first (`setVolumeMonitoring(false)`, replay switch).
+    func updateVolumeMonitoring() {
+        guard let alerts = activeAlerts else { return }
+        alerts.onDeliveryStatusChange = { [weak self, weak alerts] in
+            guard let self, let alerts, alerts === self.activeAlerts else { return }
+            self.alertDelivery = AlertDeliveryReport(of: alerts)
+            self.send(.alertDelivery)
+        }
+        alerts.setVolumeMonitoring(isInForeground)
     }
 
     func requestNotificationAuthorization() async {

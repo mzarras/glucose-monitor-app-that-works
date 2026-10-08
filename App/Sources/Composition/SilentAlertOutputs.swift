@@ -15,7 +15,9 @@ enum SilentAlertAudio {
 }
 
 /// Plays nothing; reports success so the delivery logic runs unchanged. The media volume is the
-/// real one, so the Settings volume warning still works.
+/// real one, monitored live by the real player (D55), so the Settings volume warning still works.
+/// The real player is never asked to play: its monitoring session is mixable, silent and never
+/// ducks other audio.
 @MainActor
 final class SilentAlertAudioPlayer: AlertAudioPlaying {
     private let volumeSource: any AlertAudioPlaying
@@ -35,6 +37,14 @@ final class SilentAlertAudioPlayer: AlertAudioPlaying {
     var isPlaying: Bool { false }
 
     var outputVolume: Float? { volumeSource.outputVolume }
+
+    func startVolumeMonitoring(onEvent: @escaping @MainActor (VolumeMonitoringEvent) -> Void) {
+        volumeSource.startVolumeMonitoring(onEvent: onEvent)
+    }
+
+    func stopVolumeMonitoring() {
+        volumeSource.stopVolumeMonitoring()
+    }
 }
 
 /// Posts every notification as the real adapter does, without its sound.

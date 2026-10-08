@@ -110,6 +110,10 @@ final class LiveAppServices: AppServices {
     private(set) var productionStore: GlucoseStore?
     /// The production alert service; nil before bootstrap and during a DEBUG replay run.
     var productionAlerts: AlertService?
+    /// D55: true while the scene is active: set when it becomes active (`sceneBecameActive()`, or
+    /// `handleForeground()` called on its own), cleared by `handleBackground()`. The active alert
+    /// service monitors the media volume exactly while this is true (`updateVolumeMonitoring()`).
+    private(set) var isInForeground = false
     #if DEBUG
     var replayRun: ReplayRun?
     var replaySpeed: Double?
@@ -123,7 +127,7 @@ final class LiveAppServices: AppServices {
     var g7Started = false
     private var storeOpenError: String?
     private var isOpeningStore = false
-    private var foregroundTicker: Task<Void, Never>?
+    private(set) var foregroundTicker: Task<Void, Never>?
     private var storeChangesTask: Task<Void, Never>?
     private var calibrationTask: Task<Void, Never>?
     private var protectedDataObserver: NSObjectProtocol?
@@ -561,6 +565,7 @@ final class LiveAppServices: AppServices {
         let alerts = makeProductionAlerts()
         productionAlerts = alerts
         sensorPipeline.outputs.alerts = alerts
+        updateVolumeMonitoring() // D55: on only if the app is already in the foreground
         await alerts.start()
         await connectIntentBridge()
         await deliverPendingNotificationResponses()
@@ -724,10 +729,27 @@ final class LiveAppServices: AppServices {
         }
     }
 
-    /// The app came to the foreground.
-    func handleForeground() async {
+    /// The scene became active (AppEnvironment.scenePhaseChanged). Marks the app in the foreground
+    /// at once, synchronously, then starts the foreground work: a `.background` that arrives before
+    /// that work runs clears the mark again and wins, so volume monitoring (an active `.playback`
+    /// session, D55) is never left on in the background (review m3).
+    @discardableResult
+    func sceneBecameActive() -> Task<Void, Never> {
+        isInForeground = true
+        return Task { await self.handleForeground(markedByScene: true) }
+    }
+
+    /// The app came to the foreground. `markedByScene`: `sceneBecameActive()` already set
+    /// `isInForeground` before starting this, and it is not set again here, because a
+    /// `handleBackground()` that ran in between must win. Called on its own (tests), it sets it.
+    func handleForeground(markedByScene: Bool = false) async {
+        // Set before any await, so a `handleBackground()` that arrives meanwhile wins (D55).
+        if !markedByScene { isInForeground = true }
         await bootstrap()
         guard isBootstrapped else { return }
+        // D55: the media volume is observed live until `handleBackground()`. Before the permission
+        // refresh below, so that reads the volume from an active session.
+        updateVolumeMonitoring()
         await startG7()
         await openStoreIfNeeded()
         // A drain attempt: stores waiting readings, sends the storage health and a tick (D42).
@@ -746,10 +768,15 @@ final class LiveAppServices: AppServices {
         await purgeIfDue()
         updateClockMismatchLatch(now: now())
         writePipelineHeartbeat()
-        startForegroundTicker()
+        // Only while still in the foreground: a `handleBackground()` that ran during the work above
+        // has stopped the ticker, and it must not start again on background wakes.
+        if isInForeground { startForegroundTicker() }
     }
 
     func handleBackground() {
+        // D55: no volume monitoring in the background (an alert sound that is playing is untouched).
+        isInForeground = false
+        updateVolumeMonitoring()
         foregroundTicker?.cancel()
         foregroundTicker = nil
         writePipelineHeartbeat()
