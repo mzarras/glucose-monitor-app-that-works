@@ -2,6 +2,7 @@
 // use Fixtures. Generated once by hand-run script; edit freely.
 
 #if DEBUG
+import AlertEngine
 import GlucoseCore
 import SwiftUI
 import WidgetCore
@@ -82,8 +83,8 @@ private let previewNow = Date()
 
 // MARK: - Settings
 
-#Preview("Settings · light") { NavigationStack { PreviewScreen(scheme: .light) { SettingsContent(state: Fixtures.settings(at: previewNow), now: previewNow, actions: .noop) } } }
-#Preview("Settings · problems · light") { NavigationStack { PreviewScreen(scheme: .light) { SettingsContent(state: Fixtures.settingsWithProblems(at: previewNow), now: previewNow, actions: .noop) } } }
+#Preview("Settings · light") { NavigationStack { PreviewScreen(scheme: .light) { SettingsContent(state: Fixtures.settings(at: previewNow), alerts: Fixtures.alerts, now: previewNow, actions: .noop) } } }
+#Preview("Settings · problems · light") { NavigationStack { PreviewScreen(scheme: .light) { SettingsContent(state: Fixtures.settingsWithProblems(at: previewNow), alerts: Fixtures.alerts, now: previewNow, actions: .noop) } } }
 #Preview("Settings · sensor, not paired · light") { NavigationStack { SensorSettingsView(sensor: SensorSettings(state: .notPaired, serial: nil), calibration: .unavailable, actions: .noop).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
 #Preview("Settings · sensor, active · light") { NavigationStack { SensorSettingsView(sensor: Fixtures.settings(at: previewNow).sensor, calibration: Fixtures.calibration(.accepted, at: previewNow), actions: .noop).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
 #Preview("Settings · sharing · light") { NavigationStack { SharingSettingsView(nightscout: Fixtures.settingsWithProblems(at: previewNow).nightscout, share: Fixtures.settings(at: previewNow).dexcomShare, actions: .noop).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
@@ -91,8 +92,8 @@ private let previewNow = Date()
 #Preview("Settings · alert delivery, problems · light") { NavigationStack { AlertDeliveryView(delivery: Fixtures.settingsWithProblems(at: previewNow).delivery, actions: .noop).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
 #Preview("Settings · alert delivery · light") { NavigationStack { AlertDeliveryView(delivery: Fixtures.settings(at: previewNow).delivery, actions: .noop).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
 #Preview("Settings · about · light") { NavigationStack { AboutView(version: "0.1.0 (1)").editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
-#Preview("Settings · dark") { NavigationStack { PreviewScreen(scheme: .dark) { SettingsContent(state: Fixtures.settings(at: previewNow), now: previewNow, actions: .noop) } } }
-#Preview("Settings · problems · dark") { NavigationStack { PreviewScreen(scheme: .dark) { SettingsContent(state: Fixtures.settingsWithProblems(at: previewNow), now: previewNow, actions: .noop) } } }
+#Preview("Settings · dark") { NavigationStack { PreviewScreen(scheme: .dark) { SettingsContent(state: Fixtures.settings(at: previewNow), alerts: Fixtures.alerts, now: previewNow, actions: .noop) } } }
+#Preview("Settings · problems · dark") { NavigationStack { PreviewScreen(scheme: .dark) { SettingsContent(state: Fixtures.settingsWithProblems(at: previewNow), alerts: Fixtures.alerts, now: previewNow, actions: .noop) } } }
 #Preview("Settings · sensor, not paired · dark") { NavigationStack { SensorSettingsView(sensor: SensorSettings(state: .notPaired, serial: nil), calibration: .unavailable, actions: .noop).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) } }
 #Preview("Settings · sensor, active · dark") { NavigationStack { SensorSettingsView(sensor: Fixtures.settings(at: previewNow).sensor, calibration: Fixtures.calibration(.accepted, at: previewNow), actions: .noop).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) } }
 #Preview("Settings · sharing · dark") { NavigationStack { SharingSettingsView(nightscout: Fixtures.settingsWithProblems(at: previewNow).nightscout, share: Fixtures.settings(at: previewNow).dexcomShare, actions: .noop).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) } }
@@ -124,8 +125,8 @@ private let previewNow = Date()
 
 #Preview("D45 · Now listening · light") { PreviewScreen(scheme: .light) { NowContent(state: { var n = Fixtures.now(.normal, at: previewNow); n.connection = ConnectionModeState(mode: .listen); return n }(), calibration: { var c = Fixtures.calibration(.available, at: previewNow); c.listening = true; return c }(), now: previewNow, actions: .noop) } }
 #Preview("D45 · Now listening · dark") { PreviewScreen(scheme: .dark) { NowContent(state: { var n = Fixtures.now(.normal, at: previewNow); n.connection = ConnectionModeState(mode: .listen); return n }(), calibration: { var c = Fixtures.calibration(.available, at: previewNow); c.listening = true; return c }(), now: previewNow, actions: .noop) } }
-#Preview("D45 · Settings listening · light") { NavigationStack { PreviewScreen(scheme: .light) { SettingsContent(state: Fixtures.settingsListening(at: previewNow), now: previewNow, actions: .noop) } } }
-#Preview("D45 · Settings listening · dark") { NavigationStack { PreviewScreen(scheme: .dark) { SettingsContent(state: Fixtures.settingsListening(at: previewNow), now: previewNow, actions: .noop) } } }
+#Preview("D45 · Settings listening · light") { NavigationStack { PreviewScreen(scheme: .light) { SettingsContent(state: Fixtures.settingsListening(at: previewNow), alerts: Fixtures.alerts, now: previewNow, actions: .noop) } } }
+#Preview("D45 · Settings listening · dark") { NavigationStack { PreviewScreen(scheme: .dark) { SettingsContent(state: Fixtures.settingsListening(at: previewNow), alerts: Fixtures.alerts, now: previewNow, actions: .noop) } } }
 #Preview("D45 · sensor page listening · light") { NavigationStack { SensorSettingsView(sensor: Fixtures.settings(at: previewNow).sensor, calibration: { var c = Fixtures.calibration(.accepted, at: previewNow); c.listening = true; return c }(), actions: .noop, connection: ConnectionModeState(mode: .listen)).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
 #Preview("D45 · sensor page paired · dark") { NavigationStack { SensorSettingsView(sensor: Fixtures.settings(at: previewNow).sensor, calibration: Fixtures.calibration(.accepted, at: previewNow), actions: .noop, connection: ConnectionModeState(mode: .pair)).editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) } }
 #Preview("D45 · Trio listening · light") { NavigationStack { TrioSettingsView(trio: Fixtures.settings(at: previewNow).trio, setEnabled: { _ in }, listening: true).editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) } }
@@ -267,4 +268,16 @@ struct ScrubPreview: View {
 #Preview("Now · gracePeriod · light") { PreviewScreen(scheme: .light) { NowContent(state: Fixtures.now(.gracePeriod, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop) } }
 #Preview("Now · gracePeriod · dark") { PreviewScreen(scheme: .dark) { NowContent(state: Fixtures.now(.gracePeriod, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop) } }
 #Preview("Now · gracePeriod, ticking · light") { PreviewScreen(scheme: .light) { NowContent(state: Fixtures.now(.gracePeriod, at: previewNow), calibration: Fixtures.calibration(.available, at: previewNow), now: previewNow, actions: .noop, liveClock: { Date() }) } }
+
+// MARK: - D55 alarm volume in Settings, D56 Now · Predict · Trends · Settings
+
+#Preview("Settings · volume notice · light") { NavigationStack { PreviewScreen(scheme: .light) { SettingsContent(state: Fixtures.settingsVolumeLow(at: previewNow), alerts: Fixtures.alerts, now: previewNow, actions: .noop) } } }
+#Preview("Settings › Alerts · light") { NavigationStack { AlertsPage(state: Fixtures.alerts, actions: .noop).environment(\.colorScheme, .light).preferredColorScheme(.light) } }
+#Preview("Predict · screen · light") { PredictScreen(state: PredictFixtures.state(.current, at: previewNow), actions: .noop).environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("Tab bar · Settings needs attention · light") { VStack { Spacer(); SensorTabBar(selected: .settings, attention: [.settings], select: { _ in }) }.editorialScreen().environment(\.colorScheme, .light).preferredColorScheme(.light) }
+#Preview("Settings · volume notice · dark") { NavigationStack { PreviewScreen(scheme: .dark) { SettingsContent(state: Fixtures.settingsVolumeLow(at: previewNow), alerts: Fixtures.alerts, now: previewNow, actions: .noop) } } }
+#Preview("Settings › Alerts · dark") { NavigationStack { AlertsPage(state: Fixtures.alerts, actions: .noop).environment(\.colorScheme, .dark).preferredColorScheme(.dark) } }
+#Preview("Predict · screen · dark") { PredictScreen(state: PredictFixtures.state(.current, at: previewNow), actions: .noop).environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+#Preview("Tab bar · Now and Settings need attention · dark") { VStack { Spacer(); SensorTabBar(selected: .predict, attention: [.now, .settings], select: { _ in }) }.editorialScreen().environment(\.colorScheme, .dark).preferredColorScheme(.dark) }
+#Preview("App · Settings, volume low · light") { RootView(model: { let m = AppModel.fixtures(arguments: ["-tab", "settings"]); m.settings.delivery.alarmVolume = .tooLow(level: 0.15); return m }()).environment(\.colorScheme, .light).preferredColorScheme(.light) }
 #endif

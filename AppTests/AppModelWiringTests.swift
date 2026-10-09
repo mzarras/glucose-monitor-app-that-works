@@ -65,7 +65,9 @@ final class AppModelWiringTests: XCTestCase {
 
     // MARK: - S5
 
-    /// Every problem the facade can report becomes a visible banner on Now (and a tab dot).
+    /// Every problem the facade can report becomes a visible banner on Now (and the Now tab's dot),
+    /// except a low or muted alarm volume (D55), which marks Settings instead: its notice and the
+    /// Settings tab's dot, never a Now banner.
     func test_S5_everyServiceHealthProblemBecomesABanner() async {
         let failingStatus: NightscoutKit.UploadStatus = {
             var status = NightscoutKit.UploadStatus(destination: "Nightscout")
@@ -97,8 +99,6 @@ final class AppModelWiringTests: XCTestCase {
             ("notifications quiet", { $0.alertDelivery = AlertDeliveryReport(permissions: permissions(.provisional), outputVolume: 0.8, urgentLowAlarm: .authorized, problems: []) }, .notificationsDisabled),
             ("notifications not asked", { $0.alertDelivery = AlertDeliveryReport(permissions: permissions(.notDetermined), outputVolume: 0.8, urgentLowAlarm: .authorized, problems: [.notificationsNotRequested]) }, .notificationsNotSetUp),
             ("banners/sounds/time sensitive off", { $0.alertDelivery = AlertDeliveryReport(permissions: permissions(.authorized, alerts: .disabled, sounds: .disabled, timeSensitive: .disabled), outputVolume: 0.8, urgentLowAlarm: .authorized, problems: [.notificationAlertsOff, .notificationSoundsOff, .timeSensitiveOff]) }, .notificationSettingsIncomplete),
-            ("volume low", { $0.alertDelivery = AlertDeliveryReport(permissions: permissions(.authorized), outputVolume: 0.1, urgentLowAlarm: .authorized, problems: [.alarmVolumeLow(0.1)]) }, .alarmVolumeTooLow),
-            ("volume muted", { $0.alertDelivery = AlertDeliveryReport(permissions: permissions(.authorized), outputVolume: 0, urgentLowAlarm: .authorized, problems: [.alarmVolumeMuted]) }, .alarmVolumeTooLow),
             ("alarms denied", { $0.alertDelivery = AlertDeliveryReport(permissions: permissions(.authorized), outputVolume: 0.8, urgentLowAlarm: .denied, problems: [.urgentLowAlarmDenied]) }, .urgentLowAlarmOff),
             ("alarms not asked", { $0.alertDelivery = AlertDeliveryReport(permissions: permissions(.authorized), outputVolume: 0.8, urgentLowAlarm: .notDetermined, problems: [.urgentLowAlarmNotRequested]) }, .urgentLowAlarmNotSetUp),
             ("alarm scheduling failed", { $0.alertDelivery = AlertDeliveryReport(permissions: permissions(.authorized), outputVolume: 0.8, urgentLowAlarm: .authorized, problems: [.urgentLowAlarmFailed("limit")]) }, .urgentLowAlarmFailed),
@@ -135,8 +135,76 @@ final class AppModelWiringTests: XCTestCase {
             setup(services)
             let model = launch(services)
             XCTAssertTrue(kinds(model).contains(kind), "\(name): no \(kind) banner in \(kinds(model))")
-            XCTAssertFalse(model.now.banners(now: clock.now).isEmpty, "\(name): the Now tab shows a problem dot")
+            XCTAssertTrue(model.tabsNeedingAttention().contains(.now), "\(name): the Now tab shows a problem dot")
         }
+
+        // D55: the alarm volume marks Settings (notice + tab dot), not Now.
+        let volumeCases: [(String, AlertDeliveryReport, String)] = [
+            ("volume low", AlertDeliveryReport(permissions: permissions(.authorized), outputVolume: 0.1, urgentLowAlarm: .authorized, problems: [.alarmVolumeLow(0.1)]), "Alarm volume 10%."),
+            ("volume muted", AlertDeliveryReport(permissions: permissions(.authorized), outputVolume: 0, urgentLowAlarm: .authorized, problems: [.alarmVolumeMuted]), "Alarm volume 0%."),
+        ]
+        for (name, delivery, notice) in volumeCases {
+            let services = liveServices()
+            services.alertDelivery = delivery
+            services.bluetoothAuthorization = .allowed
+            let model = launch(services)
+            XCTAssertEqual(kinds(model), [], "\(name): no Now banner")
+            XCTAssertEqual(model.tabsNeedingAttention(), [.settings], "\(name): the Settings tab's dot, not Now's")
+            XCTAssertTrue(model.settings.alarmVolumeNotice?.hasPrefix(notice) ?? false, "\(name): \(String(describing: model.settings.alarmVolumeNotice))")
+        }
+    }
+
+    /// D55: the Settings notice and the Settings tab's dot follow each `.alertDelivery` change (the
+    /// live volume AlertEngine observes in the foreground) in the same model: they appear when the
+    /// volume drops and clear when it goes up again, with no relaunch and nothing to dismiss. The
+    /// Now tab's dot ignores the volume throughout; a real Now problem still marks Now.
+    func test_alarmVolumeNoticeAndSettingsDotFollowEveryDeliveryChange() async {
+        func delivery(volume: Float, notifications: NotificationPermissionState.Authorization = .authorized) -> AlertDeliveryReport {
+            let permissions = NotificationPermissionState(authorization: notifications, alerts: .enabled, sounds: .enabled, criticalAlerts: .notSupported, timeSensitive: .enabled)
+            var problems: [DeliveryProblem] = []
+            if notifications == .denied { problems.append(.notificationsDenied) }
+            if volume <= 0.001 { problems.append(.alarmVolumeMuted) } else if volume < AlertLimits.lowAlarmVolume { problems.append(.alarmVolumeLow(volume)) }
+            return AlertDeliveryReport(permissions: permissions, outputVolume: volume, urgentLowAlarm: .authorized, problems: problems)
+        }
+        let services = liveServices()
+        services.bluetoothAuthorization = .allowed
+        services.alertDelivery = delivery(volume: 0.8)
+        let model = launch(services)
+        XCTAssertNil(model.settings.alarmVolumeNotice)
+        XCTAssertEqual(model.tabsNeedingAttention(), [])
+
+        // The volume drops while the app is open.
+        services.alertDelivery = delivery(volume: 0.15)
+        services.send(.alertDelivery)
+        let raised = await eventually { model.settings.needsAttention }
+        XCTAssertTrue(raised)
+        XCTAssertEqual(model.settings.alarmVolumeNotice, "Alarm volume 15%. Alarms may be hard to hear; turn the volume up.")
+        XCTAssertEqual(model.tabsNeedingAttention(), [.settings])
+        XCTAssertEqual(kinds(model), [], "no Now banner for the volume")
+
+        // Turned up: both clear in the same model.
+        services.alertDelivery = delivery(volume: 0.5)
+        services.send(.alertDelivery)
+        let cleared = await eventually { !model.settings.needsAttention }
+        XCTAssertTrue(cleared, "cleared without a relaunch")
+        XCTAssertNil(model.settings.alarmVolumeNotice)
+        XCTAssertEqual(model.tabsNeedingAttention(), [])
+
+        // Exactly at the limit is not too low (AlertLimits.lowAlarmVolume, ServiceHealthMapping).
+        services.alertDelivery = delivery(volume: AlertLimits.lowAlarmVolume)
+        services.send(.alertDelivery)
+        await model.settle()
+        let atLimit = await eventually { model.settings.delivery.alarmVolume == .ok(level: Double(AlertLimits.lowAlarmVolume)) }
+        XCTAssertTrue(atLimit)
+        XCTAssertFalse(model.settings.needsAttention)
+
+        // Low volume and a critical delivery problem: Now keeps its banner and dot, Settings its own.
+        services.alertDelivery = delivery(volume: 0, notifications: .denied)
+        services.send(.alertDelivery)
+        let both = await eventually { model.tabsNeedingAttention() == [.now, .settings] }
+        XCTAssertTrue(both, "\(model.tabsNeedingAttention())")
+        XCTAssertEqual(kinds(model), [.notificationsDisabled], "the critical delivery banner stays on Now; the volume isn't one")
+        XCTAssertEqual(model.settings.alarmVolumeNotice, "Alarm volume 0%. Alarms may be hard to hear; turn the volume up.")
     }
 
     /// The Trio bridge switched on but unavailable in this build says why, in Settings and as a

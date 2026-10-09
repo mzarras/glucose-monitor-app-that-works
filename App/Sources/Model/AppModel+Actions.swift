@@ -40,6 +40,11 @@ extension AppModel {
         settingsRoute = route
     }
 
+    /// Now's header sound button and every other way to "the alerts": Settings › Alerts (D56).
+    func openAlerts() {
+        openSettings(.alerts)
+    }
+
     // MARK: - Now
 
     func selectChartWindow(_ window: ChartWindow) {

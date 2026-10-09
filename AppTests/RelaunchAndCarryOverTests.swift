@@ -42,8 +42,12 @@ final class RelaunchAndCarryOverTests: XCTestCase {
         XCTAssertEqual(relaunched.trends.period, .thirtyDays)
         XCTAssertNotNil(relaunched.trends.timeInRange, "the restored period's statistics are computed when Trends opens")
 
-        let withArgument = launch(services, preferences: stored, arguments: ["-tab", "alerts"])
-        XCTAssertEqual(withArgument.selectedTab, .alerts)
+        let withArgument = launch(services, preferences: stored, arguments: ["-tab", "predict"])
+        XCTAssertEqual(withArgument.selectedTab, .predict)
+        // D56: the Alerts tab's old argument opens Settings › Alerts.
+        let oldAlerts = launch(services, preferences: stored, arguments: ["-tab", "alerts"])
+        XCTAssertEqual(oldAlerts.selectedTab, .settings)
+        XCTAssertEqual(oldAlerts.settingsRoute, .alerts)
     }
 
     /// At launch, before the source's first state, nothing shows a stored value as current:

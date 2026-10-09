@@ -1,5 +1,8 @@
 // S5 banners: every "fail loud" condition becomes a visible banner at the top of the Now screen
 // (and a dot on the Now tab). Pure; unit-tested in AppBannerTests (test_S5_…).
+//
+// A low alarm volume is not a Now banner (PROGRESS D55): Settings shows a compact notice and the
+// Settings tab its dot (`SettingsText.alarmVolumeNotice`, `TabAttention`).
 
 import Foundation
 import GlucoseCore
@@ -40,7 +43,6 @@ struct AppBanner: Equatable, Identifiable, Sendable {
         case notificationsNotSetUp
         /// Banners, sounds or Time Sensitive are off for this app.
         case notificationSettingsIncomplete
-        case alarmVolumeTooLow
         case urgentLowAlarmOff
         /// iOS 26+: alarms haven't been asked for yet (D26).
         case urgentLowAlarmNotSetUp
@@ -167,13 +169,7 @@ enum AppBanners {
             break
         }
 
-        if case .tooLow(let level) = health.alarmVolume {
-            banners.append(AppBanner(
-                kind: .alarmVolumeTooLow, severity: .warning,
-                title: "Alarm volume is low",
-                detail: "Volume is at \(Int((level * 100).rounded()))%. Alarms may be hard to hear; turn the volume up.",
-                action: .openAlertDeliverySettings, actionTitle: "Alert delivery"))
-        }
+        // `health.alarmVolume` is deliberately not a banner here (D55): see the file comment.
 
         if health.urgentLowAlarm == .denied {
             // Critical (review m6, D26): on iOS 26+ the system alarm is how urgent low rings while

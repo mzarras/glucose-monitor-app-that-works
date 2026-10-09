@@ -62,9 +62,19 @@ final class RecordingNotificationCenter: AlertNotificationCenter {
         self.clock = clock
     }
 
+    /// Awaited once, by the next permission read, then cleared: a test holds a caller mid-way there
+    /// (e.g. `handleForeground()` inside bootstrap) and lets it go later.
+    var holdNextPermissionRead: (@MainActor () async -> Void)?
+
     func registerCategories() async {}
     func requestAuthorization() async -> NotificationPermissionState { permissions }
-    func permissionState() async -> NotificationPermissionState { permissions }
+    func permissionState() async -> NotificationPermissionState {
+        if let hold = holdNextPermissionRead {
+            holdNextPermissionRead = nil
+            await hold()
+        }
+        return permissions
+    }
 
     struct NotificationsNotAllowed: Error {}
 
@@ -124,6 +134,26 @@ final class RecordingAudioPlayer: AlertAudioPlaying {
 
     func stop() {
         isPlaying = false
+    }
+
+    // D55 volume monitoring, as `PlaybackAlertAudioPlayer` does it: one monitor at a time, the
+    // current value reported at once.
+    private var monitor: (@MainActor (VolumeMonitoringEvent) -> Void)?
+    var isMonitoringVolume: Bool { monitor != nil }
+
+    func startVolumeMonitoring(onEvent: @escaping @MainActor (VolumeMonitoringEvent) -> Void) {
+        monitor = onEvent
+        if let outputVolume { onEvent(.changed(outputVolume)) }
+    }
+
+    func stopVolumeMonitoring() {
+        monitor = nil
+    }
+
+    /// The person pressed a volume button.
+    func changeVolume(to volume: Float) {
+        outputVolume = volume
+        monitor?(.changed(volume))
     }
 }
 

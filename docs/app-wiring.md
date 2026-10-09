@@ -13,21 +13,21 @@ SensorApp → AppModel.launch(services: AppEnvironment.shared.services)   one mo
               │  for await change in services.changes() { apply(change) }
               │  tick()  ← RootView's 15 s TimelineView and scene → active
               ▼
-   NowViewState · TrendsViewState · AlertsViewState · SettingsViewState · CalibrationViewState · OnboardingState?
+   NowViewState · PredictViewState · TrendsViewState · AlertsViewState · SettingsViewState · CalibrationViewState · OnboardingState?
               ▲
    Screens render view states and call action closures (RootView) → AppModel+Actions → facade
 ```
 
 - **Pure mappings** (unit-tested with plain values): `ViewStateMapping.swift` (`NowMapping`,
   `CalibrationMapping`, `SettingsMapping`, `OnboardingMapping`), `ServiceHealthMapping.swift`,
-  `AlertsMapping.swift`, `TrendsMapping.swift`. `AppModel` only decides *when* to call them.
+  `AlertsMapping.swift`, `TrendsMapping.swift`, `PredictMapping.swift` (D57). `AppModel` only decides *when* to call them.
 - **Actions never write view states the facade owns.** They call the facade; the facade sends a
   `ServiceChange`; `apply(_:)` rebuilds from the facade's properties. Exceptions, all local UI
   state: chart window, Trends period, light/dark appearance, the pairing "in progress" flag, error
   lines under the control that failed (`SettingsFeedback`, `OnboardingState.*Message`), the share
   sheet, the optimistic Alerts draft (below).
 - **Clock.** `AppModel.clock` (injected in tests) is what the UI classifies against: Now's hero and
-  banners, the tab dot, the latch, "today". It is the phone clock; in a DEBUG replay run it is the
+  banners, the Now tab's dot, the latch, "today". It is the phone clock; in a DEBUG replay run it is the
   replay clock (`AppServices.replayClockNow`, compiled out of Release), so an accelerated replay's
   readings are current on screen. The UI tests still use speed 1 with `-replayStartMinute`.
 - **Time zone and clock changes (Phase 3).** `NSSystemTimeZoneDidChange` →
@@ -41,7 +41,20 @@ SensorApp → AppModel.launch(services: AppEnvironment.shared.services)   one mo
 - **Relaunch (Phase 3).** The Trends period is stored with the appearance (`AppUIPreferences`, read
   once protected data is available) and restored after the app is killed. A cold launch always opens
   Now (P3 review m6: a notification or widget tap lands on the current reading); a `-tab` launch
-  argument picks another tab (UI tests).
+  argument picks another tab (UI tests). The tab is never stored, so nothing needed migrating when
+  the Alerts tab went away (D56).
+- **Tabs (D56).** "Now · Predict · Trends · Settings" (`AppTab`; HANDOFF §7.3 had "Now · Trends ·
+  Alerts · Settings"). Alerts is Settings › Alerts (`SettingsRoute.alerts`), the first Settings
+  group. Everything that opened the Alerts tab opens it: Now's header sound button
+  (`AppModel.openAlerts()` → `openSettings(.alerts)`), and `-tab alerts`
+  (`AppModel.openTab(launchArguments:)`, so old UI-test and screenshot invocations still land on
+  the list); `-tab predict` opens Predict. `-tab` is a launch argument in every configuration
+  (`AppModel.launch`), not only DEBUG. Notification taps and the widget deep link open Now, as
+  before. Predict shows the D57 forecast (below, "Predict").
+- **Tab dots.** `AppModel.tabsNeedingAttention()` → `TabAttention.tabs(nowBanners:settings:)`, read
+  by RootView on every render and 15 s tick: Now while any S5 banner shows; Settings while the alarm
+  volume is too low (D55). Pure functions of the current view states: no flag, nothing to reset.
+  VoiceOver: "Settings, needs attention".
 - **Fixtures.** DEBUG `AppModel.fixtures()` builds fixture view states with no services, for
   previews and the fixture-based unit tests only.
 - **Stored-sensor baseline (Phase 3).** `hasStoredSensor` is only a default until
@@ -73,14 +86,19 @@ SensorApp → AppModel.launch(services: AppEnvironment.shared.services)   one mo
 | `.uploads` | `nightscout`, `dexcomShare` | Settings › Sharing, import forms (saved site), Now health |
 | `.historyImport` | `historyImport` | Onboarding / Settings import progress, Settings last import |
 | `.alertSettings` | `alertSettings` | Alerts (unless an edit is still on its way — see Alerts) |
-| `.alertDelivery` | `alertDelivery` | Settings › Alert delivery, Onboarding permissions, Now health |
+| `.alertDelivery` | `alertDelivery` | Settings › Alert delivery (and with it the D55 volume notice and Settings tab dot), Onboarding permissions, Now health |
 | `.storage` | `storage` | Settings › Data (size, count, retention, availability), Now health |
 | `.health` | `forceQuitGap`, `clockMismatchLatchedFor`, `bluetoothAuthorization` | Now latch + health, Settings Bluetooth, Onboarding permissions |
 | `.appearance` | `accent` | Settings accent (and the app tint) |
 | `.replay` | `replay` (DEBUG) | Now `replayScenario` (build banner), Settings › Developer; closes an untouched onboarding |
+| `.forecast` | `forecast` (D57) | Predict tab (`PredictMapping.make` at `forecastClock.read()`), Settings › Predictions |
 
-`tick()`: `services.updateClockMismatchLatch(now:)`, then the latch mirror; reloads "Today so far"
-when the local day changed.
+`tick()`: `services.updateClockMismatchLatch(now:)`, then the latch mirror; rebuilds the Predict tab
+at `forecastClock.read()` (D57: a run goes "out of date" on the tick after it is 15 minutes old, with or
+without a fetch); reloads "Today so far" when the local day changed. RootView's 15 s timeline keeps
+a fixed grid start (`clockStart`): a schedule rebuilt `from: .now` on every render handed the
+timeline a new date after every state change, and a tick that changes state (Predict's "now" rule
+moves every tick) then re-rendered forever.
 
 ## Screens
 
@@ -116,7 +134,8 @@ when the local day changed.
   the day/time left through connection steps and transient failures); TRIO from
   `ServiceHealthMapping.trioStatus`.
 - **Banners** (`AppBanners.make` over `ServiceHealth`): every problem a facade summary can report
-  maps to a banner (`test_S5_everyServiceHealthProblemBecomesABanner`):
+  maps to a banner (`test_S5_everyServiceHealthProblemBecomesABanner`), except a low or muted alarm
+  volume, which is Settings' (D55, below):
 
   | Source | Banner kind |
   |---|---|
@@ -126,7 +145,8 @@ when the local day changed.
   | `SensorState` error / failed (D36/D37: replace, pair again, sensor problem, interrupted) / calibration / expired / expiring | `sensorError`, `sensorNeedsReplacement`, `sensorNeedsPairing`, `sensorProblem`, `sensorInterrupted`, `calibrationNeeded`, `sensorExpired`, `sensorExpiring` |
   | `trio.unavailableReason` (on, but no Trio App Group in this build), `trio.isFailing` or `trio.isStarving` (bridge on, outputs allowed) | `trioBridgeFailing` |
   | `trio.heartbeatError` | `trioHeartbeatFailing` |
-  | `alertDelivery`: denied/provisional, not asked, banners/sounds/Time Sensitive off, volume low/muted, alarms denied/not asked, alarm scheduling failed, repeats short | `notificationsDisabled`, `notificationsNotSetUp`, `notificationSettingsIncomplete`, `alarmVolumeTooLow`, `urgentLowAlarmOff`, `urgentLowAlarmNotSetUp`, `urgentLowAlarmFailed`, `alertRepeatsShort` |
+  | `alertDelivery`: denied/provisional, not asked, banners/sounds/Time Sensitive off, alarms denied/not asked, alarm scheduling failed, repeats short | `notificationsDisabled`, `notificationsNotSetUp`, `notificationSettingsIncomplete`, `urgentLowAlarmOff`, `urgentLowAlarmNotSetUp`, `urgentLowAlarmFailed`, `alertRepeatsShort` |
+  | `alertDelivery` volume low/muted (D55) | none on Now: the Settings notice and the Settings tab's dot |
   | uploader failing / setup error / on but not configured | `nightscoutUploadFailing`, `shareUploadFailing` |
   | `forceQuitGap` | `forceQuitGap` (dismiss → `dismissForceQuitGap()`) |
 
@@ -159,9 +179,13 @@ Recomputed on period selection (the screen shows "Computing…" instead of the o
 on `.readings` while the tab is visible, and when the tab is opened after readings changed.
 Tests: `TrendsMappingTests`, `AppModelWiringTests.test_trendsFromTheStore`.
 
-### Alerts (HANDOFF §5; docs/alerts.md)
+### Alerts (HANDOFF §5; docs/alerts.md) — Settings › Alerts since D56
 
-Rows are AlertEngine's own `AlertKind`s (the app has no alert enum; D42 added "History isn't being
+A page in the Settings `NavigationStack` (`AlertsPage`; no stack of its own). The stack declares
+both destinations: `SettingsRoute.alerts` → the list, `AlertKind` → `AlertDetailView` (sound picker
+and preview, style, snooze); its path is a `NavigationPath` because it holds both types. The
+Settings row's value is `AlertsText.settingsSummary` ("16 of 19 on · quiet hours off"; urgent low
+always counts as on). Rows are AlertEngine's own `AlertKind`s (the app has no alert enum; D42 added "History isn't being
 saved", `storageFailing`, sound-on-silent off by default). D43: the five sensor expiry reminders
 (`AlertKind.sensorExpiryReminders`: 24 h, 12 h, 2 h, grace start, expired) are their own section,
 "Sensor expiry reminders", in the order they come due. Each row has one switch (on/off; review m8:
@@ -183,9 +207,9 @@ except urgent low (S7) and Low (Michael, D54) to Vibrate only, whether on or off
 every alert it changes and says that alerts off now will vibrate if turned on later. Silent
 announcements stay silent, each alert can be set back on its page, defaults are unchanged.
 DEBUG `-silenceAlertAudio` also passes `NoAlertHaptics` (no vibration). Screenshots:
-`alerts-expiry-reminders-*.png`, `alerts-expiry-24h-*.png` (`test_alertsShowTheSensorExpiryReminders`),
-`alerts-low-vibrate-only-*.png`, `alerts-list-vibrate-only-*.png` (`test_lowCanVibrateOnly`), with
-`SENSOR_WRITE_SCREENSHOTS=1`. Rows are built from `alertSettings` by
+`alerts-expiry-reminders-*.png`, `alerts-expiry-24h-*.png` (`test_alertsShowTheSensorExpiryReminders`,
+launched with the old `-tab alerts`), `alerts-low-vibrate-only-*.png`, `alerts-list-vibrate-only-*.png`
+(`test_lowCanVibrateOnly`, through the Settings row), with `SENSOR_WRITE_SCREENSHOTS=1`. Rows are built from `alertSettings` by
 `AlertsMapping.make`; every range comes from `AlertLimits` (the Phase 1 screen's own Low 60–100 /
 High 120–400 / rate 2–5 clamps are gone). An edit is `AlertsMapping.apply(edit, to:)` — the
 settings types' clamping setters — then `updateAlertSettings`. Edits made before the facade
@@ -199,16 +223,67 @@ low.").
 
 ### Settings
 
+Groups top to bottom: ALERTS (D56), ALERT DELIVERY, SENSOR, TRIO, SHARING, PREDICTIONS (D57), DATA,
+DIAGNOSTICS, APPEARANCE, ABOUT (DEVELOPER in DEBUG).
+
+**Alarm volume (D55).** A low alarm volume is not a Now banner. While
+`settings.delivery.alarmVolume` is `.tooLow` (below `AlertLimits.lowAlarmVolume`, 25 %), Settings
+shows one compact line at the top, "Alarm volume 15%. Alarms may be hard to hear; turn the volume
+up." with a link to Alert delivery (`AlarmVolumeNotice`, `SettingsText.alarmVolumeNotice`), the
+"Alarm volume" row's value is red, and the Settings tab shows the red dot. All three are computed
+from `settings.delivery`, which every `.alertDelivery` change rebuilds; AlertEngine observes the
+volume while the app is in the foreground and the services publish each change as `.alertDelivery`
+(p5-alerts), so they appear and clear live, with no dismiss button and no relaunch
+(`AppModelWiringTests.test_alarmVolumeNoticeAndSettingsDotFollowEveryDeliveryChange`). The row's
+red comes from the volume alone (`SettingsViewState.alarmVolumeIsTooLow`), and the dot from named
+causes (`attentionCauses`, today only `.alarmVolumeTooLow`), so no other cause can colour the row
+(p5-nav review m1; `NavigationTests.test_alarmVolumeRowFollowsTheVolumeAloneAndTheDotItsNamedCauses`).
+Predictions add no cause: a forecast problem is not a safety problem. Critical
+delivery problems (notifications off, urgent-low alarm off, …) stay Now banners. Screenshots:
+`settings-volume-notice-{light,dark}.png`, `tabbar-{light,dark}.png`
+(`ScreenshotTests`; the simulator can't set a low volume), and from the running app
+`settings-root-app-*.png`, `predict-app-*.png` (`test_settingsAlertsAndThePredictTab`).
+
 | Page | From | Actions |
 |---|---|---|
+| Alerts (D56) | `alertSettings` (`AlertsViewState`) | see Alerts above |
 | Sensor | `sensorState`, `sensorSession`, `storedSensorSerial`, `canStopSession`, `hasStoredSensor`, `bluetoothAuthorization` | `PairingGuidance.settingsOffer` → `pair(code:)` / `pairAgain(code:)` (`PairingError.noSensorToPairAgain` is shown, never retried as a new pairing); forget sensor; stop session only if `canStopSession` (G7: hidden); calibrate |
 | Trio | `trio` | `setTrioBridgeEnabled`; shows `TrioAppGroupID` to compare with Trio's App Group (`SettingsText.trioAppGroupHelp`: Trio shows it only as "Group ID: …" in glucose notifications with Add Glucose Source to Alarm on; its CGM screen's "CGM address :" line confirms the heartbeat), `unavailableReason`, last write, "N readings held back since …" (`heldBackReadings`/`heldBackSince`, the launch re-seed), heartbeat, D20 pause note |
 | Sharing | `nightscout`, `dexcomShare` (a failing uploader's line from `ServiceHealthMapping.uploadProblem`: setup, queue file, connection error, refusal, readings held because they are dated ahead of the phone's clock, readings dropped and why) | `saveNightscout(url:token:)`, `setNightscoutUploadEnabled`, `saveDexcomShare(accountName:password:receiverSerialNumber:)`, `setDexcomShareRegion` (US default, D7), `setDexcomShareEnabled`, `retryUploads`; errors under the Save button; D29/D30 notes |
 | Alert delivery | `alertDelivery` | `requestNotificationAuthorization`, `requestUrgentLowAlarmAuthorization`, open iOS Settings; `refreshAlertDelivery` on appear |
+| Predictions (D57) | `forecast` (`PredictMapping.settings`: setup, build host, last success, last error while failing) | "Show predictions" → `setPredictionsEnabled`; feed host → `savePredictionsHost` (ForecastKit's `ForecastFeedEndpoint`; its sentence under the field via `ForecastHostRefusal`, or "Saved."); "Last updated N min ago" (re-read every 15 s), the last error. Row: "on · <host>" / "off" / "not set up" |
 | Data | `storage`, `historyImport` | import (sheet), `exportAllReadingsCSV` / `exportDiagnostics` → share sheet (`ActivityView`), `setRetention`; size + reading count; `refreshStorageSummary` on appear. The diagnostics row says what the log holds (`SettingsText.diagnosticsContents`: sensor name and serial, glucose values, the Nightscout host name; no passwords, tokens or pairing codes) |
 | Appearance | `accent`; light/dark is the app's own (`AppUIPreferences`) | `setAccent` |
 | About | `Credits` (mirrors NOTICE.md, `AboutCreditsTests`) + font licences from the bundle | — |
 | Developer (DEBUG) | `replay` | `startReplay(scenario:speed:)`, `stopReplay`, `setDeveloperLiveOutputsEnabled` (D20) |
+
+### Predict (PROGRESS D57; docs/forecast.md)
+
+Forecasts from Michael's Zen Predict model, read from its public feed. **A forecast is never a
+reading**: it is held in memory only (`ForecastService`), read only by this tab and Settings ›
+Predictions, never stored, never the current value, never sent to Trio, alerts, uploads or the
+widget, and there are no model-driven alerts. ForecastKit may be imported only by files named
+`Forecast*`/`Predict*`/`*+Forecast`/`*+Predict` under `App/`, files under `Screens/Predict/`, and
+the tests (scripts/check.sh); the `AppServices` protocol names only app types (`ForecastStatus`,
+`ForecastHostRefusal`).
+
+| Part | Where |
+|---|---|
+| Fetching | `ForecastService` (Services/): `enterForeground()` from `LiveAppServices.handleForeground()` after bootstrap (never on a Bluetooth wake, a bootstrap or a state-restoration launch), `enterBackground()` from `handleBackground()`. Polls latest.json at once, then after `ForecastPolling.delayBeforeNextLatestPoll` (60 s; 60/120/300 s after failures); metrics.json with a successful latest poll when `isMetricsFetchDue` (30 min). One polling task; opening the tab (`predictTabAppeared()`) restarts it at once if the last attempt is more than 30 s old by the monotonic clock and no poll is running (the client's requests are shared, so cancelling a running poll would cancel them for everyone). Answers that arrive after the app left the foreground or the host changed are dropped; a `.cancelled` answer while polling is still wanted is not a failure (no backoff, no error), asked again at once the first time. |
+| Held | `ForecastStatus`: setup (not configured / off / on + host), last `LatestForecast` and `ForecastAccuracy`, last attempt and success, consecutive failures, last error, fetching. Kept while fetches fail; cleared when the host changes or predictions are turned off. |
+| Configuration | Build host: Info.plist `ZenPredictFeedHost` = `ZEN_PREDICT_FEED_HOST` (gitignored Signing.xcconfig; empty = not set up). Saved host and "Show predictions" in `AppPreferences` (`sensor.forecast.feedHost`, `sensor.forecast.enabled`; default on once a host exists); `ForecastSetupRules.resolve`. Never a forecast value in UserDefaults. |
+| Mapping | `PredictMapping.make(status:readings:at:)`, pure, at one `ForecastInstant` (wall and monotonic clock read together; `AppModel.forecastClock`, a `PredictClock`: `ForecastInstant.now()`, or in tests the injected clock). Every freshness question goes through `PredictFreshness` (`zenFreshness(at:)`, `currentRun(at:)`, `zenRunTime`, the conservative `zenRunAge(at:)`), so a clock set back never keeps a run current (D59). "≤40"/"≥400" come from `ForecastPoint.modelBound`, plus a value that rounds to 40 or 400. |
+| Rebuilt | every `.forecast` change, every readings reload (the last 3 h of stored readings, any source, from the same fetch as Now's chart: `predictReadings`) and every UI tick; the screen also asks for a rebuild just after the shown run turns stale (`redrawAt`, a `.task`). |
+| Screen | `Screens/Predict/`: header "ZEN PREDICT · YOUR MODEL"; freshness line "MODEL RAN 12:32 PM · 3 MIN AGO · FROM 105 AT 12:32 PM" (the run's time first, the same as the legend's; its conservative age; then the stored live reading within ±150 s of the run, if any; the feed's `bg` is never used); columns +30 MIN / +1 HR / +2 HR (Newsreader 46 pt, band colour as on Now, "predicted", "typical miss ±16" from the 7-day MAE; "≤40"/"≥400" at the model's clip edges, "—" when a horizon is null); chart; accuracy note and model version; disclaimer. VoiceOver: "Predicted 98 milligrams per deciliter in 30 minutes, typical miss 16" ("40 milligrams per deciliter or below" at the clip edge); a failed fetch names a rejected document's field, never its values (`ForecastErrorText`); the chart's label says which part is predicted. |
+| Chart | `PredictChartView`: the last 3 h of stored readings as on Now (`ChartSeries`: gaps > 15 min break the line, LOW/HIGH as edge markers, none after now), a dotted "NOW" rule, and only for a current run a dashed accent line from the stored reading at the run's time (if numeric) through hollow markers at +5/+30/+60/+120; the x axis then runs to the run's +2 h (+5 min). Legend "readings" / "predicted · model run 12:32 PM". No scrubbing. |
+| States | not set up / off (explanation + "Set up in Settings" → Settings › Predictions); waiting (no numbers); current; out of date (> 15 min, or dated ahead of the phone's clock: message, no numbers or line, readings chart kept); no run yet; fetch failing with a run held (shown with "COULDN'T REFRESH · RETRYING", out of date on time); fetch failing with nothing held (the error, no numbers). |
+| oref | Not shown in v1: the feed publishes no time for it (S3). |
+| DEBUG | `-forecastFixture current|stale|noRun|offline|notConfigured` (`ForecastFixtureFeed`): a fixture feed for `zen.example.com`, the saved host and switch cleared at launch. Every UI test launch passes one (`current` by default), so UI tests never make a request. Compiled out of Release. |
+
+Screenshots: `predict-{light,dark}.png`, `predict-stale-light.png`, `predict-not-configured-light.png`,
+`predict-clipped-low-dark.png`, `predict-failing-ax5-light.png`, `settings-predictions-light.png`
+(`ScreenshotTests.test_renderPredictScreens`), and from the running app `predict-app-*.png`,
+`settings-predictions-app-light.png` (`ReplayLaunchUITests`).
 
 ### Onboarding (HANDOFF §4.5, §4.6, §7.3.5; D7, D26, D35)
 
@@ -348,7 +423,15 @@ it in Release. The field is additive: older snapshots decode as false.
 `AlertsViewTests`, `AboutCreditsTests`; Phase 3: `TimeAndClockFailureModeTests` (time zone, DST,
 clock changes, the m17 overlay), `RelaunchAndCarryOverTests` (relaunch, carry-overs, m18 future-dated
 import display, copy fixes), `NinetyDayPerformanceTests`, `ListenModeWiringTests` (D45/D47),
-`UploadAndImportTextTests`; UI: the listen-mode tests in `ReplayLaunchUITests`;
+`UploadAndImportTextTests`; Phase 5: `NavigationTests` (D56 tabs, `-tab alerts`, Now's alerts
+shortcut, the Settings ALERTS summary, D55 tab attention and notice text), D57: `PredictMappingTests`
+(every Predict state, the 15-minute boundary, ahead of the clock, "≤40"/"≥400", the run's reading,
+oref never shown), `ForecastServiceTests` (foreground-only polling, backoff, metrics cadence, settings
+changes), `PredictWiringTests` (freshness on the tick without a fetch, Settings › Predictions,
+foreground-only fetching in the live services, a forecast never reaching the store, widget, Trio or
+alerts); UI: the listen-mode tests, `test_settingsAlertsAndThePredictTab`,
+`test_predictOutOfDateAndSettingsPredictions` and `test_predictWithoutAHostExplainsTheSetup` in
+`ReplayLaunchUITests`;
 the Gate 4 UI suite `AppUITests/ReplayLaunchUITests.swift`
 launches the DEBUG app on every ReplayKit scenario (`-replayScenario <name> -replaySpeed 1
 -replayStartMinute <m>`) and with no sensor.

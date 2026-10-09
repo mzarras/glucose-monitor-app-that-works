@@ -125,6 +125,7 @@ safe unsigned defaults (`org.example.sensor`) the gates build with. Fill in:
 | `APP_GROUP_ID` | `group.com.mzarras.sensor` (D2) | this app's own App Group: the widget snapshot (`widget-snapshot.json`). App **and** widget entitlements |
 | `TRIO_APP_GROUP_ID` | leave as `group.org.nightscout.$(DEVELOPMENT_TEAM).trio.trio-app-group` | Trio handoff and heartbeat (§4.1). App entitlements only, not the widget |
 | `SENSOR_APP_ENTITLEMENTS` | `App/Sensor.entitlements` (default) | switch to `App/Sensor+CriticalAlerts.entitlements` only after Apple grants Critical Alerts (§2.4) |
+| `ZEN_PREDICT_FEED_HOST` | your Zen Predict feed's host name, no `https://` (`//` starts an xcconfig comment); empty = predictions not set up | the Predict tab (D57, §4.6); Info.plist `ZenPredictFeedHost`. Settings › Predictions can override it |
 
 The reading database is **not** in either App Group: it lives in the app's own container,
 `Application Support/GlucoseStore/readings.sqlite` (D25), as do the upload queues (D48).
@@ -208,6 +209,8 @@ scripts/check-selftest.sh                                # plants defects in a t
 | `replay` | `SensorUITests` (the DEBUG app launched in the simulator on every ReplayKit scenario, and with no sensor) and `SensorTests/ReplayScenarioTests` (alert assertions through the app's own `ReplayRun` wiring); both suites must run | the wired app starts on each scenario and alerts fire when, and only when, expected |
 
 Logs go to `.build-logs/<timestamp>/`. Gate 5 of HANDOFF §10 (independent review) is not a script.
+Fast incremental runs, targeted tests, build slots, the simulator pool and checking that a log is a
+full certify run (D60): [`gates.md`](gates.md).
 The UI tests launch the app with DEBUG `-silenceAlertAudio`, so nothing plays. If you run the DEBUG
 app in the simulator yourself, alarms play on the Mac's speakers: add `-silenceAlertAudio` to the
 scheme's Run arguments, and `xcrun simctl shutdown all` when done.
@@ -363,10 +366,10 @@ uploads; Trends footnotes periods that contain it. A LOW/HIGH that Trio's native
 | Onboarding › Permissions, or Settings › Alert delivery | **Notifications**: Allow. Bluetooth is asked the first time the app looks for the sensor |
 | iOS Settings › Notifications › Sensor | Allow Notifications, Lock Screen and Banners, **Sounds**, **Time Sensitive Notifications** on. The app raises "Alerts may not show or sound" if alerts (banners), sounds or Time Sensitive are off. In each Focus, allow Time Sensitive notifications |
 | Onboarding › Urgent low alarm, or Settings › Alert delivery (iOS 26+) | **Allow alarms** (AlarmKit, D26): urgent low and its repeats ring as system alarms on silent, in Focus and while the app is suspended. Denied → critical banner "Urgent low alarm is off" |
-| Phone volume | In-app alert audio plays at the **media** volume. Settings › Alert delivery warns below 25 %, and a banner says "Alarm volume is low" |
-| Alerts tab › each alert | thresholds, sound (preview), snooze, and **Sound on silent** (D17). Urgent low: threshold 50–60, repeat every 2–5 min until acknowledged, snooze ≤ 30 min, no off switch, sound on silent always (S7) |
-| Alerts tab › Quiet hours | a daily window that silences every alert **except urgent low**, including Low and Missed readings (D27) |
-| Alerts tab › Sensor expiry reminders | 24 h (no sound by default), 12 h, 2 h, grace period started, sensor expired; each with its own switch; the one-off reminders have a Sound switch (D43) |
+| Phone volume | In-app alert audio plays at the **media** volume. Below 25 % the Settings tab shows a red dot and Settings a one-line notice ("Alarm volume 15%. …") with the red "Alarm volume" row; both clear as soon as the volume goes up while the app is open (D55) |
+| Settings › Alerts › each alert | thresholds, sound (preview), snooze, and **Sound on silent** (D17). Urgent low: threshold 50–60, repeat every 2–5 min until acknowledged, snooze ≤ 30 min, no off switch, sound on silent always (S7) |
+| Settings › Alerts › Quiet hours | a daily window that silences every alert **except urgent low**, including Low and Missed readings (D27) |
+| Settings › Alerts › Sensor expiry reminders | 24 h (no sound by default), 12 h, 2 h, grace period started, sensor expired; each with its own switch; the one-off reminders have a Sound switch (D43) |
 
 What "Sound on silent" can and can't do (D17): while the app is awake for a sensor wake-up (about
 every 5 minutes) it plays the alert sound itself, through the ringer switch. An alert that comes due
@@ -394,6 +397,19 @@ soon and rising/falling fast.
   (≤ 70 by default) is evaluated as usual, so it fires (subject to quiet hours, and silent if Low is
   off). A reading at or below the threshold at the end is the urgent-low alarm alone, without Low on
   top.
+
+### 4.6 Predictions (Zen Predict, D57; `docs/forecast.md`)
+
+| Where | Set |
+|---|---|
+| `Config/Signing.xcconfig` | `ZEN_PREDICT_FEED_HOST` = the feed's host (§2.1). Without it the Predict tab explains how to set one up |
+| Settings › Predictions | **Show predictions** (on by default once a host exists); **Feed host** (a bare host or `https://host`; `http://`, paths, ports and credentials are refused with the reason under the field), Save; "Last updated N min ago" and the last error |
+
+The tab reads `https://<host>/latest.json` (and `/metrics.json` every 30 minutes) about once a
+minute, **only while the app is open**; nothing is fetched in the background and nothing is saved.
+A forecast is never a reading: it is never the current value, never sent to Trio, Nightscout,
+Dexcom Share or the widget, and never raises an alert. A model run older than 15 minutes is shown as
+"Forecast out of date", without its numbers.
 
 ---
 
@@ -435,7 +451,7 @@ permissions, reboot, disk full, clock and time-zone changes, force-quit, listen 
 
 **Part A, the current sensor, in listen mode** (§0): the Dexcom app stays installed and keeps the
 sensor, Trio stays on its own G7 source, and this app's Trio handoff and uploads are off. Steps 1,
-1a, 2L, 3L, 3a, and whatever of step 5 the rest of this sensor's session allows.
+1a, 2L, 3L, 3a, 3b, and whatever of step 5 the rest of this sensor's session allows.
 **Part B, the next sensor, in primary mode**: delete the Dexcom app, pair this app, switch Trio to it,
 turn on uploads (switch-over below), then steps 2P, 3P, 4, 4a, 5 and 6.
 
@@ -479,7 +495,7 @@ source for its duration and uses an in-memory store (D20).
     value shown that the scenario did not deliver.
   - Record: screenshots of anything wrong.
 - [ ] **Sounds are distinct by ear** (`docs/alerts.md` §8).
-  - Do: Alerts tab › each alert › sound preview; all eight sounds.
+  - Do: Settings › Alerts › each alert › sound preview; all eight sounds.
   - Expect: no two confusable; none sounds like a pager.
   - Record: pairs you confuse.
 - [ ] **Low alert with the ringer off, app awake** (D17 path).
@@ -521,8 +537,9 @@ source for its duration and uses an in-memory store (D20).
   - Record: anything that rang.
 - [ ] **Media volume at zero** (alerts.md §10.6).
   - Do: media volume 0, ringer on; trigger a Low.
-  - Expect: Settings › Alert delivery shows the volume warning and the "Alarm volume is low"
-    banner; the notification sound still plays.
+  - Expect: the Settings tab's red dot, the Settings notice and the red "Alarm volume" row (no Now
+    banner, D55); the notification sound still plays. Turn the volume up with the app open: the
+    notice and the dot clear within a second, no relaunch.
   - Record: result.
 - [ ] **Quiet hours** (D27).
   - Do: set quiet hours around now; trigger a Low, then urgent low.
@@ -711,6 +728,26 @@ gap in this app (the Dexcom app keeps its own history).
     walk-away; never an old number presented as current.
   - Record: in `docs/widgets.md` › "Measured on device": typical and worst lag app → widget,
     unlocked, locked and in Low Power Mode.
+
+#### Step 3b — Predict tab (Zen Predict, D57; any time, Release)
+
+- [ ] **Forecast within about a minute.** Open the app on the Predict tab (§4.6 host set).
+  - Expect: within about a minute "MODEL RAN <time> · N MIN AGO · FROM <value> AT <time>" with three columns
+    labelled "predicted" and a dashed line on the chart; the value matches this app's reading at that
+    time (Now's chart). The model runs on readings that reach Nightscout, so in listen mode (no
+    upload from this app) it follows whatever uploads to Nightscout.
+- [ ] **Offline, then out of date.** Turn on airplane mode with the app open on Predict.
+  - Expect: within a few minutes "COULDN'T REFRESH · RETRYING" under the run's time, the forecast
+    still shown; **15 minutes after the last model run** the numbers and the dashed line disappear
+    and "Forecast out of date: last model run N min ago" shows (readings chart kept). Turn airplane
+    mode off: the forecast returns within about a minute of the next run.
+- [ ] **No host.** Build with `ZEN_PREDICT_FEED_HOST` empty (or save a different host and turn
+  "Show predictions" off).
+  - Expect: "Predictions aren't set up" (or "Predictions are off") with "Set up in Settings", which
+    opens Settings › Predictions.
+- [ ] **Never elsewhere.** While a forecast shows: Now, the widget, Trio and followers show only
+  readings; no alert follows a forecast.
+  - Record: anything else as an issue (step 6).
 
 ---
 

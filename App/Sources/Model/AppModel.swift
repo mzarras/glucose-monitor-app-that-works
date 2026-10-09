@@ -14,6 +14,7 @@
 import AlertEngine
 import Foundation
 import GlucoseCore
+import GlucoseStore
 import Observation
 import UIKit
 import WidgetCore
@@ -27,6 +28,11 @@ final class AppModel {
     var alerts: AlertsViewState
     var settings: SettingsViewState
     var calibration: CalibrationViewState
+    /// D57: the Predict tab, rebuilt on every `.forecast` change, readings reload and UI clock tick
+    /// (AppModel+Predict.swift), so a run goes "out of date" on time without a new fetch.
+    var predict: PredictViewState = .notConfigured
+    /// Stored readings of the last 3 hours (any source) for the Predict chart and the run's reading.
+    @ObservationIgnored var predictReadings: [GlucoseReading] = []
     /// Non-nil while onboarding is shown.
     var onboarding: OnboardingState?
     var isCalibrationPresented = false
@@ -50,6 +56,10 @@ final class AppModel {
     /// DEBUG replay run the replay clock (`AppServices.replayClockNow`), so an accelerated replay's
     /// readings are current rather than "dated ahead of the phone clock".
     let clock: @MainActor () -> Date
+    /// D57/D59: the clock the Predict tab is drawn for, wall and monotonic together (one instant
+    /// answers every freshness question, `PredictFreshness`). The phone's clocks, also in a DEBUG
+    /// replay run: the forecast feed is real time, not replay time. Injected in tests.
+    let forecastClock: PredictClock
     let preferences: AppUIPreferences?
     /// Whether the phone's protected data is readable (false before the first unlock after a restart,
     /// e.g. a Bluetooth-restoration launch). UI preferences are read and written, and onboarding is
@@ -111,8 +121,10 @@ final class AppModel {
         return PairingContext(hasStoredSensor: hasStoredSensor, isNewPairing: true, authenticatedInThisPairing: authenticated)
     }
 
-    init(now: NowViewState, trends: TrendsViewState, alerts: AlertsViewState, settings: SettingsViewState, calibration: CalibrationViewState, onboarding: OnboardingState?) {
+    init(now: NowViewState, trends: TrendsViewState, alerts: AlertsViewState, settings: SettingsViewState, calibration: CalibrationViewState, onboarding: OnboardingState?,
+         predict: PredictViewState = .notConfigured) {
         self.now = now
+        self.predict = predict
         self.trends = trends
         self.alerts = alerts
         self.settings = settings
@@ -120,16 +132,18 @@ final class AppModel {
         self.onboarding = onboarding
         self.services = nil
         self.clock = { Date() }
+        self.forecastClock = .phone
         self.preferences = nil
         self.protectedDataAvailable = { true }
         self.sensorStateKnown = true
     }
 
     private init(services: any AppServices, preferences: AppUIPreferences, clock: @escaping @MainActor () -> Date,
-                 protectedDataAvailable: @escaping @MainActor () -> Bool) {
+                 forecastClock: PredictClock, protectedDataAvailable: @escaping @MainActor () -> Bool) {
         self.services = services
         self.preferences = preferences
         self.clock = clock
+        self.forecastClock = forecastClock
         self.protectedDataAvailable = protectedDataAvailable
         // No preference is read here (review m2): `loadPreferences()` does, once protected data is
         // available.
@@ -151,19 +165,28 @@ final class AppModel {
     /// Onboarding is decided once both the sensor state is known and protected data is available
     /// (`decideOnboardingIfReady`), never from the facade's launch defaults.
     ///
-    /// Launch arguments: `-onboarding` shows onboarding; `-tab <now|trends|alerts|settings>` opens a
-    /// tab; DEBUG `-resetOnboardingFlag` forgets that onboarding was completed (UI tests). A replay
-    /// run (DEBUG `-replayScenario`, started by the services) never shows onboarding.
+    /// Launch arguments: `-onboarding` shows onboarding; `-tab <now|predict|trends|settings>` opens a
+    /// tab, `-tab alerts` Settings › Alerts (`openTab(launchArguments:)`); DEBUG
+    /// `-resetOnboardingFlag` forgets that onboarding was completed (UI tests). A replay run (DEBUG
+    /// `-replayScenario`, started by the services) never shows onboarding.
     static func launch(
         services: any AppServices,
         arguments: [String] = ProcessInfo.processInfo.arguments,
         preferences: AppUIPreferences = AppUIPreferences(),
         calendar: Calendar = .current,
         clock: (@MainActor () -> Date)? = nil,
+        forecastClock: PredictClock? = nil,
         protectedDataAvailable: @escaping @MainActor () -> Bool = { UIApplication.shared.isProtectedDataAvailable }
     ) -> AppModel {
+        // The Predict tab reads both clocks (D59). DEBUG tests that inject only `clock` get a forecast
+        // clock that follows it; Release never derives one from a wall clock.
+        #if DEBUG
+        let predictClock = forecastClock ?? clock.map(PredictClock.following) ?? .phone
+        #else
+        let predictClock = forecastClock ?? .phone
+        #endif
         let model = AppModel(services: services, preferences: preferences, clock: clock ?? defaultClock(services),
-                             protectedDataAvailable: protectedDataAvailable)
+                             forecastClock: predictClock, protectedDataAvailable: protectedDataAvailable)
         model.calendar = calendar
         model.launchArguments = arguments
         // `.notPaired` is also the facade's default before the source's first state: not evidence.
@@ -171,9 +194,7 @@ final class AppModel {
         model.rebuildAll()
         model.loadPreferences()
         if !model.preferencesLoaded { model.waitForProtectedData() }
-        if let index = arguments.firstIndex(of: "-tab"), index + 1 < arguments.count, let tab = AppTab(rawValue: arguments[index + 1]) {
-            model.selectedTab = tab
-        }
+        model.openTab(launchArguments: arguments)
         model.startObserving()
         return model
     }
@@ -260,15 +281,36 @@ final class AppModel {
             alerts: Fixtures.alerts,
             settings: Fixtures.settings(at: current),
             calibration: Fixtures.calibration(.available, at: current),
-            onboarding: arguments.contains("-onboarding") ? .initial : nil
+            onboarding: arguments.contains("-onboarding") ? .initial : nil,
+            predict: PredictFixtures.state(.current, at: current)
         )
-        if let index = arguments.firstIndex(of: "-tab"), index + 1 < arguments.count,
-           let tab = AppTab(rawValue: arguments[index + 1]) {
-            model.selectedTab = tab
-        }
+        model.openTab(launchArguments: arguments)
         return model
     }
     #endif
+
+    /// The Alerts tab's `-tab` value before D56. Old invocations (UI tests, screenshot scripts) still
+    /// pass it; it opens Settings › Alerts.
+    static let legacyAlertsTab = "alerts"
+
+    /// `-tab <now|predict|trends|settings>` selects that tab; `-tab alerts` opens Settings › Alerts
+    /// (D56). Anything else is ignored (Now). The tab itself is never persisted (a cold launch opens
+    /// Now, P3 review m6), so there is no stored "alerts" value to migrate.
+    func openTab(launchArguments arguments: [String]) {
+        guard let index = arguments.firstIndex(of: "-tab"), index + 1 < arguments.count else { return }
+        let value = arguments[index + 1]
+        if value == Self.legacyAlertsTab {
+            openSettings(.alerts)
+        } else if let tab = AppTab(rawValue: value) {
+            selectedTab = tab
+        }
+    }
+
+    /// The tab bar's red dots (RootView, every render and UI clock tick). Pure function of the
+    /// current view states (`TabAttention`): a dot clears as soon as its cause does.
+    func tabsNeedingAttention() -> Set<AppTab> {
+        TabAttention.tabs(nowBanners: now.banners(now: clock()), settings: settings)
+    }
 
     static func emptySettings(appearance: AppearancePreference) -> SettingsViewState {
         SettingsViewState(
@@ -371,6 +413,9 @@ final class AppModel {
             alertSettingsDraft = nil
             alerts = AlertsMapping.make(services.alertSettings)
         case .alertDelivery:
+            // D55: the Settings notice and tab dot are computed from `settings.delivery`, so a live
+            // volume change (AlertEngine observes it while the app is in the foreground) shows up
+            // or clears here, with nothing cached.
             settings.delivery = SettingsMapping.delivery(services.alertDelivery)
             refreshOnboardingPermissions()
             refreshHealth(time)
@@ -390,6 +435,9 @@ final class AppModel {
             settings.accent = services.accent
         case .replay:
             refreshReplay()
+        case .forecast:
+            refreshPredict()
+            settings.predictions = PredictMapping.settings(services.forecast)
         }
     }
 
@@ -413,6 +461,7 @@ final class AppModel {
         let time = clock()
         services.updateClockMismatchLatch(now: time)
         refreshLatch(time)
+        refreshPredict() // D57: freshness on the UI clock, with or without a fetch
         if let computedFor = todayComputedFor, computedFor != calendar.startOfDay(for: time) {
             reloadRecentReadings() // midnight: "Today so far" starts over
         }
@@ -459,6 +508,8 @@ final class AppModel {
             self.now.chartPoints = recent.chartPoints
             self.now.today = recent.today
             self.todayComputedFor = calendar.startOfDay(for: time)
+            self.predictReadings = PredictMapping.chartReadings(readings, now: time)
+            self.refreshPredict()
         }
     }
 
@@ -733,10 +784,14 @@ final class AppModel {
 }
 
 enum SettingsRoute: Hashable, Sendable {
+    /// Settings › Alerts (D56: was the Alerts tab).
+    case alerts
     case sensor
     case trio
     case sharing
     case alertDelivery
+    /// Settings › Predictions (D57).
+    case predictions
     case about
     #if DEBUG
     case developer

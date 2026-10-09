@@ -15,7 +15,8 @@
 // 3. Every drain attempt is a wake: storage health and alert tick, widget, clock-mismatch check,
 //    pipeline heartbeat.
 // 4. Foreground: permissions, `.foreground` (expiry reminders, D43), drain attempt (storage, tick),
-//    Trio retry, upload flush, retention, a 60 s ticker.
+//    Trio retry, upload flush, retention, a 60 s ticker; the Zen Predict feed (D57) is polled from
+//    here until the app leaves the foreground (never in the background).
 //
 // Area-specific parts are in the LiveAppServices+*.swift extensions.
 
@@ -26,6 +27,9 @@ import G7Kit
 import GlucoseCore
 import GlucoseStore
 import NightscoutKit
+#if DEBUG
+import ReplayKit // the replay run's scenario name (`replay`); every ReplayKit source is DEBUG-only
+#endif
 import UIKit
 import WidgetCore
 
@@ -73,6 +77,9 @@ final class LiveAppServices: AppServices {
         /// Review m2/m3: the G7 source's credential store, which refuses deletions the person did not
         /// ask for. Nil where the source has no Keychain store (scripted tests).
         var credentialGuard: GuardedG7CredentialStore?
+        /// D57: the Zen Predict feed (Predict tab). The default has no host and no network;
+        /// AppEnvironment passes the Info.plist host and URLSession (a fixture in DEBUG UI tests).
+        var forecastFeed = ForecastService.Feed.none
     }
 
     struct LaunchReplay: Equatable {
@@ -103,6 +110,9 @@ final class LiveAppServices: AppServices {
     let connectionSettingsStore: SensorConnectionSettingsStore
     let credentialGuard: GuardedG7CredentialStore?
     let historyImports: HistoryImportCoordinator
+    /// D57: the Zen Predict forecast, foreground only (LiveAppServices+Forecast.swift). Separate from
+    /// everything that handles readings.
+    let forecastService: ForecastService
 
     /// The G7 pipeline, for the whole process.
     let sensorPipeline: ReadingPipeline
@@ -110,6 +120,10 @@ final class LiveAppServices: AppServices {
     private(set) var productionStore: GlucoseStore?
     /// The production alert service; nil before bootstrap and during a DEBUG replay run.
     var productionAlerts: AlertService?
+    /// D55: true while the scene is active: set when it becomes active (`sceneBecameActive()`, or
+    /// `handleForeground()` called on its own), cleared by `handleBackground()`. The active alert
+    /// service monitors the media volume exactly while this is true (`updateVolumeMonitoring()`).
+    private(set) var isInForeground = false
     #if DEBUG
     var replayRun: ReplayRun?
     var replaySpeed: Double?
@@ -123,7 +137,7 @@ final class LiveAppServices: AppServices {
     var g7Started = false
     private var storeOpenError: String?
     private var isOpeningStore = false
-    private var foregroundTicker: Task<Void, Never>?
+    private(set) var foregroundTicker: Task<Void, Never>?
     private var storeChangesTask: Task<Void, Never>?
     private var calibrationTask: Task<Void, Never>?
     private var protectedDataObserver: NSObjectProtocol?
@@ -183,6 +197,9 @@ final class LiveAppServices: AppServices {
         supportsCalibration = loaded.settings.mode != .listen
         connectionSettingProblem = loaded.problem
         historyImports = HistoryImportCoordinator(diagnostics: dependencies.diagnostics)
+        forecastService = ForecastService(feed: dependencies.forecastFeed) { [diagnostics = dependencies.diagnostics, clock = dependencies.clock] message in
+            diagnostics.record(DiagnosticEvent(date: clock(), category: .app, message: message))
+        }
         sensorPipeline = ReadingPipeline(name: "sensor", source: dependencies.g7, diagnostics: dependencies.diagnostics, now: dependencies.clock)
         // B1: no widget snapshot until the store is open — before that the latest reading is
         // unknown, and a snapshot without it would clear the widget's clock-mismatch latch.
@@ -208,6 +225,7 @@ final class LiveAppServices: AppServices {
         }
         trioCoordinator.onChange = { [weak self] summary in self?.trioSummaryChanged(summary) }
         uploads.onChange = { [weak self] in self?.send(.uploads) }
+        forecastService.onChange = { [weak self] in self?.send(.forecast) }
         // Consume the G7 streams for the whole process (CGMSource stream rules), holding events
         // until bootstrap.
         sensorPipeline.startConsuming()
@@ -555,12 +573,14 @@ final class LiveAppServices: AppServices {
         if let last = preferences.lastHistoryImport { historyImports.restore(last) }
         detectForceQuitGap()
         loadSharingSecrets()
+        applyForecastSettings() // D57: no fetch here; only `handleForeground()` starts one
 
         // Alerts first, so the held states reach them in order.
         alertSettings = preferences.alertSettings
         let alerts = makeProductionAlerts()
         productionAlerts = alerts
         sensorPipeline.outputs.alerts = alerts
+        updateVolumeMonitoring() // D55: on only if the app is already in the foreground
         await alerts.start()
         await connectIntentBridge()
         await deliverPendingNotificationResponses()
@@ -587,7 +607,7 @@ final class LiveAppServices: AppServices {
         await updateTrioHeartbeat()
         updateClockMismatchLatch(now: now())
         await storeOpening.value
-        for change in [ServiceChange.readings, .sensor, .calibration, .trio, .uploads, .historyImport, .alertSettings, .alertDelivery, .storage, .health, .appearance] {
+        for change in [ServiceChange.readings, .sensor, .calibration, .trio, .uploads, .historyImport, .alertSettings, .alertDelivery, .storage, .health, .appearance, .forecast] {
             send(change)
         }
 
@@ -724,10 +744,30 @@ final class LiveAppServices: AppServices {
         }
     }
 
-    /// The app came to the foreground.
-    func handleForeground() async {
+    /// The scene became active (AppEnvironment.scenePhaseChanged). Marks the app in the foreground
+    /// at once, synchronously, then starts the foreground work: a `.background` that arrives before
+    /// that work runs clears the mark again and wins, so volume monitoring (an active `.playback`
+    /// session, D55) is never left on in the background (review m3).
+    @discardableResult
+    func sceneBecameActive() -> Task<Void, Never> {
+        isInForeground = true
+        return Task { await self.handleForeground(markedByScene: true) }
+    }
+
+    /// The app came to the foreground. `markedByScene`: `sceneBecameActive()` already set
+    /// `isInForeground` before starting this, and it is not set again here, because a
+    /// `handleBackground()` that ran in between must win. Called on its own (tests), it sets it.
+    func handleForeground(markedByScene: Bool = false) async {
+        // Set before any await, so a `handleBackground()` that arrives meanwhile wins (D55).
+        if !markedByScene { isInForeground = true }
         await bootstrap()
         guard isBootstrapped else { return }
+        // D57: the forecast feed is fetched only from here (never on a Bluetooth wake or a bootstrap),
+        // at once, unless `handleBackground()` arrived meanwhile.
+        if isInForeground { forecastService.enterForeground() }
+        // D55: the media volume is observed live until `handleBackground()`. Before the permission
+        // refresh below, so that reads the volume from an active session.
+        updateVolumeMonitoring()
         await startG7()
         await openStoreIfNeeded()
         // A drain attempt: stores waiting readings, sends the storage health and a tick (D42).
@@ -746,10 +786,16 @@ final class LiveAppServices: AppServices {
         await purgeIfDue()
         updateClockMismatchLatch(now: now())
         writePipelineHeartbeat()
-        startForegroundTicker()
+        // Only while still in the foreground: a `handleBackground()` that ran during the work above
+        // has stopped the ticker, and it must not start again on background wakes.
+        if isInForeground { startForegroundTicker() }
     }
 
     func handleBackground() {
+        // D55: no volume monitoring in the background (an alert sound that is playing is untouched).
+        isInForeground = false
+        updateVolumeMonitoring()
+        forecastService.enterBackground() // D57: no forecast requests in the background
         foregroundTicker?.cancel()
         foregroundTicker = nil
         writePipelineHeartbeat()

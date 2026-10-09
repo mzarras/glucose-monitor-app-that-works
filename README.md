@@ -133,7 +133,8 @@ scripts/check.sh                                             # gates: build, tes
 ```
 
 Use a DEBUG build only for replay scenarios; anything with a real sensor uses a Release build
-(`docs/setup.md` §3).
+(`docs/setup.md` §3). Certify and fast gate runs, targeted tests, build slots and the simulator pool:
+[`docs/gates.md`](docs/gates.md).
 
 ## License and credits
 

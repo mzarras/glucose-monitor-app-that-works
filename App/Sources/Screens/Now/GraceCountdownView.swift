@@ -5,6 +5,7 @@
 // clock). VoiceOver reads it to the minute. At zero the Now screen switches to "Sensor expired"
 // (NowRefreshSchedule ticks at the end).
 
+import GlucoseCore
 import SwiftUI
 import WidgetCore
 

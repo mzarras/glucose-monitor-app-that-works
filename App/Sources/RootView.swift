@@ -9,6 +9,13 @@ struct RootView: View {
     @Bindable var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
+    /// The UI clock's grid start, fixed for the view's life. Do not use `.periodic(from: .now, …)`
+    /// here: a schedule rebuilt from `.now` on every render hands the timeline a new date after every
+    /// state change, and a tick that changes state (the Predict tab's "now" moves every tick, D57)
+    /// then re-renders forever (the app froze on Predict). docs/app-wiring.md "`ServiceChange` → what
+    /// is rebuilt" explains it; NavigationTests.test_rootViewClockSettlesWhenATickChangesState
+    /// guards it.
+    @State private var clockStart = Date()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,12 +24,13 @@ struct RootView: View {
             }
             screen
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // The UI clock: every 15 s the latch is re-evaluated (S5) and the tab dot follows the
-            // banners, which the screens classify against `model.clock`.
-            TimelineView(.periodic(from: .now, by: 15)) { timeline in
+            // The UI clock: every 15 s the latch is re-evaluated (S5) and the tab dots follow the
+            // banners, which the screens classify against `model.clock`, and the Settings state
+            // (D55: alarm volume), which every `.alertDelivery` change rebuilds.
+            TimelineView(.periodic(from: clockStart, by: 15)) { timeline in
                 SensorTabBar(
                     selected: model.selectedTab,
-                    nowHasProblems: !model.now.banners(now: model.clock()).isEmpty,
+                    attention: model.tabsNeedingAttention(),
                     select: { model.selectTab($0) }
                 )
                 .onChange(of: timeline.date, initial: true) { _, _ in
@@ -64,13 +72,13 @@ struct RootView: View {
         switch model.selectedTab {
         case .now:
             NowScreen(state: model.now, calibration: model.calibration, actions: nowActions, clock: model.clock)
+        case .predict:
+            PredictScreen(state: model.predict, actions: predictActions)
         case .trends:
             TrendsScreen(state: model.trends, selectPeriod: { model.selectTrendsPeriod($0) })
-        case .alerts:
-            AlertsScreen(state: model.alerts, actions: alertsActions)
         case .settings:
-            SettingsScreen(state: model.settings, calibration: model.calibration, route: $model.settingsRoute, actions: settingsActions,
-                           hasStoredSensor: model.hasStoredSensor)
+            SettingsScreen(state: model.settings, calibration: model.calibration, alerts: model.alerts, route: $model.settingsRoute,
+                           actions: settingsActions, alertsActions: alertsActions, hasStoredSensor: model.hasStoredSensor)
         }
     }
 
@@ -87,13 +95,21 @@ struct RootView: View {
     private var nowActions: NowActions {
         NowActions(
             selectChartWindow: { model.selectChartWindow($0) },
-            openAlerts: { model.selectTab(.alerts) },
+            openAlerts: { model.openAlerts() },
             openSensorSettings: { model.openSettings(.sensor) },
             openCalibration: { model.isCalibrationPresented = true },
             exportDiagnostics: { model.exportDiagnostics() },
             pairSensor: { model.perform(.pairSensor) },
             pairAgain: { model.perform(.pairAgain) },
             performBannerAction: { model.perform($0) }
+        )
+    }
+
+    private var predictActions: PredictActions {
+        PredictActions(
+            openSettings: { model.openPredictionsSettings() },
+            appeared: { model.predictTabAppeared() },
+            refresh: { model.tick() }
         )
     }
 
@@ -130,7 +146,9 @@ struct RootView: View {
             setAppearance: { model.setAppearance($0) },
             setRetention: { model.setRetention($0) },
             setConnectionMode: { model.setConnectionMode($0) },
-            setPacketRecording: { model.setPacketRecording($0) }
+            setPacketRecording: { model.setPacketRecording($0) },
+            setPredictionsEnabled: { model.setPredictionsEnabled($0) },
+            savePredictionsHost: { model.savePredictionsHost($0) }
         ))
     }
 

@@ -44,9 +44,38 @@ struct SettingsViewState: Equatable, Sendable {
     var connectionSettingProblem: String? = nil
     /// D47: Settings › Diagnostics "Record raw glucose packets" (`recordsRawGlucosePackets`).
     var packetRecording: PacketRecordingState? = nil
+    /// D57: Settings › Predictions (the Zen Predict feed host and switch, last update).
+    var predictions = PredictionsSettings.notConfigured
 
     /// D45: listening forces the Trio handoff and uploads off, and hides pairing-only actions.
     var isListening: Bool { connection?.isListening == true }
+
+    /// D55: the compact notice at the top of Settings while the alarm volume is too low, nil
+    /// otherwise. Computed from `delivery`, which `AppModel` rebuilds on every `.alertDelivery`
+    /// change, so it clears as soon as the volume goes up: nothing to dismiss, no relaunch.
+    var alarmVolumeNotice: String? { SettingsText.alarmVolumeNotice(delivery.alarmVolume) }
+
+    /// D55: the "Alarm volume" row's red value. From the volume alone, never from
+    /// `needsAttention`, so no other cause of the tab's dot can colour this row (p5-nav review m1).
+    var alarmVolumeIsTooLow: Bool { alarmVolumeNotice != nil }
+
+    /// Why the Settings tab shows its red dot, by name. Each cause has its own row; none colours
+    /// another. Predictions add none: a forecast problem is not a safety problem (D57).
+    var attentionCauses: Set<SettingsAttentionCause> {
+        var causes: Set<SettingsAttentionCause> = []
+        if alarmVolumeIsTooLow { causes.insert(.alarmVolumeTooLow) }
+        return causes
+    }
+
+    /// D55: the Settings tab's red dot (`TabAttention`): any named cause.
+    var needsAttention: Bool { !attentionCauses.isEmpty }
+}
+
+/// A reason for the Settings tab's red dot (D55).
+enum SettingsAttentionCause: Hashable, Sendable, CaseIterable {
+    /// The alarm volume is below `AlertLimits.lowAlarmVolume`: the notice at the top of Settings and
+    /// the red "Alarm volume" row.
+    case alarmVolumeTooLow
 }
 
 /// What happened after a Settings action, for the page that started it. Nil = nothing to say.
@@ -57,6 +86,8 @@ struct SettingsFeedback: Equatable, Sendable {
     var export: String?
     /// D45: why the connection mode didn't change (`ConnectionModeText.errorText`).
     var connection: String?
+    /// D57: why the feed host was refused (`ForecastEndpointError.description`), or "Saved.".
+    var predictions: String?
 }
 
 /// DEBUG builds: replay a ReplayKit scenario in the running app (PROGRESS D11, D19, D20).
@@ -318,6 +349,14 @@ enum SettingsText {
         case .unavailable:
             return ("Not available", "Needs iOS 26 or later. On this iOS, urgent low uses a Time Sensitive notification and rings on silent while the app is running.")
         }
+    }
+
+    /// D55: "Alarm volume 15%. Alarms may be hard to hear; turn the volume up." while the volume is
+    /// below `AlertLimits.lowAlarmVolume` (`.tooLow`, ServiceHealthMapping.alarmVolume); nil when it
+    /// is fine or not known yet.
+    static func alarmVolumeNotice(_ status: AlarmVolumeStatus) -> String? {
+        guard case .tooLow(let level) = status else { return nil }
+        return "Alarm volume \(Int((level * 100).rounded()))%. Alarms may be hard to hear; turn the volume up."
     }
 
     static func alarmVolume(_ status: AlarmVolumeStatus) -> String {

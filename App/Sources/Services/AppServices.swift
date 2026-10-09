@@ -195,6 +195,22 @@ protocol AppServices: AnyObject {
     var accent: AccentChoice { get }
     func setAccent(_ accent: AccentChoice)
 
+    // MARK: Predictions (PROGRESS D57: a forecast is never a reading)
+
+    /// The Zen Predict forecast held in memory (`ForecastService`), with its fetch status. Read only
+    /// by the Predict tab and Settings › Predictions; never stored, never sent anywhere. A change
+    /// sends `.forecast`.
+    var forecast: ForecastStatus { get }
+    /// Settings › Predictions "Show predictions". Off stops fetching and forgets what was held.
+    func setPredictionsEnabled(_ enabled: Bool) async
+    /// Validates and saves the feed host (the forecast package's endpoint rules; the refusal carries
+    /// its sentence); nothing changes when it throws. A new host stops fetching from the old one and
+    /// forgets what was held.
+    func savePredictionsHost(_ input: String) async throws(ForecastHostRefusal)
+    /// The Predict tab appeared: fetches at once if the last attempt is more than 30 s old (only
+    /// while the app is in the foreground).
+    func predictTabAppeared()
+
     // MARK: Health
 
     /// Set at launch when the app was force-quit while the sensor was active (HANDOFF §4.6).

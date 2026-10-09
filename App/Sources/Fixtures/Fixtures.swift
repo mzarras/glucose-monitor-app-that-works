@@ -7,6 +7,7 @@
 import AlertEngine
 import Foundation
 import GlucoseCore
+import GlucoseStore
 import WidgetCore
 
 enum Fixtures {
@@ -172,7 +173,7 @@ enum Fixtures {
         }
         if scenario == .manyProblems {
             health.notifications = .denied
-            health.alarmVolume = .tooLow(level: 0.15)
+            health.alarmVolume = .tooLow(level: 0.15) // D55: Settings shows it; no Now banner
             health.urgentLowAlarm = .denied
             health.nightscout = .failing(failureCount: 3, lastError: "HTTP 401 Unauthorized.", since: now.addingTimeInterval(-20 * 60))
             health.forceQuitGap = ForceQuitGap(from: now.addingTimeInterval(-5 * 3_600), to: now.addingTimeInterval(-3.5 * 3_600))
@@ -338,7 +339,7 @@ enum Fixtures {
     // MARK: - Settings
 
     static func settings(at now: Date = referenceNow) -> SettingsViewState {
-        SettingsViewState(
+        var state = SettingsViewState(
             sensor: SensorSettings(state: activeSensor(now: now), serial: "SAMPLE0001"),
             trio: TrioSettings(isEnabled: true, status: .ok(lastHandoff: now.addingTimeInterval(-3 * 60))),
             nightscout: NightscoutSettings(url: "https://nightscout.example.com", hasToken: true, uploadEnabled: true, status: .ok(lastUpload: now.addingTimeInterval(-3 * 60))),
@@ -352,6 +353,8 @@ enum Fixtures {
             databaseSizeBytes: 18_400_000,
             appVersion: "0.1.0 (1)"
         )
+        state.predictions = PredictFixtures.settings(.current, at: now) // D57
+        return state
     }
 
     /// D45/D47 design (not wired yet): listening alongside the Dexcom app, packet recording on.
@@ -359,6 +362,13 @@ enum Fixtures {
         var state = settings(at: now)
         state.connection = ConnectionModeState(mode: .listen)
         state.packetRecording = PacketRecordingState(isOn: true)
+        return state
+    }
+
+    /// D55: everything fine except the alarm volume (15 %): the compact notice at the top.
+    static func settingsVolumeLow(at now: Date = referenceNow) -> SettingsViewState {
+        var state = settings(at: now)
+        state.delivery.alarmVolume = .tooLow(level: 0.15)
         return state
     }
 

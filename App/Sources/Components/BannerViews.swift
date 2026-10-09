@@ -1,5 +1,6 @@
 // S5 banners and the DEBUG build banner.
 
+import GlucoseCore
 import SwiftUI
 import WidgetCore
 

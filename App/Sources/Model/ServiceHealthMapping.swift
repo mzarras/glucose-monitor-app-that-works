@@ -1,6 +1,8 @@
 // `AppServices` summaries → `ServiceHealth` (S5). Pure. Every problem a summary can report ends
 // up in a `ServiceHealth` field that `AppBanners.make` turns into a banner
-// (`test_S5_everyServiceHealthProblemBecomesABanner`).
+// (`test_S5_everyServiceHealthProblemBecomesABanner`), except a low alarm volume, which is the
+// Settings notice and tab dot instead (PROGRESS D55; same test, and
+// `test_alarmVolumeNoticeAndSettingsDotFollowEveryDeliveryChange`).
 
 import AlertEngine
 import Foundation
