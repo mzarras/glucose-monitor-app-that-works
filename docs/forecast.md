@@ -35,33 +35,49 @@ A forecast is a prediction, not a measurement. S1 and S6 apply to it:
 `scripts/check.sh` (safety gate, "D57 forecast isolation"; `scripts/check-selftest.sh` plants a
 breach of each rule and an allowed importer as a negative control) fails unless:
 
-- **Manifest.** `Packages/ForecastKit/Package.swift`, as SwiftPM reads it (`swift package
-  dump-package`), has exactly the targets `ForecastKit` (regular) and `ForecastKitTests` (test), no
-  package dependencies, no target dependency except `ForecastKitTests` → `ForecastKit`, and no
-  `unsafeFlags`, linked libraries, linked frameworks or plugin usages. A `binaryTarget`,
-  `systemLibrary` or `plugin` target is another target type and fails "exactly".
+- **Packages.** Every `Packages/*/Package.swift`, and every local package `project.yml` lists, is
+  read as SwiftPM reads it (`swift package dump-package`). ForecastKit's has exactly the targets `ForecastKit` (regular) and
+  `ForecastKitTests` (test), no package dependencies, no target dependency except
+  `ForecastKitTests` → `ForecastKit`, and no `unsafeFlags`, linked libraries, linked frameworks or
+  plugin usages (a `binaryTarget`, `systemLibrary` or `plugin` target is another target type and
+  fails "exactly"). No package uses `unsafeFlags`, and no other package depends on ForecastKit, by
+  name or by a path that resolves to `Packages/ForecastKit`.
 - **Foundation only.** Every import in `Packages/ForecastKit/Sources` is of Foundation.
 - **Who may name ForecastKit.** The allowlist: files under `App/` whose name starts with `Forecast`
   or `Predict` or ends with `+Forecast.swift` or `+Predict.swift`; anything under
   `App/Sources/Screens/Predict/`; `AppTests/` and `AppUITests/`; and `Packages/ForecastKit/` itself.
-  A deny list is applied first and wins over those names: `App/Sources/Pipeline/`,
-  `App/Sources/WidgetBridge/`, `App/Sources/Intents/`, `App/Sources/Screens/Now/`,
-  `App/Sources/ViewState/Now*`, `App/Sources/Composition/AlertPorts*`, and under
-  `App/Sources/Services/` anything named `TrioCoordinator*`, `UploadCoordinator*`, `*Widget*` or
-  `*Alert*`, and `Widgets/`. Outside the allowlist, **any Swift file under `App/`, `Widgets/` or
-  `Packages/` that contains the word `ForecastKit` anywhere** (code, comment or string; any line
-  endings) fails, named with its lines. That backstop is what makes the check fail-safe; the import
-  matcher adds a precise "imported outside its allowlist" message for the imports it parses.
-- **No `@_exported`.** Any `@_exported` in a file under `App/`, `Widgets/` or `Packages/` fails,
-  found as raw text (no parsing): it would make a module's names visible in every file of the
-  module that imports it.
-- **Linkage.** `project.yml` as XcodeGen resolves it (`xcodegen dump`, so includes, YAML anchors and
-  aliases, escapes and target templates are resolved): only the targets `Sensor`, `SensorTests` and
-  `SensorUITests` may depend on the ForecastKit package (under any `packages:` key whose entry names
-  it) or name it; nothing else outside `packages:` may name it. If XcodeGen cannot resolve the spec,
-  the check fails. No other package manifest names ForecastKit.
-- **Nothing vacuous.** A missing or Swift-free scan root (`App/`, `Widgets/`, `Packages/`), a
-  missing `project.yml`, and a matcher that finds no import in ForecastKit's own sources each fail.
+  A deny list is applied first and wins over those names: `Widgets/`; `App/Sources/Pipeline/`,
+  `WidgetBridge/`, `Intents/`, `Screens/Now/`, `Screens/Alerts/`, `ViewState/Now*`,
+  `Screens/Trends/`, `Composition/AlertPorts*`, `Model/ViewStateMapping*`, `Model/NowMapping*`;
+  and any path under `App/Sources/` containing `Alert`, `Trio`, `Upload`, `Sharing`, `Widget`,
+  `Pipeline`, `HistoryImport`, `SensorDevice` or `Trends` (forecasts appear nowhere but the
+  Predict tab). Outside the allowlist, **any Swift file under the scan roots
+  (`App/`, `Widgets/`, `Packages/`, `AppTests/`, `AppUITests/`; only `Packages/*/.build` skipped)
+  that contains the word `ForecastKit` anywhere** (code, comment or string; any line endings) fails,
+  named with its lines. That backstop is what makes the check fail-safe; the import matcher adds a
+  precise "imported outside its allowlist" message for the imports it parses.
+- **No `@_exported`.** Any `@_exported` in a file under the scan roots fails, found as raw text (no
+  parsing): it would make a module's names visible in every file of the module that imports it.
+- **No symbolic links** under `App/`, `Widgets/`, `Packages/` (except `Packages/*/.build`),
+  `AppTests/`, `AppUITests/` or `Config/`: the scans do not follow them, but the build would.
+- **The project compiles only what is scanned.** In `project.yml` as XcodeGen resolves it
+  (`xcodegen dump`, so includes, YAML anchors and aliases, escapes and target templates are
+  resolved; if XcodeGen cannot resolve the spec, the check fails), each target compiles only from
+  its own directory: `Sensor` from `App/`, `SensorWidgets` from `Widgets/`, `SensorTests` from
+  `AppTests/`, `SensorUITests` from `AppUITests/` (any other target from nothing); `Resources/` only
+  as resources (`buildPhase: resources` or `type: folder`). So test code, which may import
+  ForecastKit, is never compiled into the app. Absolute paths and `..` are refused. Every
+  `packages:` entry is remote (not a `file:` URL) or a local path that is exactly
+  `Packages/<name>`, so no package outside the checked ones can be linked.
+- **Linkage.** Only the targets `Sensor`, `SensorTests` and `SensorUITests` may depend on the
+  ForecastKit package (under any `packages:` key whose entry names it), and in them ForecastKit
+  appears only as that package dependency, never in sources, settings, config files or schemes.
+  Nothing else outside `packages:` names it.
+- **No flags that import without an import line.** No `module-alias` or `import-module` in
+  `project.yml`, `Config/*.xcconfig`, any `Package.swift`, their resolved dumps, or, when the build
+  gate ran in the same run, the compile commands in its logs.
+- **Nothing vacuous.** A missing or Swift-free scan root, a missing `project.yml`, an unreadable
+  manifest and a matcher that finds no import in ForecastKit's own sources each fail.
 
 The import matcher normalises CRLF and CR-only line endings, reads each file twice (as written and
 with `//` and `/* */` comments removed), and handles attributes (`@testable`, `@_spi(…)`,
@@ -70,9 +86,19 @@ with `//` and `/* */` comments removed), and handles attributes (`@testable`, `@
 and a declaration split over lines. It is not proof against a string holding `//` or `/*` combined
 with a comment between the tokens (`let s = "//"; import/**/ForecastKit`); the backstop is.
 
-**What it cannot see:** the import rules keep ForecastKit's names out of other files, but an allowed
-file can still hand a forecast value to other code in the same module (e.g. through a property of
-an app type). That stays a review rule: nothing outside the Predict UI may take a forecast value.
+**What it cannot see:** an allowed file can still hand a forecast value to other code in the same
+module through an app type (a property, a closure). With SE-0444 `MemberImportVisibility`, which
+the Sensor target enables (p5-predict), using that value's ForecastKit members in a file that does
+not import ForecastKit is a compile error, so the import rules above also hold for member access;
+passing the value along opaquely is still possible and stays a review rule: nothing outside the
+Predict UI may take a forecast value. That SE-0444 stays on for Sensor is enforced by `check.sh`
+after the p5 merge (the setting lives in p5-predict's `project.yml`).
+
+The deny list is a heuristic: a case-sensitive substring test on the whole path. It fails safe, so
+a future Predict file whose path contains a deny word (e.g. `PredictAlertBanner.swift`) fails
+loudly and must be renamed. A flag assembled from xcconfig variables (e.g.
+`-$(A)$(B)` spelling `-module-alias`) is caught only by the build-log grep, so only in a run that
+includes the build gate (a certify run). Run-script build phases are not inspected.
 
 ## The feed
 

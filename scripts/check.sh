@@ -16,11 +16,13 @@
 #   safety  ≥ 1 passing `test_S<n>_…` for every rule S1…S8, none failing or skipped, no XCTSkip /
 #           XCTExpectFailure in files that hold safety tests; S6 compile-out checks (ReplayKit and
 #           `validateAllowingReplay` absent from Release objects, present in Debug); S6 caller checks;
-#           D57 forecast isolation (ForecastKit's manifest: its two targets only, no dependencies,
-#           unsafe flags, linked libraries or plugins; its sources import only Foundation; outside an
-#           allowlist of App files (Forecast*/Predict*, Screens/Predict; reading, Trio, upload, widget,
-#           intent, alert and Now code denied) no Swift file names ForecastKit at all; no @_exported;
-#           project.yml, as XcodeGen resolves it, links it only to Sensor and its test targets).
+#           D57 forecast isolation (manifests: ForecastKit's two targets only and no dependencies,
+#           no unsafeFlags in any package, nothing depends on ForecastKit; its sources import only
+#           Foundation; outside an allowlist of App files (Forecast*/Predict*, Screens/Predict;
+#           reading, alert, Trio, upload, widget, intent and Now code denied) no Swift file names
+#           ForecastKit at all; no @_exported, no symlinks; project.yml, as XcodeGen resolves it,
+#           compiles only scanned directories and links ForecastKit only as a package dependency of
+#           Sensor and its test targets; no module-alias/import-module flags).
 #   replay  SensorUITests (app launched on each ReplayKit scenario) and SensorTests/ReplayScenarioTests
 #           (alert assertions) on the iOS simulator; both suites must run and pass.
 #
@@ -376,34 +378,68 @@ gate_safety() {
 
 # ---------------------------------------------------------------------------------------------
 # D57 forecast isolation (run at the end of gate 3). A forecast is never a reading.
-#   Manifest  Packages/ForecastKit/Package.swift as SwiftPM reads it (`swift package dump-package`):
-#             exactly the targets ForecastKit (regular) and ForecastKitTests (test); no package
-#             dependencies; no target dependency except ForecastKitTests -> ForecastKit; no
-#             unsafeFlags, linkedLibrary, linkedFramework or plugin usage. Binary, system-library and
-#             plugin targets have other target types, so they fail "exactly".
-#   Imports   in the Swift files under App/, Widgets/ and Packages/ (the scan roots):
+#   Packages  every Packages/*/Package.swift, and every local package project.yml lists, as SwiftPM
+#             reads it (`swift package dump-package`): ForecastKit has exactly the targets
+#             ForecastKit (regular) and ForecastKitTests (test), no package dependencies, no target
+#             dependency except ForecastKitTests -> ForecastKit, and no unsafeFlags, linkedLibrary,
+#             linkedFramework or plugin usage (binary, system-library and plugin targets fail
+#             "exactly"). No package uses unsafeFlags, and no other package depends on a package
+#             that is ForecastKit (by name or by real path).
+#   Imports   in every file under App/, Widgets/, Packages/, AppTests/ and AppUITests/ (the scan
+#             roots; Packages/*/.build skipped):
 #             - allowlist (forecast_import_allowed): only files under App/ named Forecast*, Predict*,
-#               *+Forecast.swift or *+Predict.swift, anything under App/Sources/Screens/Predict/, and
-#               Packages/ForecastKit/ may import ForecastKit; a deny list (reading, Trio, upload,
-#               widget, intent, alert and Now-screen code) is applied first and wins. AppTests/ and
-#               AppUITests/ are not scanned: they may import it;
-#             - backstop: a file outside the allowlist that contains the word ForecastKit anywhere
-#               (code, comment or string) fails, whatever the line endings. This is what makes the
+#               *+Forecast.swift or *+Predict.swift, anything under App/Sources/Screens/Predict/,
+#               AppTests/, AppUITests/ and Packages/ForecastKit/ may name ForecastKit; a deny list
+#               (reading, alert, Trio, upload, sharing, history import, sensor, widget, intent, Now
+#               and Trends code) is applied first and wins;
+#             - backstop: a Swift file outside the allowlist that contains the word ForecastKit
+#               anywhere (code, comment or string; any line endings) fails. This is what makes the
 #               check fail-safe; the matcher (forecast_imports) adds precise import messages;
-#             - any `@_exported` in a scanned file fails (raw text, no parsing): it would make a
-#               module's names visible in every file of the importing module;
+#             - any `@_exported` fails (raw text, no parsing): it would make a module's names visible
+#               in every file of the importing module;
 #             - ForecastKit's sources may import Foundation only (the matcher).
-#   Linkage   project.yml as XcodeGen resolves it (`xcodegen dump`: includes, anchors, escapes and
-#             templates resolved): only the targets Sensor, SensorTests and SensorUITests may depend
-#             on the ForecastKit package (under any key whose entry names ForecastKit) or name it
-#             anywhere; outside `packages:` and those targets nothing may name it. Fails closed if
-#             XcodeGen cannot resolve the spec. No other package manifest names it.
-#   Vacuity   a missing or Swift-free scan root, a missing project.yml, and a matcher that finds no
-#             import in ForecastKit's sources each fail rather than passing on nothing.
-# Limits: the import rules keep ForecastKit's names out of other files; they cannot stop an allowed
-# file from handing a forecast value to other code of the same module, which stays a review rule
-# (docs/forecast.md "Enforcement").
-FORECAST_SCAN_DIRS="App Widgets Packages"
+#   Symlinks  none under App/, Widgets/, Packages/ (Packages/*/.build skipped), AppTests/,
+#             AppUITests/ or Config/: the scans do not follow them, the build would.
+#   Project   project.yml as XcodeGen resolves it (`xcodegen dump`: includes, anchors, escapes and
+#             templates resolved; fails closed if XcodeGen cannot resolve it):
+#             - each target compiles only from its own directory: Sensor from App/, SensorWidgets
+#               from Widgets/, SensorTests from AppTests/, SensorUITests from AppUITests/ (any
+#               other target from nothing); Resources/ only as resources (`buildPhase: resources` or
+#               `type: folder`). So the scans above read everything that is compiled, and test code
+#               allowed to name ForecastKit is never compiled into the app;
+#             - every `packages:` entry is remote (url/github, not file:) or a local path that is
+#               exactly Packages/<name>, so the package checks above read every local package;
+#             - only Sensor, SensorTests and SensorUITests depend on the ForecastKit package (under
+#               any key whose entry names it), and in them ForecastKit appears only as such a
+#               dependency, never in sources, settings, config files or schemes; outside `packages:`
+#               and those targets nothing names it.
+#   Flags     no `module-alias` or `import-module` (which import or rename a module with no import
+#             line) in project.yml, Config/*.xcconfig, any Package.swift, their resolved dumps, or
+#             this run's build logs (when gate 1 ran: the compile commands themselves).
+#   Vacuity   a missing or Swift-free scan root, a missing project.yml, an unreadable manifest and a
+#             matcher that finds no import in ForecastKit's sources each fail.
+# Out of reach: an allowed file can still hand a forecast value to other code of the same module
+# through an app type; with SE-0444 (MemberImportVisibility, enabled on the Sensor target) using its
+# members there without importing ForecastKit is a compile error, so the import rules above hold for
+# member access too. The deny list is a case-sensitive substring test on the whole path: it fails
+# safe, so a future Predict file whose path contains a deny word (e.g. PredictAlertBanner.swift)
+# fails loudly and must be renamed. A flag assembled from xcconfig variables is caught only by the
+# build-log grep, i.e. only in a run that includes the build gate (certify). Run scripts and other
+# build phases are not inspected (review rule, docs/forecast.md "Enforcement").
+FORECAST_SCAN_DIRS="App Widgets Packages AppTests AppUITests"
+FORECAST_SYMLINK_DIRS="App Widgets Packages AppTests AppUITests Config"
+
+# `find` over regular files under the given directories, skipping only SwiftPM's build output
+# Packages/<name>/.build (a `.build` anywhere else is compiled by XcodeGen, so it is read). The
+# directories come first, then "--", then the rest of the expression, which must end in an action
+# (-print or -exec … {} +).
+FORECAST_PRUNE="Packages/*/.build"
+forecast_find() {
+    dirs=""
+    while [ $# -gt 0 ] && [ "$1" != "--" ]; do dirs="$dirs $1"; shift; done
+    [ $# -gt 0 ] && shift
+    find $dirs \( -path "$FORECAST_PRUNE" ! -path 'Packages/*/*/*' \) -prune -o -type f "$@"
+}
 
 # Every import declaration, one per line: "path:line<TAB>module". Line endings are normalised first
 # (CRLF and CR-only, which awk would read as one record). With strip=1 each file is read with its
@@ -476,11 +512,10 @@ FNR == 1 { pending = ""; depth = 0; line = 0 }
     }
 }'
 
-# The import declarations in every Swift file under the given directories (build output skipped).
+# The import declarations in every Swift file under the given directories.
 forecast_imports() {
     for strip in 0 1; do
-        find "$@" -name '*.swift' -not -path '*/.build/*' \
-            -exec env LC_ALL=C awk -v strip="$strip" "$FORECAST_IMPORTS_AWK" {} +
+        forecast_find "$@" -- -name '*.swift' -exec env LC_ALL=C awk -v strip="$strip" "$FORECAST_IMPORTS_AWK" {} +
     done | sort -u
 }
 
@@ -488,10 +523,13 @@ forecast_imports() {
 # first and wins over the names below it.
 forecast_import_allowed() {
     case "$1" in
-        App/Sources/Pipeline/*|App/Sources/WidgetBridge/*|App/Sources/Intents/*|Widgets/*) return 1 ;;
-        App/Sources/Services/TrioCoordinator*|App/Sources/Services/UploadCoordinator*) return 1 ;;
-        App/Sources/Services/*Widget*|App/Sources/Services/*Alert*) return 1 ;;
-        App/Sources/Composition/AlertPorts*|App/Sources/Screens/Now/*|App/Sources/ViewState/Now*) return 1 ;;
+        Widgets/*) return 1 ;;
+        App/Sources/Pipeline/*|App/Sources/WidgetBridge/*|App/Sources/Intents/*) return 1 ;;
+        App/Sources/Screens/Now/*|App/Sources/Screens/Alerts/*|App/Sources/Screens/Trends/*) return 1 ;;
+        App/Sources/ViewState/Now*|App/Sources/*Trends*) return 1 ;;
+        App/Sources/Composition/AlertPorts*|App/Sources/Model/ViewStateMapping*|App/Sources/Model/NowMapping*) return 1 ;;
+        App/Sources/*Alert*|App/Sources/*Trio*|App/Sources/*Upload*|App/Sources/*Sharing*) return 1 ;;
+        App/Sources/*Widget*|App/Sources/*Pipeline*|App/Sources/*HistoryImport*|App/Sources/*SensorDevice*) return 1 ;;
     esac
     case "$1" in
         Packages/ForecastKit/*|App/Sources/Screens/Predict/*|AppTests/*|AppUITests/*) return 0 ;;
@@ -510,7 +548,7 @@ forecast_lf() { sed "s/$(printf '\r')\$//" "$1" | tr '\r' '\n'; }
 forecast_import_checks() {
     roots=""
     for dir in $FORECAST_SCAN_DIRS; do
-        if [ -d "$dir" ] && [ -n "$(find "$dir" -name '*.swift' -not -path '*/.build/*' | head -n 1)" ]; then
+        if [ -d "$dir" ] && [ -n "$(forecast_find "$dir" -- -name '*.swift' -print | head -n 1)" ]; then
             roots="$roots $dir"
         else
             fail "D57: scan root $dir is missing or holds no Swift files"
@@ -518,12 +556,12 @@ forecast_import_checks() {
     done
     [ -n "$roots" ] || return
 
-    # Backstop: the word ForecastKit anywhere in a file outside the allowlist.
-    grep -rlw --include='*.swift' --exclude-dir=.build ForecastKit $roots > "$LOGS/forecast-word-files.txt" 2>/dev/null
+    # Backstop: the word ForecastKit anywhere in a Swift file outside the allowlist.
+    forecast_find $roots -- -name '*.swift' -exec grep -alw ForecastKit {} + > "$LOGS/forecast-word-files.txt" 2>/dev/null
     named=""; allowed_files=0
     while IFS= read -r file; do
         if forecast_import_allowed "$file"; then allowed_files=$((allowed_files + 1)); continue; fi
-        lines="$(forecast_lf "$file" | grep -nw ForecastKit | cut -d: -f1 | tr '\n' ',' | sed 's/,$//')"
+        lines="$(forecast_lf "$file" | grep -anw ForecastKit | cut -d: -f1 | tr '\n' ',' | sed 's/,$//')"
         named="$named $file:${lines:-?}"
     done < "$LOGS/forecast-word-files.txt"
     if [ -n "$named" ]; then
@@ -532,12 +570,12 @@ forecast_import_checks() {
         pass "D57: ForecastKit named only in allowlisted files ($allowed_files files)"
     fi
 
-    # `@_exported` anywhere, as raw text.
-    exported="$(grep -rnI --exclude-dir=.build '@_exported' $roots 2>/dev/null | cut -d: -f1,2)"
+    # `@_exported` in any file, as raw text.
+    exported="$(forecast_find $roots -- -exec grep -aHn '@_exported' {} + 2>/dev/null | cut -d: -f1,2)"
     if [ -n "$exported" ]; then
         fail "D57: @_exported (re-exports a module to every file of the importer): $(echo $exported)"
     else
-        pass "D57: no @_exported in App/, Widgets/ or Packages/"
+        pass "D57: no @_exported under the scan roots"
     fi
 
     # The matcher: precise messages for imports outside the allowlist, and Foundation-only sources.
@@ -565,12 +603,25 @@ forecast_import_checks() {
     fi
 }
 
+forecast_symlink_check() {
+    links=""
+    for dir in $FORECAST_SYMLINK_DIRS; do
+        [ -e "$dir" ] || continue
+        links="$links $(find "$dir" \( -path "$FORECAST_PRUNE" ! -path 'Packages/*/*/*' \) -prune -o -type l -print)"
+    done
+    if [ -n "$(echo $links)" ]; then
+        fail "D57: symbolic links (the scans do not follow them; the build would): $(echo $links)"
+    else
+        pass "D57: no symbolic links under $FORECAST_SYMLINK_DIRS"
+    fi
+}
+
 # `plutil -extract KEYPATH raw` prints a string, an array's element count, or a dictionary's keys
-# one per line; nothing (and a failure) if the key path does not exist.
+# one per line; nothing (and a failure) if the key path does not exist or holds null.
 forecast_field() { plutil -extract "$2" raw -o - "$1" 2>/dev/null; }
 
 forecast_manifest_check() {
-    manifest="$LOGS/forecastkit-manifest.json"
+    manifest="$LOGS/package-ForecastKit.json"
     if ! (cd "$ROOT/Packages/ForecastKit" && swift package dump-package) > "$manifest" 2> "$LOGS/forecastkit-manifest.log"; then
         fail "D57: could not read Packages/ForecastKit/Package.swift (see $LOGS/forecastkit-manifest.log)"
         return
@@ -623,6 +674,54 @@ forecast_manifest_check() {
     fi
 }
 
+# Every other package, as SwiftPM reads it: no unsafeFlags, and no dependency that is ForecastKit
+# (its identity names it, or a local path resolves to Packages/ForecastKit). The packages are
+# Packages/*, plus every local package project.yml lists (forecast_xcodegen_dumps must run first),
+# each read once.
+forecast_package_checks() {
+    forecastkit="$(cd "$ROOT/Packages/ForecastKit" 2>/dev/null && pwd -P)"
+    dirs=""
+    for manifest_file in Packages/*/Package.swift; do dirs="$dirs ${manifest_file%/Package.swift}"; done
+    if [ -n "$forecast_dumps" ]; then
+        for key in $(forecast_field "$built" packages); do
+            path="$(forecast_field "$built" "packages.$key.path")" || continue
+            dirs="$dirs $path"
+        done
+    fi
+    unsafe=""; depends=""; unreadable=""; checked=0; seen=" "
+    for dir in $dirs; do
+        real="$(cd "$ROOT/$dir" 2>/dev/null && pwd -P)"
+        [ "$real" = "$forecastkit" ] && continue
+        case "$seen" in *" ${real:-$dir} "*) continue ;; esac
+        seen="$seen${real:-$dir} "
+        norm="$(forecast_normal_path "$dir")" || norm="$dir"
+        pkg="$(printf '%s' "${norm#Packages/}" | tr '/' '_')"   # Packages/WidgetCore -> WidgetCore
+        dump="$LOGS/package-$pkg.json"
+        if [ -z "$real" ] || ! (cd "$real" && swift package dump-package) > "$dump" 2> "$LOGS/package-$pkg.log"; then
+            unreadable="$unreadable $dir"; continue
+        fi
+        checked=$((checked + 1))
+        if grep -q '"unsafeFlags"' "$dump"; then unsafe="$unsafe $pkg"; fi
+        n="$(forecast_field "$dump" dependencies)"
+        i=0
+        while [ "$i" -lt "${n:-0}" ]; do
+            entry="$(plutil -extract "dependencies.$i" json -o - "$dump" 2>/dev/null)"
+            path="$(forecast_field "$dump" "dependencies.$i.fileSystem.0.path")"
+            real="$( [ -n "$path" ] && cd "$path" 2>/dev/null && pwd -P)"
+            if printf '%s' "$entry" | grep -qiw forecastkit || { [ -n "$real" ] && [ "$real" = "$forecastkit" ]; }; then
+                depends="$depends $pkg"
+            fi
+            i=$((i + 1))
+        done
+    done
+    if [ -n "$unreadable" ]; then fail "D57: could not read the manifests of:$unreadable (see $LOGS/package-*.log)"; fi
+    if [ -n "$unsafe" ]; then fail "D57: unsafeFlags in the manifests of:$unsafe"; fi
+    if [ -n "$depends" ]; then fail "D57: packages depending on ForecastKit:$depends"; fi
+    if [ -z "$unreadable$unsafe$depends" ]; then
+        pass "D57: $checked other packages (Packages/* and project.yml's local packages): no unsafeFlags, none depends on ForecastKit"
+    fi
+}
+
 # Linkage, from two XcodeGen dumps of project.yml: "json" is the resolved spec (includes merged, YAML
 # anchors and escapes resolved; templates not yet applied; a dependency's `products:` kept) and
 # "parsed-json" is the project XcodeGen builds from it (templates applied; `products:` dropped).
@@ -638,19 +737,92 @@ forecast_dump_names() {
     return 1
 }
 
-forecast_linkage_check() {
+# Prints path $1 with "./" prefixes and repeated or trailing slashes removed; fails (printing
+# nothing) for an empty or absolute path or one with a ".." component, which are refused rather
+# than resolved.
+forecast_normal_path() {
+    path="$(printf '%s' "$1" | tr -s '/')"
+    while :; do case "$path" in ./*) path="${path#./}" ;; *) break ;; esac; done
+    path="${path%/}"
+    case "$path" in ''|/*|..|../*|*/..|*/../*) return 1 ;; esac
+    printf '%s' "$path"
+}
+
+# Succeeds if a source entry may be compiled into target $1: Sensor from App/, SensorWidgets from
+# Widgets/, SensorTests from AppTests/, SensorUITests from AppUITests/; any target may take
+# Resources/ as resources only. $2 path, $3 buildPhase, $4 type.
+forecast_source_allowed() {
+    path="$(forecast_normal_path "$2")" || return 1
+    case "$path" in Resources|Resources/*) [ "$3" = "resources" ] || [ "$4" = "folder" ]; return ;; esac
+    case "$1:$path" in
+        Sensor:App|Sensor:App/*|SensorWidgets:Widgets|SensorWidgets:Widgets/*) return 0 ;;
+        SensorTests:AppTests|SensorTests:AppTests/*|SensorUITests:AppUITests|SensorUITests:AppUITests/*) return 0 ;;
+    esac
+    return 1
+}
+
+# Produces the two XcodeGen dumps of project.yml in $spec and $built (see below) and sets
+# forecast_dumps to "ok"; on any failure reports it, and the project checks are skipped.
+forecast_xcodegen_dumps() {
+    forecast_dumps=""
+    spec="$LOGS/xcodegen-spec.json"; built="$LOGS/xcodegen-project.json"
     if ! command -v xcodegen > /dev/null 2>&1; then
-        fail "D57: xcodegen not installed; the linkage check cannot run"
+        fail "D57: xcodegen not installed; the project checks cannot run"
         return
     fi
-    spec="$LOGS/xcodegen-spec.json"; built="$LOGS/xcodegen-project.json"
     if [ ! -f project.yml ] \
         || ! xcodegen dump --type json --file "$spec" > "$LOGS/xcodegen-dump.log" 2>&1 \
         || ! xcodegen dump --type parsed-json --file "$built" >> "$LOGS/xcodegen-dump.log" 2>&1 \
         || [ -z "$(forecast_field "$spec" targets)" ] || [ -z "$(forecast_field "$built" targets)" ]; then
-        fail "D57: XcodeGen could not resolve project.yml (see $LOGS/xcodegen-dump.log); the linkage check cannot run"
+        fail "D57: XcodeGen could not resolve project.yml (see $LOGS/xcodegen-dump.log); the project checks cannot run"
         return
     fi
+    forecast_dumps="ok"
+}
+
+forecast_project_check() {
+    [ -n "$forecast_dumps" ] || return
+
+    # Source paths of every target (parsed-json: templates applied).
+    sources=""
+    for target in $(forecast_field "$built" targets); do
+        n="$(forecast_field "$built" "targets.$target.sources")"
+        i=0
+        while [ "$i" -lt "${n:-0}" ]; do
+            path="$(forecast_field "$built" "targets.$target.sources.$i.path")"
+            phase="$(forecast_field "$built" "targets.$target.sources.$i.buildPhase")"
+            kind="$(forecast_field "$built" "targets.$target.sources.$i.type")"
+            if ! forecast_source_allowed "$target" "$path" "$phase" "$kind"; then sources="$sources $target:${path:-?}"; fi
+            i=$((i + 1))
+        done
+    done
+    if [ -n "$sources" ]; then
+        fail "D57: target sources outside the target's own directory (Sensor App/, SensorWidgets Widgets/, SensorTests AppTests/, SensorUITests AppUITests/; Resources/ as resources):$sources"
+    else
+        pass "D57: each target compiles only from its own directory (Sensor App/, SensorWidgets Widgets/, SensorTests AppTests/, SensorUITests AppUITests/; Resources/ as resources)"
+    fi
+
+    # Every `packages:` entry is remote (not file:) or exactly Packages/<name>.
+    entries=""
+    for key in $(forecast_field "$built" packages); do
+        if raw="$(forecast_field "$built" "packages.$key.path")"; then
+            path="$(forecast_normal_path "$raw")" || path="$raw/(refused)"
+            case "$path" in Packages/.*|Packages/*/*) entries="$entries $key:$raw" ;; Packages/?*) ;; *) entries="$entries $key:$raw" ;; esac
+        else
+            url="$(forecast_field "$built" "packages.$key.url")"
+            github="$(forecast_field "$built" "packages.$key.github")"
+            case "$url" in
+                [Ff][Ii][Ll][Ee]:*) entries="$entries $key:$url" ;;
+                '') [ -n "$github" ] || entries="$entries $key:(neither path nor url)" ;;
+            esac
+        fi
+    done
+    if [ -n "$entries" ]; then
+        fail "D57: project.yml packages that are neither remote nor Packages/<name>:$entries"
+    else
+        pass "D57: every project.yml package is remote or Packages/<name>"
+    fi
+
     # The package keys that are ForecastKit: the key itself, or any entry whose path or URL names
     # it (an unreadable entry counts, to fail closed).
     keys=""
@@ -660,7 +832,7 @@ forecast_linkage_check() {
     done
     words="ForecastKit$(printf ' %s' $keys)"
     links=""
-    # parsed-json: every target's package dependencies, templates applied.
+    # parsed-json: other targets' package dependencies, templates applied.
     for target in $(forecast_field "$built" targets); do
         case " $FORECAST_LINK_TARGETS " in *" $target "*) continue ;; esac
         if ! plutil -extract "targets.$target" json -o - "$built" > /dev/null 2>&1; then
@@ -674,36 +846,77 @@ forecast_linkage_check() {
             i=$((i + 1))
         done
     done
-    # json: any mention outside `packages:` and the allowed targets (another target's `products:`,
-    # a template, a scheme, anything).
+    # json: in the allowed targets, ForecastKit only as a package dependency on a ForecastKit key;
+    # anywhere else outside `packages:`, not at all (another target's `products:`, a template, a
+    # scheme, settings, config files, anything).
     for section in $(plutil -p "$spec" | sed -n 's/^  "\([^"]*\)" => .*/\1/p'); do
         case "$section" in
             packages) ;;
             targets)
                 for target in $(forecast_field "$spec" targets); do
-                    case " $FORECAST_LINK_TARGETS " in *" $target "*) continue ;; esac
-                    if forecast_dump_names "$spec" "targets.$target"; then links="$links targets.$target"; fi
+                    case " $FORECAST_LINK_TARGETS " in
+                        *" $target "*)
+                            n="$(forecast_field "$spec" "targets.$target.dependencies")"
+                            i=0
+                            while [ "$i" -lt "${n:-0}" ]; do
+                                if forecast_dump_names "$spec" "targets.$target.dependencies.$i"; then
+                                    package="$(forecast_field "$spec" "targets.$target.dependencies.$i.package")"
+                                    case " $keys " in *" $package "*) ;; *) links="$links targets.$target.dependencies.$i" ;; esac
+                                fi
+                                i=$((i + 1))
+                            done
+                            rest="$LOGS/xcodegen-target-$target.json"
+                            if ! plutil -extract "targets.$target" json -o "$rest" "$spec" 2>/dev/null; then
+                                links="$links targets.$target(unreadable)"; continue
+                            fi
+                            plutil -remove dependencies "$rest" > /dev/null 2>&1
+                            for word in $words; do
+                                if grep -qw "$word" "$rest"; then links="$links targets.$target(outside-dependencies)"; break; fi
+                            done ;;
+                        *)
+                            if forecast_dump_names "$spec" "targets.$target"; then links="$links targets.$target"; fi ;;
+                    esac
                 done ;;
             *)
                 if forecast_dump_names "$spec" "$section"; then links="$links $section"; fi ;;
         esac
     done
-    manifests="$(grep -lw 'ForecastKit' Packages/*/Package.swift 2>/dev/null | grep -v '^Packages/ForecastKit/Package.swift$')"
     if [ -n "$links" ]; then
-        fail "D57: project.yml links or names ForecastKit outside the Sensor app and its test targets: $(printf '%s\n' $links | sort -u | tr '\n' ' ')"
+        fail "D57: project.yml links or names ForecastKit outside the Sensor app's and its tests' package dependencies: $(printf '%s\n' $links | sort -u | tr '\n' ' ')"
+    else
+        pass "D57: ForecastKit only a package dependency of the Sensor app and its test targets (project.yml as XcodeGen resolves it)"
     fi
-    if [ -n "$manifests" ]; then
-        fail "D57: other package manifests name ForecastKit: $(echo $manifests)"
-    fi
-    if [ -z "$links$manifests" ]; then
-        pass "D57: ForecastKit linked only by the Sensor app and its test targets (project.yml as XcodeGen resolves it); no other package depends on it"
+}
+
+# Swift flags that import or rename a module without an import line in the source.
+FORECAST_FLAG_RE='module-alias|import-module|moduleAliases'
+
+forecast_flag_checks() {
+    found="$(grep -nE "$FORECAST_FLAG_RE" project.yml Config/*.xcconfig Packages/*/Package.swift 2>/dev/null | cut -d: -f1,2)"
+    for dump in "$LOGS"/xcodegen-spec.json "$LOGS"/xcodegen-project.json "$LOGS"/package-*.json; do
+        if [ -f "$dump" ] && grep -qE "$FORECAST_FLAG_RE" "$dump"; then found="$found ${dump##*/}"; fi
+    done
+    logs_read=""
+    for log in "$LOGS"/build-*.log; do
+        [ -f "$log" ] || continue
+        logs_read="$logs_read ${log##*/}"
+        if grep -qE -- '(^|[[:space:]"])-(module-alias|import-module)([[:space:]=]|$)' "$log"; then found="$found ${log##*/}"; fi
+    done
+    if [ -n "$found" ]; then
+        fail "D57: module-alias/import-module (imports or renames a module without an import line): $(echo $found)"
+    else
+        pass "D57: no module-alias/import-module in project.yml, Config/*.xcconfig or the manifests${logs_read:+, nor in the compile commands of$logs_read}"
     fi
 }
 
 forecast_isolation_checks() {
     forecast_manifest_check
+    forecast_xcodegen_dumps
+    forecast_package_checks
     forecast_import_checks
-    forecast_linkage_check
+    forecast_symlink_check
+    forecast_project_check
+    forecast_flag_checks
 }
 
 # ---------------------------------------------------------------------------------------------

@@ -216,7 +216,7 @@ final class ForecastSafetyTests: XCTestCase {
         let b = Task { try await client.fetchLatest() }
         for _ in 0..<1_000 { await Task.yield() }   // give b every chance to send its own request
         // Answer newest first: the rejected document, then 304 "unchanged since E1" to the rest.
-        await transport.answerAll { _, answeredBefore in
+        await transport.answerAll(expecting: 2) { _, answeredBefore in
             answeredBefore == 0
                 ? ForecastHTTPResponse(statusCode: 200, eTag: "\"BAD\"", body: bad)
                 : ForecastHTTPResponse(statusCode: 304, eTag: "\"E1\"", body: Data())
@@ -261,7 +261,7 @@ final class ForecastSafetyTests: XCTestCase {
         await transport.waitUntilSent(2)
         let b = Task { try await client.fetchLatest() }
         for _ in 0..<1_000 { await Task.yield() }
-        await transport.answerAll { _, answeredBefore in
+        await transport.answerAll(expecting: 2) { _, answeredBefore in
             answeredBefore == 0
                 ? ForecastHTTPResponse(statusCode: 200, eTag: "\"E2\"", body: new)
                 : ForecastHTTPResponse(statusCode: 304, eTag: "\"E1\"", body: Data())
