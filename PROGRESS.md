@@ -10,8 +10,8 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | 1 — Parallel build | done (2026-09-23): all 7 workstreams merged into `integration`; gates 1–3 PASS |
 | 2 — Integration | **done (2026-10-06)**: Phase 2 + follow-ups (D43) merged into `integration`; all reviews PASS; all six §10 gates pass; **`main` = 4cce67f** (first merge since bootstrap) |
 | 3 — Hardening | **done (2026-10-06)**: audit + failure-mode pass + listen mode (D45–D51) merged (b38429b); all reviews PASS; gates 1–4 PASS on 3e11c21 (docs-only after) |
-| 4 — Device build | **done**; latest install 2026-10-07: `main` 767671f (vibrate-only alerts D53/D54, services n1/n2) installed over the previous build (data kept). Launch needs the phone unlocked: Michael opens the app once to resume listening. |
-| 5 — Predict tab, navigation, live volume, tooling (D55–D60) | **merged into integration (2026-10-08)**: 65ce57d = p5-final 9d8b495 (all reviews PASS; certify PASS + `--verify-certify` OK on 9d8b495). Certify on 65ce57d gates the `main` merge; device install waits for Michael. |
+| 4 — Device build | **done**; latest install **2026-10-08 22:01: `main` 9aed642** (Phase 5: Predict tab, Now · Predict · Trends · Settings, live alarm volume in Settings, D55 alarm-audio fixes) installed over the previous build (data kept) and launched. Release, signed with the team; feed host set from the gitignored Signing.xcconfig. |
+| 5 — Predict tab, navigation, live volume, tooling (D55–D60) | **done (2026-10-08)**: integration 65ce57d (certify PASS + `--verify-certify` OK, `.build-logs/20261008-214643`); **`main` = 9aed642** (tree identical to 65ce57d); installed on the phone. |
 
 ### Workstreams (Phase 1)
 
@@ -174,6 +174,10 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Nightscout token (read + write), when ready — enter it in the app, not in chat or files.
 
 ## Phase log
+
+### 2026-10-08 — Phase 5 merged, on `main`, installed
+- integration 65ce57d = merge of p5-final 9d8b495; certify on 65ce57d all gates PASS, `--verify-certify` OK (742 s). `main` 9aed642 (no-ff merge of 65ce57d, identical tree). Release built from `main` with zero warnings, checked (bundle ID, display name, feed host set, no fixture/ReplayKit symbols), installed on Michael's iPhone 15 Pro and launched.
+- Cleanup (Michael approved): 41 project worktrees removed (branches kept), ~41 GB freed; history-rebuild backup refs deleted. Simulators other than the pool were left alone.
 
 ### 2026-10-08 — Phase 5 reviews (after a machine restart)
 - The Mac restarted at ~19:46 UTC with three reviews and the p5-predict build in flight (none had a result); all four relaunched from their original briefs. Stray simulator shut down; the interrupted reviewer's simulator deleted.
