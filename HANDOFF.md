@@ -245,11 +245,11 @@ Check every text/background pair at WCAG AA (4.5:1 body, 3:1 for ≥24 pt) in bo
 2. **Trends**: period selector 1/3/7/14/30/90 D (default 14 D) · hero TIR with delta vs prior period · 5-segment range bar with labels · "A typical day" AGP chart · metric rows (tight range, mean, GMI, CV, lows with time-of-day note, overnight TIR, longest streak; after-runs row hidden until v1.1).
    - **1 D and 3 D behave differently:** percentile bands over one to three days are misleading, so replace the "A typical day" AGP chart with the actual readings (1 D: today's trace with the range band; 3 D: the three days overlaid by time of day, today emphasized, the other two lighter). The comparison line reads "vs yesterday" / "vs prior 3 days".
    - **GMI is shown only for 14 D and longer** (it isn't meaningful over shorter windows); below that the row says "needs 14 days". Every period shows the data-sufficiency warning from §6 when coverage is under 70%.
-3. **Alerts**: list of alerts with threshold, sound and on/off; quiet hours; sound picker with preview.
+3. **Alerts**: list of alerts with threshold, sound and on/off; quiet hours; sound picker with preview. (PROGRESS D56: now Settings › Alerts, the first Settings group.)
 4. **Settings**: sensor (pair, pairing code entry, status, stop session), Trio bridge (toggle, status, last write), sharing (Nightscout URL/token, upload status, optional Dexcom Share), import history, export all data (CSV), accent color, units (mg/dL only in v1, keep the type ready for mmol/L), data retention, about/licenses/open-source credits.
 5. **Onboarding / pairing**: optional history import (§4.5), remove-Dexcom-app warning (and a note that Dexcom Follow stops unless Share upload is on), Bluetooth + notification permissions, pairing code, warm-up countdown.
 
-Tab bar: text-only "Now · Trends · Alerts · Settings", 44 pt minimum targets.
+Tab bar: text-only "Now · Predict · Trends · Settings", 44 pt minimum targets (PROGRESS D56, which supersedes "Now · Trends · Alerts · Settings"; Predict per D57).
 
 ### 7.4 Widgets (v1)
 
