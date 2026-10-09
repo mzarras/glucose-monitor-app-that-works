@@ -11,7 +11,7 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | 2 — Integration | **done (2026-10-06)**: Phase 2 + follow-ups (D43) merged into `integration`; all reviews PASS; all six §10 gates pass; **`main` = 4cce67f** (first merge since bootstrap) |
 | 3 — Hardening | **done (2026-10-06)**: audit + failure-mode pass + listen mode (D45–D51) merged (b38429b); all reviews PASS; gates 1–4 PASS on 3e11c21 (docs-only after) |
 | 4 — Device build | **done**; latest install 2026-10-07: `main` 767671f (vibrate-only alerts D53/D54, services n1/n2) installed over the previous build (data kept). Launch needs the phone unlocked: Michael opens the app once to resume listening. |
-| 5 — Predict tab, navigation, live volume (D55–D57) | **in progress (2026-10-08)**: p5-alerts (WS4), p5-forecast (WS7, new `ForecastKit`), p5-nav (WS5) in parallel → p5-stage → p5-predict (WS5) |
+| 5 — Predict tab, navigation, live volume, tooling (D55–D60) | **merged into integration (2026-10-08)**: 65ce57d = p5-final 9d8b495 (all reviews PASS; certify PASS + `--verify-certify` OK on 9d8b495). Certify on 65ce57d gates the `main` merge; device install waits for Michael. |
 
 ### Workstreams (Phase 1)
 
@@ -158,6 +158,15 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - WidgetKit reload behaviour when the phone clock is set back 1 h with a timeline queued (WS5 final check).
 - Residual P1c: with another G7 app installed, confirm `otherAppRejected` surfaces (D35).
 - Change the phone's time manually during an urgent-low snooze (rollback detection with the monotonic clock, WS4); AlarmKit: 31 alarms at the 2-min floor, wake 30 s before / 3 s after a repeat, revoke alarm permission with repeats pending.
+
+## Backlog from Phase 5 reviews (none blocking)
+
+- **Gate (check.sh, next gate change):** a `-disable-upcoming-feature MemberImportVisibility` flag passes the SE-0444 check (add it to `FORECAST_FLAG_RE`); the `ForecastInstant(wall:` check scans only App/Sources and one spelling (scan App/, match `.init(wall:`, or make `init(wall:monotonic:)` DEBUG/`@_spi` in ForecastKit with a compile-out check); the `OTHER_SWIFT_FLAGS` way of enabling SE-0444 always fails (bare-string dump); `certify_requirements` should refuse to silently drop variable-led labels and the selftest should run the drop-each loop; stray `:;` in the SE-0444 FAIL text; unchecked pass-3 reset; run-script build phases not inspected; xcconfig-assembled flags caught only by the certify build-log grep; a per-worktree lock for two runs in one worktree; a cleaner for `.derived/fast-*`.
+- **ForecastKit / feed:** HTTP `Date` (+`Age`) as the receipt wall time for a phone clock already wrong at arrival; `OrefForecast` is a public type with no public route (make internal until `oref_generated_at` exists); oref display once the feed publishes `oref_generated_at` (D58).
+- **Predict:** metrics-fetch generation guard untested (correct by reading); freshness line wraps mid-phrase at the default text size.
+- **AlertEngine:** `mediaServicesWereResetNotification` handler (pre-existing, D17); "one repeat interval" wording when AlarmKit becomes available mid-episode; `@_spi(Testing)` for the player's test-only API.
+- **p5-nav:** HANDOFF §7.3 updated for D56 (done at merge); `docs/safety-review.md:148` is a dated Phase 3 audit that still lists the old volume banner (cite D55 in the next audit).
+- **Device checks to add to Michael's list (docs/alerts.md §10 item 12 f–i, docs/setup.md):** alarm started during a call or Siri keeps sounding after it ends; opening the app during a long call resumes an interrupted urgent-low loop afterwards; the idle monitoring session doesn't take a Bluetooth/CarPlay route; volume buttons change media volume while the app is open; Predict shows a forecast within about a minute of opening, "couldn't refresh" in airplane mode, then "out of date" 15 min after the last model run.
 
 ## Open questions for Michael
 
