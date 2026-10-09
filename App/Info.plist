@@ -44,6 +44,8 @@
 	<string>$(APP_DISPLAY_NAME) connects to your G7 sensor over Bluetooth to receive glucose readings, including while the phone is locked.</string>
 	<key>TrioAppGroupID</key>
 	<string>$(TRIO_APP_GROUP_ID)</string>
+	<key>ZenPredictFeedHost</key>
+	<string>$(ZEN_PREDICT_FEED_HOST)</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Newsreader72pt-Light.ttf</string>

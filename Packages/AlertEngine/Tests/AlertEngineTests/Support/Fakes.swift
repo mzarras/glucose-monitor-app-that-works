@@ -105,6 +105,43 @@ final class FakeAudioPlayer: AlertAudioPlaying {
 
     /// The sound finished on its own.
     func finish() { isPlaying = false }
+
+    // D55 volume monitoring, as `PlaybackAlertAudioPlayer` does it: one monitor at a time, the
+    // current value reported at once (its KVO `.initial`), never touching a playing sound.
+    private var monitor: (@MainActor (VolumeMonitoringEvent) -> Void)?
+    /// The last handler ever given, even after a stop (for a report already on its way).
+    private var lastMonitor: (@MainActor (VolumeMonitoringEvent) -> Void)?
+    private(set) var monitoringStarts = 0
+    private(set) var monitoringStops = 0
+    var isMonitoringVolume: Bool { monitor != nil }
+
+    func startVolumeMonitoring(onEvent: @escaping @MainActor (VolumeMonitoringEvent) -> Void) {
+        monitoringStarts += 1
+        monitor = onEvent
+        lastMonitor = onEvent
+        if let outputVolume { onEvent(.changed(outputVolume)) }
+    }
+
+    func stopVolumeMonitoring() {
+        monitoringStops += 1
+        monitor = nil
+    }
+
+    /// The person pressed a volume button.
+    func changeVolume(to volume: Float) {
+        outputVolume = volume
+        monitor?(.changed(volume))
+    }
+
+    /// The session could not be activated for monitoring (e.g. after an interruption).
+    func failMonitoringSession(_ reason: String) {
+        monitor?(.sessionFailed(reason))
+    }
+
+    /// A report that was already on its way to the main actor when monitoring stopped.
+    func deliverLateReport(_ event: VolumeMonitoringEvent) {
+        lastMonitor?(event)
+    }
 }
 
 /// Counts vibrations (D53 vibrate-only alerts while awake).

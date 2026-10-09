@@ -3,7 +3,8 @@
 // - the G7 source is stopped and its pipeline holds any event (nothing from it is lost);
 // - the production alert service is released (one AlertService at a time) and a replay service
 //   that accepts replay readings takes over; when the run ends the production service is rebuilt
-//   from its persisted snapshot and reconciles what the run left pending (`.launched`);
+//   from its persisted snapshot and reconciles what the run left pending (`.launched`); the
+//   media-volume monitor (D55) moves with the active service;
 // - readings go to a separate in-memory replay store, never the production database (D20);
 // - the Trio bridge and uploaders are attached only when the developer switch is on, and refuse
 //   every replay reading themselves (S6).
@@ -42,6 +43,8 @@ extension LiveAppServices {
         sensorPipeline.deactivate()
         await g7.stop()
         g7Started = false
+        // D55: the audio player has one volume monitor; the replay service takes it over below.
+        productionAlerts?.setVolumeMonitoring(false)
         productionAlerts = nil
         sensorPipeline.outputs.alerts = nil
 
@@ -58,6 +61,7 @@ extension LiveAppServices {
             replayRun = run
             replaySpeed = speed
             replayClockMismatch = .initial
+            updateVolumeMonitoring() // D55: the replay service is the active one now
             attachOutputs()
             await run.start()
             await sendTrioAlertInput(force: true)
@@ -72,6 +76,8 @@ extension LiveAppServices {
     func stopReplay() async {
         guard let run = replayRun else { return }
         await run.stop()
+        // D55: production takes the audio player's volume monitor over in `resumeSensor`.
+        run.alerts.setVolumeMonitoring(false)
         replayRun = nil
         replaySpeed = nil
         log(.app, "replay stopped: \(run.scenario.rawValue)")
@@ -85,6 +91,7 @@ extension LiveAppServices {
         let alerts = makeProductionAlerts()
         productionAlerts = alerts
         sensorPipeline.outputs.alerts = alerts
+        updateVolumeMonitoring() // D55
         await alerts.start()
         // The app is in the foreground when a replay run is stopped: production's expiry reminders
         // are written again (D43; the replay service had `.foreground` while the run lasted).

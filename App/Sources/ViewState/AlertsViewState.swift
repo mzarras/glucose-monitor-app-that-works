@@ -1,4 +1,4 @@
-// The Alerts screen (HANDOFF §5, §7.3.3, PROGRESS D17, D27). Built from AlertEngine's
+// The Alerts page, Settings › Alerts since D56 (HANDOFF §5, §7.3.3, PROGRESS D17, D27). Built from AlertEngine's
 // `AlertSettings` by `AlertsMapping`; edits go back through AlertsActions → `AppModel` →
 // `AppServices.updateAlertSettings`. Rows are AlertEngine's own `AlertKind`s, and every range the
 // screen offers comes from `AlertLimits` — one source of truth, so the screen can never offer a
@@ -257,6 +257,17 @@ enum AlertsText {
     static func vibrateAllMessage(_ kinds: [AlertKind]) -> String {
         let names = kinds.map(\.title).joined(separator: ", ")
         return "These alerts will vibrate without sound: \(names). Urgent low and Low keep their sound. Alerts that are off now will vibrate if you turn them on later. Change any alert back on its page."
+    }
+
+    /// Settings › ALERTS row (D56): how many alerts are on and the quiet hours, e.g.
+    /// "all 19 on · quiet hours off", "15 of 19 on · quiet hours 10 PM – 7 AM". Urgent low counts as
+    /// on whatever its stored flag says (S7, `effectiveIsEnabled`).
+    static func settingsSummary(_ state: AlertsViewState) -> String {
+        let total = state.rows.count
+        let on = state.rows.filter(\.effectiveIsEnabled).count
+        let count = on == total ? "all \(total) on" : "\(on) of \(total) on"
+        let quiet = state.quietHours.isEnabled ? "quiet hours \(quietHoursSchedule(state.quietHours))" : "quiet hours off"
+        return "\(count) · \(quiet)"
     }
 
     /// "Sound on silent" row detail (D17).

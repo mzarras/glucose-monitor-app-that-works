@@ -16,3 +16,7 @@ TRIO_APP_GROUP_ID = group.org.nightscout.$(DEVELOPMENT_TEAM).trio.trio-app-group
 // Switch to App/Sensor+CriticalAlerts.entitlements once Apple has granted the
 // Critical Alerts entitlement to your team (developer.apple.com → request form).
 SENSOR_APP_ENTITLEMENTS = App/Sensor.entitlements
+
+// Optional: host of your Zen Predict forecast feed (D57), e.g. zen.example.com. Leave empty to
+// configure it in Settings › Predictions instead.
+ZEN_PREDICT_FEED_HOST =

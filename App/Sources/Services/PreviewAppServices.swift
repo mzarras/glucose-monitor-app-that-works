@@ -52,6 +52,8 @@ final class PreviewAppServices: AppServices {
     var connectionModeError: ConnectionModeError?
     /// Review m2/m3: set to show the "Connection setting couldn't be read" state; a choice clears it.
     var connectionSettingProblem: String?
+    /// D57: the forecast as a test or preview sets it (nothing is fetched here).
+    var forecast = ForecastStatus.notConfigured
 
     private var observers: [UUID: AsyncStream<ServiceChange>.Continuation] = [:]
 
@@ -61,6 +63,11 @@ final class PreviewAppServices: AppServices {
         self.readingsStore = readings.sorted { $0.date < $1.date }
         self.sensorState = sensorState
         self.sensorSession = sensorSession
+    }
+
+    /// Adds a call to `calls` (for the extensions in other files).
+    func record(_ call: String) {
+        calls.append(call)
     }
 
     /// Tells observers something changed (tests set a property, then call this).

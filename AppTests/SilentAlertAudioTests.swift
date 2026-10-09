@@ -33,6 +33,24 @@ final class SilentAlertAudioTests: XCTestCase {
         XCTAssertEqual(player.outputVolume, 0.8, "the real media volume, so the volume warning still works")
     }
 
+    /// D55: silenced runs see the real volume live too; the real player is never asked to play.
+    func test_silentPlayerForwardsVolumeMonitoringToTheRealPlayer() {
+        let real = RecordingAudioPlayer(clock: PipelineTestClock(PipelineFixtures.start))
+        let player = SilentAlertAudioPlayer(volumeSource: real)
+        var events: [VolumeMonitoringEvent] = []
+        player.startVolumeMonitoring { events.append($0) }
+        XCTAssertTrue(real.isMonitoringVolume)
+        real.changeVolume(to: 0.1)
+        XCTAssertEqual(events, [.changed(0.8), .changed(0.1)])
+        XCTAssertEqual(player.outputVolume, 0.1)
+        XCTAssertTrue(player.play(fileName: AlertSoundCatalog.fileName(.cascade), loopSeconds: 30))
+        XCTAssertTrue(real.plays.isEmpty, "never audible")
+        player.stopVolumeMonitoring()
+        XCTAssertFalse(real.isMonitoringVolume)
+        real.changeVolume(to: 0.6)
+        XCTAssertEqual(events, [.changed(0.8), .changed(0.1)])
+    }
+
     /// D43: an announcement whose sound is off is an `.active` notification without sound; the
     /// silent adapter keeps the level.
     func test_silentNotificationMapsTheActiveLevel() {

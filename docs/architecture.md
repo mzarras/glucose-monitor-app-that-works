@@ -158,8 +158,11 @@ Settings), `.foreground` to the alert service (D43: expiry reminders refused or 
 again; during a DEBUG replay run the replay service gets it, and production gets one when the run
 ends), Trio retry (`publish([], session:)`) and heartbeat-key check (not during a DEBUG replay run),
 upload `flushIfDue`, retention if a day has passed, clock check; a 60-second ticker repeats the drain
-attempt, Trio retry, heartbeat-key check and clock check while in the foreground. **Background**: the
-ticker stops, the heartbeat and the diagnostic log are saved.
+attempt, Trio retry, heartbeat-key check and clock check while in the foreground. The scene's
+`sceneBecameActive()` marks the app foreground synchronously before this work starts, then turns on
+live alarm-volume monitoring (D55: AlertEngine keeps the audio session active and mixable while open)
+and starts Zen Predict polling (D57, foreground only, in memory only). **Background**: the ticker
+stops, volume monitoring and forecast polling stop, the heartbeat and the diagnostic log are saved.
 
 **Force-quit gap** (HANDOFF §4.6): at bootstrap, if the last heartbeat is ≥ 15 min old, the sensor
 was active then, the boot is the same, and this is not a Bluetooth relaunch, `forceQuitGap` is set

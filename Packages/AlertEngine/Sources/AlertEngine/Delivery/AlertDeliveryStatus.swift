@@ -79,7 +79,7 @@ public enum DeliveryProblem: Sendable, Equatable {
 
 public struct AlertDeliveryStatus: Sendable, Equatable {
     public var permissions: NotificationPermissionState
-    /// System output (media) volume 0…1 when last read; `nil` if unknown.
+    /// System output (media) volume 0…1 when last read (live while monitored, D55); `nil` if unknown.
     public var outputVolume: Float?
     /// The Settings screen's "Urgent low alarm" row (D26).
     public var urgentLowAlarm: SystemAlarmAuthorization
@@ -111,14 +111,8 @@ public struct AlertDeliveryStatus: Sendable, Equatable {
             if permissions.sounds == .disabled { problems.append(.notificationSoundsOff) }
             if permissions.timeSensitive == .disabled { problems.append(.timeSensitiveOff) }
         }
-        if let volume = outputVolume {
-            // A Critical Alert plays at its own volume, but the in-app sound and ordinary
-            // notification sounds do not; warn either way (this is a heuristic, see AlertLimits).
-            if volume <= 0.001 {
-                problems.append(.alarmVolumeMuted)
-            } else if volume < AlertLimits.lowAlarmVolume {
-                problems.append(.alarmVolumeLow(volume))
-            }
+        if let volumeProblem = Self.volumeProblem(outputVolume) {
+            problems.append(volumeProblem)
         }
         switch urgentLowAlarm {
         case .notDetermined: problems.append(.urgentLowAlarmNotRequested)
@@ -134,5 +128,17 @@ public struct AlertDeliveryStatus: Sendable, Equatable {
             }
         }
         return problems
+    }
+
+    /// `.alarmVolumeMuted` or `.alarmVolumeLow` for this media volume, or `nil` (also when unknown).
+    /// While the app is in the foreground the volume is observed live (D55), so the problem appears
+    /// and clears as the volume buttons are pressed.
+    public static func volumeProblem(_ volume: Float?) -> DeliveryProblem? {
+        guard let volume else { return nil }
+        // A Critical Alert plays at its own volume, but the in-app sound and ordinary
+        // notification sounds do not; warn either way (this is a heuristic, see AlertLimits).
+        if volume <= 0.001 { return .alarmVolumeMuted }
+        if volume < AlertLimits.lowAlarmVolume { return .alarmVolumeLow(volume) }
+        return nil
     }
 }

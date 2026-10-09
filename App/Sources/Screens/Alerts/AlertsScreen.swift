@@ -1,7 +1,11 @@
-// Alerts screen (HANDOFF §5, §7.3.3, PROGRESS D17, D27, D53): every alert with its threshold, style
+// Alerts page (HANDOFF §5, §7.3.3, PROGRESS D17, D27, D53): every alert with its threshold, style
 // (sound / vibrate only / silent), sound-on-silent and on/off; quiet hours; per-alert detail with the
 // style choice, sound picker and preview; "Set all to vibrate except urgent low and Low" (D54).
 // Ranges come from AlertEngine's `AlertLimits` (via the rows' `allowed`, `AlertKind.snoozeRange`).
+//
+// D56: Settings › Alerts, a page in the Settings `NavigationStack` (no stack of its own). The
+// stack declares both destinations: `SettingsRoute.alerts` → `AlertsPage`, `AlertKind` →
+// `AlertDetailView` (SettingsScreen).
 //
 // S7: urgent low shows "Always on" instead of a toggle, has no style choice (always sound), its
 // sound-on-silent is fixed on, and its snooze choices stop at 30 minutes. AlertEngine enforces the same rules; this screen never offers
@@ -23,23 +27,17 @@ struct AlertsActions {
     }
 }
 
-struct AlertsScreen: View {
+/// Settings › Alerts. Pushed by the Settings stack, which also declares the `AlertKind` destination
+/// the rows link to (`AlertDetailView`).
+struct AlertsPage: View {
     let state: AlertsViewState
     let actions: AlertsActions
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                AlertsContent(state: state, actions: actions)
-            }
-            .editorialScreen()
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: AlertKind.self) { kind in
-                if let row = state.row(kind) {
-                    AlertDetailView(row: row, sounds: state.sounds, actions: actions)
-                }
-            }
+        ScrollView {
+            AlertsContent(state: state, actions: actions)
         }
+        .editorialScreen()
     }
 }
 
