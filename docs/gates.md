@@ -62,7 +62,8 @@ given and when the run used the caller's `SIM_DEST` instead of an erased pool si
 The required `PASS` lines (`scripts/check.sh --certify-requirements`) are derived, not listed: one
 per build configuration, package (its tests, and its coverage where it has a minimum), safety rule,
 Release-safety package, `compiled_out_check` and replay suite, plus every `pass` call in the gate
-code whose label starts with fixed text (the lint checks, and any check added later).
+code whose label starts with fixed text, its variable parts read as any text (the lint and D57
+checks, and any check added later).
 
 ## Targeted runs
 

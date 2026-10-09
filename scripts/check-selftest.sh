@@ -15,6 +15,12 @@
 # too, as a negative control the lint must not name. Every plant must be reported by name. (Pass
 # 2's exit status proves nothing on its own: the safety gate without the tests gate always fails on
 # "no test logs".)
+#
+# Appended after them: the D60 checks (fast runs are marked and never pass --verify-certify;
+# certify refuses ONLY_TESTING/PKG_FILTER; --verify-certify accepts a complete synthetic certify
+# log and rejects each single change to it), then pass 3, on a worktree reset to HEAD: the D57
+# checks added at the p5 merge (SE-0444 on for Sensor, ForecastInstant(wall:) only inside
+# #if DEBUG, plain target and package names, remote package urls with a scheme).
 
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -383,7 +389,7 @@ HEAD_SHA="$(git rev-parse HEAD)"
 SYN_PACKAGES="$(sed -n 's/^ALL_PACKAGES="\(.*\)"$/\1/p' scripts/check.sh)"
 echo certify > "$GOOD/MODE"
 echo 0 > "$GOOD/EXIT_STATUS"
-scripts/check.sh --certify-requirements | sed -e 's/<n>/1/g' -e 's/^/PASS  /' > "$GOOD/summary.txt"
+scripts/check.sh --certify-requirements | sed -e 's/<n>/1/g' -e 's/<\*>/x/g' -e 's/^/PASS  /' > "$GOOD/summary.txt"
 cat > "$GOOD/RUN" <<RUN
 mode=certify
 logs=$GOOD
@@ -486,9 +492,59 @@ set:safety_rules=S1 S2 S3|safety rules were
 set:check_sh=0000000|another scripts/check.sh
 TABLE
 
+# ---------------------------------------------------------------------------------------------
+# Pass 3 (D57 checks added at the p5 merge; certify, safety gate only). The worktree is first reset
+# to HEAD (passes 1 and 2 are done; this removes their plants), then planted with:
+#   project.yml  SE-0444 turned off for Sensor; a target named "Sensor SensorTests" (framework,
+#                sources [Shared] with `import ForecastKit`, depending on ForecastKit), which the
+#                checks read word by word as two allowed targets (lint round-5 review); a package
+#                whose "remote" url has no scheme (url: /Users/somewhere/Bridge);
+#   App/Sources  ForecastInstant(wall:) in the #else branch of an #if DEBUG and outside any #if,
+#                and (negative control) inside #if DEBUG, as the app's two real uses are.
+# ---------------------------------------------------------------------------------------------
+git -C "$WT" checkout -q -- . && git -C "$WT" clean -fdq
+sed 's/SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES/SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: NO/' project.yml > "$TMP/pass3.yml"
+awk '
+    { print }
+    /^packages:/ { print "  CheckSelftestRemote:"; print "    url: /Users/somewhere/Bridge"; print "    from: 1.0.0" }
+    /^targets:/  { print "  Sensor SensorTests:"; print "    type: framework"; print "    platform: iOS"
+                   print "    sources: [Shared]"; print "    dependencies:"; print "      - package: ForecastKit" }
+' "$TMP/pass3.yml" > project.yml
+for line in 'SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: NO' '  Sensor SensorTests:' '    url: /Users/somewhere/Bridge'; do
+    grep -qF -- "$line" project.yml || mode_miss "pass 3: could not plant into project.yml (its layout changed): $line"
+done
+mkdir -p Shared
+printf 'import ForecastKit\n' > Shared/CheckSelftestShared.swift
+cat > App/Sources/Screens/Predict/CheckSelftestWallClock.swift <<'SWIFT'
+#if DEBUG
+let checkSelftestGuardedInstant = ForecastInstant(wall: .now, monotonic: 0)
+#else
+let checkSelftestElseInstant = ForecastInstant(wall: .now, monotonic: 0)
+#endif
+let checkSelftestWallInstant = ForecastInstant( wall: .now, monotonic: 0)
+SWIFT
+OUT3="$TMP/out3.txt"
+GATES=safety PACKAGES=ForecastKit scripts/check.sh > "$OUT3" 2>&1
+status=$?
+pass3_expect() { if grep -qE -- "$1" "$OUT3"; then mode_ok "pass 3 reported: $2"; else mode_miss "pass 3 did not report: $2"; fi; }
+WALL='^FAIL  D57: ForecastInstant\(wall:\) outside #if DEBUG'
+pass3_expect '^FAIL  D57: SE-0444 MemberImportVisibility must stay on for Sensor' "SE-0444 turned off for Sensor"
+pass3_expect "$WALL.*CheckSelftestWallClock.swift:4 " "ForecastInstant(wall:) in the #else branch of #if DEBUG"
+pass3_expect "$WALL.*CheckSelftestWallClock.swift:6 " "ForecastInstant( wall:) outside any #if"
+pass3_expect "^FAIL  D57: project.yml names other than .*targets:'Sensor SensorTests'" "a target named \"Sensor SensorTests\""
+pass3_expect '^FAIL  D57: project.yml packages that are neither remote nor Packages/<name>:.* CheckSelftestRemote:/Users/somewhere/Bridge' "a package url without a scheme"
+flagged="$(grep -E "$WALL" "$OUT3")"
+for guarded in "CheckSelftestWallClock.swift:2 " PredictFreshness.swift ForecastFixtureDocuments.swift; do
+    case "$flagged" in
+        *"$guarded"*) mode_miss "pass 3 negative control: flagged $guarded, which is inside #if DEBUG" ;;
+        *) mode_ok "pass 3 negative control: $guarded (inside #if DEBUG) not flagged" ;;
+    esac
+done
+if [ $status -ne 0 ]; then mode_ok "pass 3: check.sh exited $status"; else mode_miss "pass 3: check.sh exited 0"; fi
+
 if [ $mode_missing -ne 0 ]; then
-    echo "check-selftest: FAILED (D60 mode checks) — fast-mode output in $OUT_FAST"
+    echo "check-selftest: FAILED (D60 mode checks or pass 3) — output in $OUT_FAST and $OUT3"
     cp "$OUT_FAST" "$ROOT/.build-logs/check-selftest-last-fast.txt" 2>/dev/null
     exit 1
 fi
-echo "check-selftest: fast runs are marked, certify refuses test selections, and --verify-certify accepts only a complete certify log."
+echo "check-selftest: pass 3 plants were caught; fast runs are marked, certify refuses test selections, and --verify-certify accepts only a complete certify log."

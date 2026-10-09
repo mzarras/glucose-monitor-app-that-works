@@ -337,14 +337,16 @@ start_run() {
 }
 
 # The PASS lines of a complete certify run, one pattern per line: the text after "PASS  " up to
-# where the line may go on, with <n> standing for a number (`--certify-requirements` prints them).
-# Derived, never listed by hand, so a check added to the gates becomes required by itself:
+# where the line may go on, with <n> standing for a number and <*> for any text
+# (`--certify-requirements` prints them). Derived, never listed by hand, so a check added to the
+# gates becomes required by itself:
 #   - from the configuration: each build configuration; each package's tests, and its coverage
 #     where coverage_min sets a minimum; the app unit tests; each safety rule; each
 #     Release-safety package; each compiled_out_check call in this file; each replay suite;
-#   - from this file's gate code: every pass call whose label starts with literal text (up to its
-#     first $) that no pattern above already starts with. Those are the lint checks (S4 sentinel,
-#     S6 callers and .mock guard, ...) and any check added later.
+#   - from this file's gate code: every pass call's label, with each $name in it read as <*> and
+#     the label cut at its first ${ or $( — unless it starts with a variable or a pattern above
+#     already matches it. Those are the lint checks (S4 sentinel, S6 callers and .mock guard, D57,
+#     ...) and any check added later.
 certify_requirements() {
     local config pkg min rule label suite prefix configured
     configured="$(
@@ -364,16 +366,18 @@ certify_requirements() {
     printf '%s\n' "$configured"
     # pass in command position only (line start, or after then/else/do/;/&&/||/{), comments skipped.
     grep -v '^[[:space:]]*#' "$ROOT/scripts/check.sh" \
-        | grep -oE '(^[[:space:]]*|(then|else|do|;|&&|[|][|]|[{])[[:space:]]+)pass "[^"$]*' \
-        | sed -E 's/.*pass "//' | sed '/^$/d' | sort -u | while IFS= read -r prefix; do
-            case "
-$configured" in *"
-$prefix"*) ;; *) printf '%s\n' "$prefix" ;; esac
+        | grep -oE '(^[[:space:]]*|(then|else|do|;|&&|[|][|]|[{])[[:space:]]+)pass "[^"]*' \
+        | sed -E -e 's/.*pass "//' -e 's/[$][{(].*//' -e 's/[$]([A-Za-z_][A-Za-z0-9_]*|[0-9*@#?])/<*>/g' \
+        | grep -v '^<\*>' | sed '/^[[:space:]]*$/d' | sort -u | while IFS= read -r label; do
+            printf '%s\n' "$configured" | grep -qE "^$(requirement_regex "$label")" || printf '%s\n' "$label"
         done
 }
 
-# A requirement pattern as an extended regular expression: metacharacters escaped, <n> a number.
-requirement_regex() { printf '%s' "$1" | sed -e 's/[][\.*^$+?(){}|]/\\&/g' -e 's/<n>/[0-9.]+/g'; }
+# A requirement pattern as an extended regular expression: metacharacters escaped, <n> a number,
+# <*> any text.
+requirement_regex() {
+    printf '%s' "$1" | sed -e 's/<\*>/@ANY@/g' -e 's/[][\.*^$+?(){}|]/\\&/g' -e 's/<n>/[0-9.]+/g' -e 's/@ANY@/.*/g'
+}
 
 # --verify-certify <log directory> [<commit>]: succeeds only for a complete certify run — every
 # gate, every package and safety rule, no test selection, fresh build trees, a worktree clean at
@@ -630,6 +634,25 @@ gate_tests() {
 # Gate 3 — safety tests (test_S1_… through test_S8_…) and S6 compile-out checks
 # ---------------------------------------------------------------------------------------------
 
+# Prints "file:line " for each line matching the extended regex $1 in files $2... that is not inside
+# an `#if DEBUG` block, tracked per line through nested #if/#else/#endif (an #else branch of
+# `#if DEBUG` is not guarded). Used by the S6 .replay/.mock check and D57's ForecastInstant(wall:).
+outside_debug() {
+    local pattern="$1"; shift
+    DEBUG_PATTERN="$pattern" awk '
+        BEGIN { pattern = ENVIRON["DEBUG_PATTERN"] }
+        FNR == 1 { depth = 0 }
+        /^[[:space:]]*#if[[:space:]]+DEBUG[[:space:]]*($|\/\/|&&)/ { depth++; st[depth] = 1; next }
+        /^[[:space:]]*#if/                  { depth++; st[depth] = 0; next }
+        /^[[:space:]]*#(else|elseif)/       { if (depth > 0) st[depth] = 0; next }
+        /^[[:space:]]*#endif/               { if (depth > 0) depth--; next }
+        $0 ~ pattern {
+            guarded = 0
+            for (i = 1; i <= depth; i++) if (st[i] == 1) guarded = 1
+            if (!guarded) printf "%s:%d ", FILENAME, FNR
+        }' "$@"
+}
+
 # Defined symbols matching $2 in the object files of package $1 built in configuration $3.
 symbol_count() {
     pkg="$1"; pattern="$2"; config="$3"
@@ -759,17 +782,7 @@ gate_safety() {
         | grep -vE '^Packages/(ReplayKit|GlucoseCore)/Sources/')"
     unguarded=""
     if [ -n "$files" ]; then
-        unguarded="$(awk '
-            FNR == 1 { depth = 0 }
-            /^[[:space:]]*#if[[:space:]]+DEBUG[[:space:]]*($|\/\/|&&)/ { depth++; st[depth] = 1; next }
-            /^[[:space:]]*#if/                  { depth++; st[depth] = 0; next }
-            /^[[:space:]]*#(else|elseif)/       { if (depth > 0) st[depth] = 0; next }
-            /^[[:space:]]*#endif/               { if (depth > 0) depth--; next }
-            /source:[[:space:]]*\.(replay|mock)/ {
-                guarded = 0
-                for (i = 1; i <= depth; i++) if (st[i] == 1) guarded = 1
-                if (!guarded) printf "%s:%d ", FILENAME, FNR
-            }' $files)"
+        unguarded="$(outside_debug 'source:[[:space:]]*\.(replay|mock)' $files)"
     fi
     if [ -n "$unguarded" ]; then
         fail "S6: .replay/.mock readings constructed outside #if DEBUG at: $unguarded"
@@ -811,8 +824,9 @@ gate_safety() {
 #               other target from nothing); Resources/ only as resources (`buildPhase: resources` or
 #               `type: folder`). So the scans above read everything that is compiled, and test code
 #               allowed to name ForecastKit is never compiled into the app;
-#             - every `packages:` entry is remote (url/github, not file:) or a local path that is
-#               exactly Packages/<name>, so the package checks above read every local package;
+#             - every `packages:` entry is remote (a `url:` starting with https://, or `github:`) or
+#               a local path that is exactly Packages/<name>, so the package checks above read every
+#               local package;
 #             - only Sensor, SensorTests and SensorUITests depend on the ForecastKit package (under
 #               any key whose entry names it), and in them ForecastKit appears only as such a
 #               dependency, never in sources, settings, config files or schemes; outside `packages:`
@@ -1216,8 +1230,9 @@ forecast_project_check() {
             url="$(forecast_field "$built" "packages.$key.url")"
             github="$(forecast_field "$built" "packages.$key.github")"
             case "$url" in
-                [Ff][Ii][Ll][Ee]:*) entries="$entries $key:$url" ;;
+                https://*) ;;
                 '') [ -n "$github" ] || entries="$entries $key:(neither path nor url)" ;;
+                *) entries="$entries $key:$url" ;;
             esac
         fi
     done
@@ -1313,14 +1328,97 @@ forecast_flag_checks() {
     fi
 }
 
+# ---------------------------------------------------------------------------------------------
+# D57 additions at the p5 merge (p5-final): two checks p5-predict's design relies on, and plain
+# target and package names (lint round-5 review: a name with a space split into allowed names).
+#   SE-0444   the Sensor target keeps MemberImportVisibility on (docs/forecast.md "What it cannot
+#             see"): in the resolved project (`xcodegen dump`, parsed), Sensor's own settings set
+#             SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY to YES, or OTHER_SWIFT_FLAGS holds
+#             `-enable-upcoming-feature MemberImportVisibility`, and no per-configuration setting
+#             of the target turns it off. Target settings take precedence over every xcconfig.
+#   Wall      no `ForecastInstant(wall:` in App/Sources outside `#if DEBUG`: an instant built from
+#             the wall clock alone loses D59's protection against the phone's clock being set back,
+#             so the app takes ForecastInstant.now() and only tests and fixtures build one by hand
+#             (p5-predict re-review minor-B: removing those #if DEBUG guards still built in Release).
+# ---------------------------------------------------------------------------------------------
+FORECAST_SE0444_KEY="SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY"
+
+# Target and package names, as both dumps list them, are plain words: the checks above iterate
+# them word by word, so a target named "Sensor SensorTests" would be read as two allowed targets.
+forecast_name_check() {
+    [ -n "$forecast_dumps" ] || return
+    local bad="" dump kind name
+    for dump in "$spec" "$built"; do
+        for kind in targets packages; do
+            while IFS= read -r name; do
+                [ -n "$name" ] || continue
+                printf '%s\n' "$name" | grep -qE '^[A-Za-z0-9_-]+$' || bad="$bad
+$kind:'$name'"
+            done <<EOF
+$(forecast_field "$dump" "$kind")
+EOF
+        done
+    done
+    if [ -n "$bad" ]; then
+        fail "D57: project.yml names other than letters, digits, _ and - (the checks would split them): $(printf '%s\n' "$bad" | sed '/^$/d' | sort -u | tr '\n' ' ')"
+    else
+        pass "D57: project.yml target and package names are letters, digits, _ and - only"
+    fi
+}
+
+# Succeeds if the parsed-dump settings at key path $1 (a dictionary of build settings) enable
+# SE-0444, by the setting or by OTHER_SWIFT_FLAGS.
+forecast_se0444_on() {
+    [ "$(forecast_field "$built" "$1.$FORECAST_SE0444_KEY")" = "YES" ] && return 0
+    plutil -extract "$1.OTHER_SWIFT_FLAGS" json -o - "$built" 2>/dev/null \
+        | grep -qE 'enable-upcoming-feature[^A-Za-z]+MemberImportVisibility'
+}
+
+forecast_se0444_check() {
+    [ -n "$forecast_dumps" ] || return
+    local base="targets.Sensor.settings" problems="" config value
+    if [ -z "$(forecast_field "$built" "targets.Sensor")" ]; then
+        problems=" no Sensor target in the resolved project"
+    else
+        # Settings without per-configuration parts are dumped flat; with them, as base + configs.
+        if [ -n "$(forecast_field "$built" "$base.base")$(forecast_field "$built" "$base.configs")" ]; then base="$base.base"; fi
+        forecast_se0444_on "$base" || problems=" Sensor's settings don't set $FORECAST_SE0444_KEY: YES"
+        for config in $(forecast_field "$built" "targets.Sensor.settings.configs"); do
+            value="$(forecast_field "$built" "targets.Sensor.settings.configs.$config.$FORECAST_SE0444_KEY")"
+            if [ -n "$value" ] && [ "$value" != "YES" ]; then problems="$problems; configuration $config sets it to $value"; fi
+        done
+    fi
+    if [ -n "$problems" ]; then
+        fail "D57: SE-0444 MemberImportVisibility must stay on for Sensor:$problems (project.yml as XcodeGen resolves it)"
+    else
+        pass "D57: SE-0444 MemberImportVisibility on for Sensor (project.yml as XcodeGen resolves it)"
+    fi
+}
+
+forecast_wall_clock_check() {
+    local files unguarded=""
+    files="$(grep -rlE 'ForecastInstant[[:space:]]*\([[:space:]]*wall[[:space:]]*:' App/Sources 2>/dev/null)"
+    if [ -n "$files" ]; then
+        unguarded="$(outside_debug 'ForecastInstant[[:space:]]*\([[:space:]]*wall[[:space:]]*:' $files)"
+    fi
+    if [ -n "$unguarded" ]; then
+        fail "D57: ForecastInstant(wall:) outside #if DEBUG in App/Sources (the app takes ForecastInstant.now()): $unguarded"
+    else
+        pass "D57: ForecastInstant(wall:) in App/Sources only inside #if DEBUG"
+    fi
+}
+
 forecast_isolation_checks() {
     forecast_manifest_check
     forecast_xcodegen_dumps
+    forecast_name_check
     forecast_package_checks
     forecast_import_checks
     forecast_symlink_check
     forecast_project_check
     forecast_flag_checks
+    forecast_se0444_check
+    forecast_wall_clock_check
 }
 
 # ---------------------------------------------------------------------------------------------
