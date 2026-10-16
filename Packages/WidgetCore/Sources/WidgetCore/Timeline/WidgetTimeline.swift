@@ -6,6 +6,9 @@
 //   local midnight(s)       → the last reading's day label ("Yesterday 11:02 PM", "Oct 14 …")
 //   warm-up end             → stops claiming warm-up (age rules again; "no data" without a reading)
 //   grace-period end        → "sensor expired"
+// D61 (review m1): a reading from an earlier sensor than the snapshot's `currentSensor` is never
+// shown ("No data · No readings from the new sensor yet"), and a transient state during the current
+// session's warm-up shows that warm-up (`WidgetSnapshot.shownLatest`, `displaySensorState`).
 // A clock mismatch (reading dated ahead of the phone, or inconsistent with the snapshot's write
 // time) is latched for the whole timeline and across reloads (ClockMismatchLatch, review N1): no
 // later entry shows that reading as a number (current, stale or last reading).
@@ -33,9 +36,12 @@ public struct WidgetEntryContent: Sendable, Equatable {
     /// True for an entry scheduled only because the last reading's day label changes at a local
     /// midnight. `WidgetTimeline.nextReload` ignores these, so they never delay the next reload.
     public let isDayChangeOnly: Bool
+    /// D61 (review m1): the snapshot's latest reading is from an earlier sensor and is not shown.
+    public let hidesEarlierSensorReading: Bool
 
     public init(date: Date, display: GlucoseDisplayState, recent: [ChartPoint], accent: AccentChoice, snapshotWrittenAt: Date?,
-                isReplay: Bool = false, calendar: Calendar = .autoupdatingCurrent, isDayChangeOnly: Bool = false) {
+                isReplay: Bool = false, calendar: Calendar = .autoupdatingCurrent, isDayChangeOnly: Bool = false,
+                hidesEarlierSensorReading: Bool = false) {
         self.date = date
         self.display = display
         self.recent = recent
@@ -43,6 +49,7 @@ public struct WidgetEntryContent: Sendable, Equatable {
         self.snapshotWrittenAt = snapshotWrittenAt
         self.isReplay = isReplay
         self.isDayChangeOnly = isDayChangeOnly
+        self.hidesEarlierSensorReading = hidesEarlierSensorReading
         if let shown = display.widgetReading, shown.age == .last {
             readingDay = ReadingDay.of(shown.reading.date, at: date, calendar: calendar)
         } else {
@@ -90,7 +97,7 @@ public enum WidgetTimeline {
     /// The clock-mismatch latch for this snapshot at `now` (persist it and pass it back next time).
     public static func clockMismatchLatch(snapshot: WidgetSnapshot?, now: Date, previous: Date?) -> Date? {
         guard let snapshot else { return nil }
-        return ClockMismatchLatch.update(latchedFor: previous, latest: snapshot.latest, now: now, snapshotWrittenAt: snapshot.writtenAt)
+        return ClockMismatchLatch.update(latchedFor: previous, latest: snapshot.shownLatest, now: now, snapshotWrittenAt: snapshot.writtenAt)
     }
 
     /// Timeline entries, ascending by date, starting at `now`.
@@ -104,9 +111,12 @@ public enum WidgetTimeline {
             return [WidgetEntryContent(date: now, display: .noData(last: nil), recent: [], accent: .default, snapshotWrittenAt: nil)]
         }
         let latch = clockMismatchLatch(snapshot: snapshot, now: now, previous: latchedFor)
-        let stateChanges = GlucoseDisplayState.transitionDates(latest: snapshot.latest, sensorState: snapshot.sensorState)
+        // D61 (review m1): an earlier sensor's reading is not shown; warm-up survives transient states.
+        let latest = snapshot.shownLatest
+        let sensorState = snapshot.displaySensorState
+        let stateChanges = GlucoseDisplayState.transitionDates(latest: latest, sensorState: sensorState)
         // D61: the last reading's label names its day, which changes at local midnight.
-        let dayChanges = snapshot.latest.map { ReadingDay.changeDates(after: $0.date, calendar: calendar) } ?? []
+        let dayChanges = latest.map { ReadingDay.changeDates(after: $0.date, calendar: calendar) } ?? []
         let future = (stateChanges + dayChanges).filter { $0 > now }.sorted()
         var dates: [Date] = [now]
         for date in future where date != dates.last { dates.append(date) }
@@ -115,8 +125,8 @@ public enum WidgetTimeline {
             WidgetEntryContent(
                 date: date,
                 display: ClockMismatchLatch.apply(
-                    GlucoseDisplayState.classify(latest: snapshot.latest, sensorState: snapshot.sensorState, now: date),
-                    latest: snapshot.latest,
+                    GlucoseDisplayState.classify(latest: latest, sensorState: sensorState, now: date),
+                    latest: latest,
                     latchedFor: latch
                 ),
                 recent: snapshot.recent,
@@ -124,7 +134,8 @@ public enum WidgetTimeline {
                 snapshotWrittenAt: snapshot.writtenAt,
                 isReplay: snapshot.isReplay,
                 calendar: calendar,
-                isDayChangeOnly: date != now && dayChanges.contains(date) && !stateChanges.contains(date)
+                isDayChangeOnly: date != now && dayChanges.contains(date) && !stateChanges.contains(date),
+                hidesEarlierSensorReading: snapshot.latestIsFromAnEarlierSensor
             )
         }
         // A midnight entry matters only while it shows a last reading's day; otherwise it would

@@ -7,7 +7,8 @@ import GlucoseCore
 
 public enum WidgetSamples {
     public enum State: String, CaseIterable, Identifiable, Sendable {
-        case normal, low, high, lowFlag, highFlag, stale, lastReading, lastReadingYesterday, lastReadingLowFlag, noData, warmingUp, expired, sensorError,
+        case normal, low, high, lowFlag, highFlag, stale, lastReading, lastReadingYesterday, lastReadingLowFlag, noData, newSensorPairing,
+             newSensorWarmUpRelaunch, warmingUp, expired, sensorError,
              pairingRejected, calibrationNeeded, notPaired, clockMismatch
         public var id: String { rawValue }
     }
@@ -33,6 +34,8 @@ public enum WidgetSamples {
         var trend = TrendArrow.flat
         var sensor = SensorState.active(sessionStart: now.addingTimeInterval(-5 * 86_400), expiresAt: now.addingTimeInterval(4 * 86_400))
         var hasReading = true
+        // D61 (review m1): the sensor the widget may show readings from; nil: as before.
+        var currentSensor: WidgetCurrentSensor?
         switch state {
         case .normal: break
         case .low:
@@ -61,6 +64,16 @@ public enum WidgetSamples {
             shape = { m in m <= 10 ? .belowRange : m <= 45 ? .mgdl(Int(41 + (m - 10) * 0.8)) : mockup(m) }
         case .noData:
             hasReading = false
+        case .newSensorPairing:
+            // The last reading (47 min ago) is the old sensor's; a new pairing has no sensor yet.
+            age = 47; sensor = .searching
+            currentSensor = WidgetCurrentSensor(serial: nil, sessionStart: nil, warmUpEndsAt: nil)
+        case .newSensorWarmUpRelaunch:
+            // Relaunched during the new sensor's warm-up: still searching, the old sensor's reading
+            // is 40 min old; the stored session says warm-up ends in 50 min.
+            age = 40; sensor = .searching
+            currentSensor = WidgetCurrentSensor(serial: "NEWSENSOR", sessionStart: now.addingTimeInterval(-10 * 60),
+                                                warmUpEndsAt: now.addingTimeInterval(50 * 60))
         case .warmingUp:
             sensor = .warmingUp(endsAt: now.addingTimeInterval(72 * 60)); hasReading = false
         case .expired:
@@ -84,7 +97,8 @@ public enum WidgetSamples {
                 delta: GlucoseDelta.between(latestDate: last.date, latestValue: last.value, previousDate: previous.date, previousValue: previous.value)
             )
         }
-        let snapshot = WidgetSnapshot(writtenAt: latest?.date ?? now, latest: latest, sensorState: sensor, recent: recent, accent: accent)
+        let snapshot = WidgetSnapshot(writtenAt: latest?.date ?? now, latest: latest, sensorState: sensor, recent: recent, accent: accent,
+                                      currentSensor: currentSensor, latestSensorSerial: latest == nil ? nil : "OLDSENSOR")
         return WidgetTimeline.entries(snapshot: snapshot, now: now, calendar: calendar)[0]
     }
 }

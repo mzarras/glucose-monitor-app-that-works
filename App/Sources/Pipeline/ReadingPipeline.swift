@@ -105,6 +105,10 @@ final class ReadingPipeline {
     /// launch): no widget snapshot is written then, because one without the latest reading would
     /// clear the widget's clock-mismatch latch (review B1). The composition root sets it.
     var publishesWidget = true
+    /// D61 (review m1): what the app read from the source's stored pairing, for the widget's
+    /// current sensor. The composition root sets it for the sensor pipeline; nil (a replay run):
+    /// `.notYetRead`, so only the replay session decides.
+    var storedPairing: (@MainActor () -> StoredPairing)?
 
     /// Called on the main actor after something the UI shows changed.
     var onChange: (@MainActor (ServiceChange) -> Void)?
@@ -534,20 +538,27 @@ final class ReadingPipeline {
     func publishWidget() async {
         guard publishesWidget, let widget = outputs.widget else { return }
         let date = now()
-        // The 3 hours before now, or before an older latest reading (D61: the widget charts the
-        // last 3 hours of real data up to it).
-        let windowStart = WidgetSnapshot.chartWindowStart(latestLive: latestLiveReading?.date, now: date)
-        let windowEnd = date.addingTimeInterval(LiveReadingGate.futureTolerance)
-        var recent = unstored.map(\.reading).filter { $0.date >= windowStart && $0.date < windowEnd }
-        if let store {
-            do {
-                recent += try await store.readings(from: windowStart, to: windowEnd)
-            } catch {
-                log(.app, "widget chart readings not read: \(error)")
+        // The last 3 hours and, for an older latest reading, the 3 hours up to it (D61; bounded,
+        // review m6). Half-open queries, so each span is read up to the clock tolerance past its end;
+        // `WidgetSnapshot.make` keeps exactly the spans.
+        let windows = WidgetSnapshot.chartWindows(latestLive: latestLiveReading?.date, now: date)
+        var recent: [GlucoseReading] = []
+        for window in windows {
+            let end = window.upperBound.addingTimeInterval(LiveReadingGate.futureTolerance)
+            recent += unstored.map(\.reading).filter { $0.date >= window.lowerBound && $0.date < end }
+            if let store {
+                do {
+                    recent += try await store.readings(from: window.lowerBound, to: end)
+                } catch {
+                    log(.app, "widget chart readings not read: \(error)")
+                }
             }
         }
+        // D61 (review m1): the sensor whose readings the widget may show. The session is read from
+        // the source now (persisted across relaunches), not the one cached at the last event.
+        let currentSensor = WidgetCurrentSensor.make(session: await source.currentSession, storedPairing: storedPairing?() ?? .notYetRead)
         widget.publish(latestLive: latestLiveReading, previousLive: previousLiveReading, recent: recent.sorted { $0.date < $1.date },
-                       sensorState: sensorState ?? .notPaired, now: date)
+                       sensorState: sensorState ?? .notPaired, currentSensor: currentSensor, now: date)
     }
 
     private func log(_ category: DiagnosticEvent.Category, _ message: String) {

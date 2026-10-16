@@ -8,6 +8,7 @@ import Foundation
 import GlucoseCore
 import NightscoutKit
 import TrioBridge
+import WidgetCore
 
 /// Writes the widget snapshot (HANDOFF §7.4). A protocol so pipeline tests run without an App
 /// Group; the app's `WidgetSnapshotPublisher` conforms (see `LiveWidgetPublisher`).
@@ -16,8 +17,10 @@ protocol WidgetSnapshotPublishing: AnyObject {
     /// - Parameters:
     ///   - latestLive: the latest live reading, however old.
     ///   - previousLive: the live reading just before it (delta), if any.
-    ///   - recent: readings of the last 3 hours, any source (chart only).
-    func publish(latestLive: GlucoseReading?, previousLive: GlucoseReading?, recent: [GlucoseReading], sensorState: SensorState, now: Date)
+    ///   - recent: readings of `WidgetSnapshot.chartWindows`, any source (chart only).
+    ///   - currentSensor: D61 (review m1), the sensor whose readings the widget may show.
+    func publish(latestLive: GlucoseReading?, previousLive: GlucoseReading?, recent: [GlucoseReading], sensorState: SensorState,
+                 currentSensor: WidgetCurrentSensor?, now: Date)
 }
 
 @MainActor

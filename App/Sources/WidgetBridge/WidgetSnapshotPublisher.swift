@@ -31,11 +31,12 @@ struct WidgetSnapshotPublisher {
     /// - Parameters:
     ///   - latestLive: `GlucoseReadingRepository.latestLiveReading()`, however old.
     ///   - previousLive: the live reading just before it (for the delta), if any.
-    ///   - recent: stored readings from `WidgetSnapshot.chartWindowStart` to now, any source (chart only).
+    ///   - recent: stored readings of `WidgetSnapshot.chartWindows`, any source (chart only).
+    ///   - currentSensor: D61 (review m1), the sensor whose readings the widget may show.
     func write(latestLive: GlucoseReading?, previousLive: GlucoseReading?, recent: [GlucoseReading],
-               sensorState: SensorState, accent: AccentChoice, now: Date) throws -> WidgetSnapshot {
+               sensorState: SensorState, currentSensor: WidgetCurrentSensor?, accent: AccentChoice, now: Date) throws -> WidgetSnapshot {
         let snapshot = WidgetSnapshot.make(latestLive: latestLive, previousLive: previousLive, recent: recent,
-                                           sensorState: sensorState, accent: accent, now: now)
+                                           sensorState: sensorState, accent: accent, now: now, currentSensor: currentSensor)
         try store.write(snapshot)
         return snapshot
     }

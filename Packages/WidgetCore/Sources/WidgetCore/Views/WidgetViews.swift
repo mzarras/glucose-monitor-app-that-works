@@ -336,8 +336,12 @@ struct WidgetDetailText: View {
         Group {
             switch content.display {
             case .noData:
-                // Only without any reading: a reading ≥ 20 min old is a last reading (D61).
-                Text(verbatim: "Open the app to check the sensor")
+                // Only without a reading to show: a reading ≥ 20 min old is a last reading (D61).
+                if content.hidesEarlierSensorReading {
+                    Text(verbatim: "No readings from the new sensor yet")
+                } else {
+                    Text(verbatim: "Open the app to check the sensor")
+                }
             case .warmingUp(let endsAt):
                 Text("Ready at \(endsAt, style: .time)")
             case .sensorExpired:

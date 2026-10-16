@@ -15,10 +15,11 @@ final class WidgetReloadKeyTests: XCTestCase {
     }
 
     private func reason(_ before: WidgetSnapshot, _ after: WidgetSnapshot) -> WidgetReloadReason? {
-        WidgetReloadKey.reloadReason(previous: WidgetReloadKey(before), current: WidgetReloadKey(after))
+        WidgetReloadKey.reloadReason(previous: WidgetReloadKey(before, timeZoneID: "UTC", localeID: "en_US"),
+                                     current: WidgetReloadKey(after, timeZoneID: "UTC", localeID: "en_US"))
     }
 
-    func test_firstPublishReloads() {
+    func test_S5_firstPublishReloads() {
         XCTAssertEqual(WidgetReloadKey.reloadReason(previous: nil, current: WidgetReloadKey(snapshot())), .noEarlierReload)
     }
 
@@ -39,7 +40,7 @@ final class WidgetReloadKeyTests: XCTestCase {
         }
     }
 
-    func test_newReadingReloads() {
+    func test_S5_newReadingReloads() {
         let newer = Fixture.latest(.mgdl(108), minutesAgo: -2, trend: .flat, delta: GlucoseDelta(mgdl: 3, minutes: 5))
         let after = snapshot(latest: newer, recent: history + [ChartPoint(date: newer.date, value: newer.value)], writtenAt: newer.date)
         XCTAssertEqual(reason(snapshot(), after), .latestReading(newer.date))
@@ -49,7 +50,7 @@ final class WidgetReloadKeyTests: XCTestCase {
         XCTAssertEqual(reason(snapshot(), snapshot(latest: reTrended)), .latestReading(reading.date))
     }
 
-    func test_sensorMessagesAndScheduledChangesReload() {
+    func test_S5_sensorMessagesAndScheduledChangesReload() {
         let base = snapshot()
         let expected: [(SensorState, WidgetSensorKey)] = [
             (.expired, .expired),
@@ -76,7 +77,7 @@ final class WidgetReloadKeyTests: XCTestCase {
         XCTAssertNil(reason(snapshot(state: .calibrationNeeded(code: 4)), snapshot(state: .calibrationNeeded(code: 5))))
     }
 
-    func test_accentReplayAndChartChangesReload() {
+    func test_S5_accentReplayAndChartChangesReload() {
         XCTAssertEqual(reason(snapshot(), snapshot(accent: .rust)), .accent(.rust))
         XCTAssertEqual(reason(snapshot(), snapshot(isReplay: true)), .replay)
         // A history import adds points inside the window: the chart changes.
@@ -100,12 +101,53 @@ final class WidgetReloadKeyTests: XCTestCase {
 
     /// Review N1 support: a reading dated after its snapshot's write time (the clock moved back while
     /// the app ran) reloads, so the widget can latch "Check phone clock".
-    func test_clockMovedBackReloads() {
+    func test_S5_clockMovedBackReloads() {
         let movedBack = snapshot(writtenAt: reading.date.addingTimeInterval(-3_600))
         XCTAssertEqual(reason(snapshot(), movedBack), .clockCheck)
         XCTAssertTrue(WidgetReloadKey(movedBack).readingAheadOfSnapshot)
         // Within the 60 s tolerance it is not.
-        XCTAssertNil(reason(snapshot(), snapshot(writtenAt: reading.date.addingTimeInterval(-30))))
+        let withinTolerance = snapshot(writtenAt: reading.date.addingTimeInterval(-30))
+        XCTAssertFalse(WidgetReloadKey(withinTolerance).readingAheadOfSnapshot)
+        XCTAssertNotEqual(reason(snapshot(), withinTolerance), .clockCheck)
+    }
+
+    /// Review n3: with no latest reading the 3-hour window moves with every write; imported points
+    /// leaving it are off every chart the installed timeline can still draw, so no reload.
+    func test_pointsLeavingTheMovingWindowWithoutAReadingDoNotReload() {
+        let imported = [Fixture.point(.mgdl(100), minutesAgo: 178), Fixture.point(.mgdl(102), minutesAgo: 120)]
+        let before = snapshot(latest: .some(nil), recent: imported)
+        let later = Fixture.now.addingTimeInterval(5 * 60)
+        let after = snapshot(latest: .some(nil), recent: [imported[1]], writtenAt: later)
+        XCTAssertNil(reason(before, after))
+        // A point that is still in the window and disappears (data deleted) does reload.
+        XCTAssertEqual(reason(before, snapshot(latest: .some(nil), recent: [imported[0]], writtenAt: later)), .chart)
+    }
+
+    /// D61 (review m1): another current sensor, or a latest reading of another sensor, reloads.
+    func test_S5_currentSensorChangeReloads() {
+        let paired = WidgetCurrentSensor(serial: "A", sessionStart: Fixture.minutesAgo(600), warmUpEndsAt: Fixture.minutesAgo(573))
+        let base = WidgetSnapshot(writtenAt: Fixture.now, latest: reading, sensorState: Fixture.activeSensor, recent: history, accent: .forest,
+                                  currentSensor: paired, latestSensorSerial: "A")
+        func with(_ current: WidgetCurrentSensor?, latestSerial: String? = "A") -> WidgetSnapshot {
+            WidgetSnapshot(writtenAt: Fixture.now, latest: reading, sensorState: Fixture.activeSensor, recent: history, accent: .forest,
+                           currentSensor: current, latestSensorSerial: latestSerial)
+        }
+        XCTAssertNil(reason(base, with(paired)))
+        XCTAssertEqual(reason(base, with(WidgetCurrentSensor(serial: nil, sessionStart: nil, warmUpEndsAt: nil))), .currentSensor(nil), "pairing a new sensor")
+        let next = WidgetCurrentSensor(serial: "B", sessionStart: Fixture.minutesAgo(5), warmUpEndsAt: Fixture.minutesAgo(-22))
+        XCTAssertEqual(reason(base, with(next)), .currentSensor("B"), "the new sensor's session")
+        XCTAssertEqual(reason(base, with(nil)), .currentSensor(nil), "no longer known")
+        XCTAssertEqual(reason(base, with(paired, latestSerial: "B")), .currentSensor("A"))
+    }
+
+    /// Review m4: the day labels and midnight entries depend on the phone's time zone and locale.
+    func test_S5_timeZoneOrLocaleChangeReloads() {
+        let key = WidgetReloadKey(snapshot(), timeZoneID: "America/New_York", localeID: "en_US")
+        XCTAssertNil(WidgetReloadKey.reloadReason(previous: key, current: WidgetReloadKey(snapshot(), timeZoneID: "America/New_York", localeID: "en_US")))
+        XCTAssertEqual(WidgetReloadKey.reloadReason(previous: key, current: WidgetReloadKey(snapshot(), timeZoneID: "Europe/Paris", localeID: "en_US")),
+                       .timeZoneOrLocale)
+        XCTAssertEqual(WidgetReloadKey.reloadReason(previous: key, current: WidgetReloadKey(snapshot(), timeZoneID: "America/New_York", localeID: "en_GB")),
+                       .timeZoneOrLocale)
     }
 
     func test_logTextIsOneShortLine() {
@@ -114,5 +156,7 @@ final class WidgetReloadKeyTests: XCTestCase {
         XCTAssertEqual(WidgetReloadReason.sensorState(.failed(SensorFailure(kind: .sensorFailed, message: "m"))).logText, "sensor state failed (sensorFailed)")
         XCTAssertEqual(WidgetReloadReason.accent(.navy).logText, "accent navy")
         XCTAssertEqual(WidgetReloadReason.noEarlierReload.logText, "first publish since launch or foreground")
+        XCTAssertEqual(WidgetReloadReason.currentSensor("B").logText, "current sensor B")
+        XCTAssertEqual(WidgetReloadReason.timeZoneOrLocale.logText, "time zone or locale changed")
     }
 }

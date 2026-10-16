@@ -172,11 +172,28 @@ final class WidgetSnapshotTests: XCTestCase {
         ]
         let snapshot = WidgetSnapshot.make(latestLive: latest, previousLive: nil, recent: recent, sensorState: Fixture.activeSensor, accent: .forest, now: Fixture.now)
         XCTAssertEqual(snapshot.recent.map(\.date), [Fixture.minutesAgo(240), Fixture.minutesAgo(200), Fixture.minutesAgo(60)])
-        XCTAssertEqual(WidgetSnapshot.chartWindowStart(latestLive: latest.date, now: Fixture.now), Fixture.minutesAgo(240))
-        // A current reading, a future-dated one, or none: the 3 hours before `now`.
-        XCTAssertEqual(WidgetSnapshot.chartWindowStart(latestLive: Fixture.minutesAgo(2), now: Fixture.now), Fixture.minutesAgo(182))
-        XCTAssertEqual(WidgetSnapshot.chartWindowStart(latestLive: Fixture.minutesAgo(-30), now: Fixture.now), Fixture.minutesAgo(180))
-        XCTAssertEqual(WidgetSnapshot.chartWindowStart(latestLive: nil, now: Fixture.now), Fixture.minutesAgo(180))
+        XCTAssertEqual(WidgetSnapshot.chartWindows(latestLive: latest.date, now: Fixture.now), [Fixture.minutesAgo(240)...Fixture.now])
+        // A current reading, a future-dated one, or none: the 3 hours before the earlier of the two.
+        XCTAssertEqual(WidgetSnapshot.chartWindows(latestLive: Fixture.minutesAgo(2), now: Fixture.now), [Fixture.minutesAgo(182)...Fixture.now])
+        XCTAssertEqual(WidgetSnapshot.chartWindows(latestLive: Fixture.minutesAgo(-30), now: Fixture.now), [Fixture.minutesAgo(180)...Fixture.now])
+        XCTAssertEqual(WidgetSnapshot.chartWindows(latestLive: nil, now: Fixture.now), [Fixture.minutesAgo(180)...Fixture.now])
+    }
+
+    /// Review m6: a month-old latest reading adds its own 3 hours, not the month in between, so the
+    /// file stays small on every drain.
+    func test_monthOldLatestReadingKeepsOnlyItsOwnThreeHoursAndTheLastThree() {
+        let month: Double = 30 * 1_440
+        let latest = Fixture.reading(.mgdl(140), minutesAgo: month)
+        // One imported reading every 5 minutes for the whole month, plus the latest itself.
+        let imported = stride(from: month + 240, through: 0, by: -5).map { Fixture.reading(.mgdl(100), minutesAgo: $0, source: .imported(.nightscout)) }
+        let snapshot = WidgetSnapshot.make(latestLive: latest, previousLive: nil, recent: imported + [latest], sensorState: .searching,
+                                           accent: .forest, now: Fixture.now)
+        XCTAssertEqual(WidgetSnapshot.chartWindows(latestLive: latest.date, now: Fixture.now),
+                       [Fixture.minutesAgo(month + 180)...Fixture.minutesAgo(month), Fixture.minutesAgo(180)...Fixture.now])
+        // 37 imported points (every 5 min, both ends included) + the latest in its window; 37 in the last 3 hours.
+        XCTAssertEqual(snapshot.recent.count, 38 + 37)
+        XCTAssertTrue(snapshot.recent.allSatisfy { $0.date >= Fixture.minutesAgo(180) || ($0.date >= Fixture.minutesAgo(month + 180) && $0.date <= latest.date) })
+        XCTAssertEqual(snapshot.recent.map(\.date), snapshot.recent.map(\.date).sorted())
     }
 
     /// Review m3: whatever is in the file, the widget either gets a valid snapshot or nil ("No data").

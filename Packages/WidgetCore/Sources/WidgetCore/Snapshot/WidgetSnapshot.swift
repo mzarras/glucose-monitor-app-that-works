@@ -32,6 +32,11 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
     /// (S6) and `make` sets this only in DEBUG, so a Release snapshot always has false. Snapshots
     /// written before this field existed decode as false (additive; same schema version).
     public let isReplay: Bool
+    /// D61 (review m1): the sensor whose readings the widget may show (`WidgetCurrentSensor`); nil
+    /// in snapshots written before this field existed, which are shown as before (additive).
+    public let currentSensor: WidgetCurrentSensor?
+    /// The serial of the sensor that took `latest` (`GlucoseReading.sensorSerial`); nil when absent.
+    public let latestSensorSerial: String?
 
     public init(
         writtenAt: Date,
@@ -40,6 +45,8 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
         recent: [ChartPoint],
         accent: AccentChoice,
         isReplay: Bool = false,
+        currentSensor: WidgetCurrentSensor? = nil,
+        latestSensorSerial: String? = nil,
         schemaVersion: Int = WidgetSnapshot.currentSchemaVersion
     ) {
         self.schemaVersion = schemaVersion
@@ -49,10 +56,12 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
         self.recent = recent
         self.accent = accent
         self.isReplay = isReplay
+        self.currentSensor = currentSensor
+        self.latestSensorSerial = latestSensorSerial
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, writtenAt, latest, sensorState, recent, accent, isReplay
+        case schemaVersion, writtenAt, latest, sensorState, recent, accent, isReplay, currentSensor, latestSensorSerial
     }
 
     public init(from decoder: any Decoder) throws {
@@ -64,6 +73,8 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
         recent = try container.decode([ChartPoint].self, forKey: .recent)
         accent = try container.decode(AccentChoice.self, forKey: .accent)
         isReplay = try container.decodeIfPresent(Bool.self, forKey: .isReplay) ?? false
+        currentSensor = try container.decodeIfPresent(WidgetCurrentSensor.self, forKey: .currentSensor)
+        latestSensorSerial = try container.decodeIfPresent(String.self, forKey: .latestSensorSerial)
     }
 
     /// Builds a snapshot from stored readings. Selection only; no value is created (S1).
@@ -73,24 +84,25 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
     ///     and staleness come from it, however old it is (so an old reading is still shown as the
     ///     last reading with its time, D61, not "no reading"). An imported reading here is ignored (S6).
     ///   - previousLive: the live reading immediately before `latestLive`, for the delta.
-    ///   - recent: stored readings covering `chartWindowStart(latestLive:now:)` to `now`, any
-    ///     source (chart only).
+    ///   - recent: stored readings covering `chartWindows(latestLive:now:)`, any source (chart only).
+    ///   - currentSensor: D61 (review m1), the sensor whose readings the widget may show.
     public static func make(
         latestLive: GlucoseReading?,
         previousLive: GlucoseReading?,
         recent: [GlucoseReading],
         sensorState: SensorState,
         accent: AccentChoice,
-        now: Date
+        now: Date,
+        currentSensor: WidgetCurrentSensor? = nil
     ) -> WidgetSnapshot {
         let latest = latestLive.flatMap { $0.source.isImportedHistory ? nil : $0 }
         let previous = previousLive.flatMap { reading -> GlucoseReading? in
             guard !reading.source.isImportedHistory, let latest, reading.date < latest.date else { return nil }
             return reading
         }
-        let windowStart = chartWindowStart(latestLive: latest?.date, now: now)
+        let windows = chartWindows(latestLive: latest?.date, now: now)
         let points = recent
-            .filter { $0.date >= windowStart && $0.date <= now }
+            .filter { reading in reading.date <= now && windows.contains { $0.contains(reading.date) } }
             .sorted { $0.date < $1.date }
             .map(ChartPoint.init)
         return WidgetSnapshot(
@@ -99,15 +111,24 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
             sensorState: sensorState,
             recent: points,
             accent: accent,
-            isReplay: latest.map { isReplaySource($0.source) } ?? false
+            isReplay: latest.map { isReplaySource($0.source) } ?? false,
+            currentSensor: currentSensor,
+            latestSensorSerial: latest?.sensorSerial
         )
     }
 
-    /// Where the snapshot's chart history starts: 3 hours before the latest live reading, or before
-    /// `now` if that is earlier (or there is no reading). D61: the widget charts the 3 hours up to
-    /// an old last reading, so the app must hand those over, not just the last 3 hours.
-    public static func chartWindowStart(latestLive: Date?, now: Date) -> Date {
-        min(latestLive ?? now, now).addingTimeInterval(-historyWindow)
+    /// The spans the snapshot's chart history covers: the last 3 hours before `now` and, for a
+    /// latest live reading older than that, the 3 hours up to it (D61: the widget charts those for
+    /// an old last reading). One span when they overlap. Bounded (review m6): a month-old reading
+    /// adds its own 3 hours, not the month in between.
+    public static func chartWindows(latestLive: Date?, now: Date) -> [ClosedRange<Date>] {
+        let lastThreeHours = now.addingTimeInterval(-historyWindow)...now
+        guard let latest = latestLive, latest < lastThreeHours.lowerBound else {
+            // The latest reading is within the last 3 hours (or ahead of the clock): one span from
+            // 3 hours before the earlier of the two.
+            return [min(latestLive ?? now, now).addingTimeInterval(-historyWindow)...now]
+        }
+        return [latest.addingTimeInterval(-historyWindow)...latest, lastThreeHours]
     }
 
     /// DEBUG (audit m9): a replay or mock reading. Always false in Release, where those sources

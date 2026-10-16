@@ -23,7 +23,7 @@ store change / sensor state change
 
 | Piece | File | Notes |
 |---|---|---|
-| Snapshot model | `Packages/WidgetCore/Sources/WidgetCore/Snapshot/WidgetSnapshot.swift` | `WidgetSnapshot.make(latestLive:previousLive:recent:…)` only *selects*: the repository's `latestLiveReading()` however old (so a reading older than 3 h is still shown as the last reading, D61), the live reading before it for the delta, and the stored readings from `chartWindowStart` (3 h before the latest reading or before now, whichever is earlier) for the chart. An imported reading passed as "live" is ignored (S6). |
+| Snapshot model | `Packages/WidgetCore/Sources/WidgetCore/Snapshot/WidgetSnapshot.swift` | `WidgetSnapshot.make(latestLive:previousLive:recent:…)` only *selects*: the repository's `latestLiveReading()` however old (so a reading older than 3 h is still shown as the last reading, D61), the live reading before it for the delta, and the stored readings in `chartWindows` (the last 3 h, plus the 3 h up to an older latest reading; bounded, review m6) for the chart. It also records the latest reading's serial and the current sensor (D61, review m1). An imported reading passed as "live" is ignored (S6). |
 | File I/O | `…/Snapshot/WidgetSnapshotStore.swift` | `[.atomic, .completeFileProtectionUntilFirstUserAuthentication]` (HANDOFF §4.5); App Group from Info.plist `AppGroupID`. The widget reads through `snapshotForWidget()` / `readOrNil()`: empty, truncated, corrupt or other-schema files all read as nil (tested). |
 | Timeline | `…/Timeline/WidgetTimeline.swift` | Pure: entries and reload date from a snapshot and `now`. |
 | Display rules | `…/Formatting/GlucoseDisplayState.swift` | Shared with the Now screen: fresh / stale / no data / warm-up / expired / error / not paired. |
@@ -71,9 +71,11 @@ minutes earlier):
 | `writtenAt` | When the app wrote the file ("last updated"). |
 | `latest` | Newest live reading or absent. `value` keeps LOW/HIGH as `belowRange`/`aboveRange` (S4). `trend` is `TrendArrow` from the sensor-reported rate. `delta` is absent when either reading is a flag or they are > 15 min apart. |
 | `sensorState` | `SensorState` at write time (drives warm-up / expired / error / not-paired messages). |
-| `recent` | Readings from 3 h before the earlier of `latest` and `writtenAt`, up to `writtenAt`, ascending; may include imported history (charts only). For an old `latest` this is its last 3 h (D61). |
+| `recent` | Readings in the 3 h before `writtenAt` and, for a `latest` older than that, the 3 h up to `latest` (D61; nothing in between, review m6), ascending; may include imported history (charts only). |
 | `accent` | `forest` / `rust` / `navy` / `ink`. |
 | `isReplay` | DEBUG only (audit m9): `latest` came from a replay or mock source, and the widget shows "REPLAY" beside it. Always `false` in Release; absent in older snapshots (read as `false`). |
+| `currentSensor` | D61 (review m1), optional: `{ serial, sessionStart, warmUpEndsAt }` of the sensor whose readings may be shown — the source's current session (persisted across relaunches), else the stored pairing's serial (`serial` absent: a new pairing, Forget sensor, Stop following). Absent in older snapshots and before the app has read its pairing: shown as before. |
+| `latestSensorSerial` | D61 (review m1), optional: the serial of the sensor that took `latest`. |
 
 A missing, unreadable or wrong-version file, or a missing App Group, all read as "no snapshot" and
 render *No data* — never a number.
@@ -104,7 +106,24 @@ every state (S4). The Now screen is unchanged: its hero never shows an old numbe
 
 Still no number: no snapshot or never a reading ("No data · Open the app to check the sensor"),
 warm-up, sensor expired (also at the grace period's end), sensor error, a failure that raises the
-sensor alert, calibration needed or rejected, not paired, and a clock mismatch.
+sensor alert, calibration needed or rejected, not paired, a clock mismatch, and an earlier sensor's
+reading (below).
+
+**Earlier sensor (D61, owner decision on review m1).** Once a new pairing has started ("Pair this
+app" with a new code, Forget sensor, listen mode's Stop following or following a different sensor)
+or a new session is known, the widget never shows a reading from an earlier sensor as a number. The
+snapshot's `currentSensor` decides (`WidgetSnapshot.latestIsFromAnEarlierSensor`): the reading is
+hidden when no sensor is paired or followed yet, when its serial differs from the current one, or
+when it is dated before the current session's start. The widget then shows the state's own message:
+"No sensor" (not paired), "Warming up · Ready 2:40 PM", or "No data · No readings from the new
+sensor yet". While the current session's warm-up end is known, a state in which readings are judged
+by age alone (searching, connecting, authenticating, active, Bluetooth unavailable, a transient
+failure) shows that warm-up (`displaySensorState`), so a relaunch during warm-up, while the source
+still reports searching, keeps "Warming up" on screen instead of the old reading. Only stored or
+sensor-reported data (S3): the session comes from `CGMSource.currentSession`, which G7Kit persists
+across relaunches; the serial from the stored pairing. The same sensor after a relaunch or a
+disconnect keeps showing its own last reading as above. The app's Now screen is not involved (it
+never shows an old number on its own).
 
 Per family (last reading):
 
@@ -113,7 +132,7 @@ Per family (last reading):
 | medium | muted number, unit, "LAST READING", "2:14 PM · 47 min ago" (another day: "Yesterday 11:02 PM", then "12 hr, 13 min ago" on its own line); chart (right) ends at the reading, with the reading's time under its right edge so the axis isn't read as "now" |
 | small | as the medium's left side |
 | rectangular | muted number, "LAST READING", "2:14 PM · 47m" (another day: a smaller number, "Yesterday 11:02 PM", then "12h 13m ago"), dimmed sparkline ending at the reading (no time label: no room, the text beside it gives the time) |
-| inline | "Last 112 · 2:14 PM" (stale: "Stale 112 · 12m", no arrow) |
+| inline | "Last 112 · 2:14 PM": the reading's time only, no age (D61, owner decision on review m5; a single line has no room for both, and the time says more). Stale: "Stale 112 · 12m", no arrow |
 
 **Clock and day label.** The time uses the system time style (`Text(date, style: .time)`), so a
 24-hour locale shows "14:14". When the reading was not taken on the entry's local day the label
@@ -126,7 +145,7 @@ message or a current/stale reading add no entry. These entries don't move the re
 the reading's own date instead of the entry's, so the last known 3 hours stay visible instead of
 scrolling off to an empty chart (`WidgetEntryContent.chartDomain`). Not `writtenAt`: the app rewrites
 the snapshot on every wake, so that date keeps moving with no new reading. The snapshot carries the
-3 hours before the latest reading for this (`WidgetSnapshot.chartWindowStart`). Still only real
+3 hours before the latest reading for this (`WidgetSnapshot.chartWindows`). Still only real
 points through `ChartSeries` (S1); gaps > 15 min still break the line. Stale entries keep the
 chart ending at the entry's date (the empty right edge is the gap).
 
@@ -157,10 +176,12 @@ only when `WidgetReloadKey` differs from the key of the last snapshot it request
 | In the key | Why |
 |---|---|
 | latest reading (date, value, trend, delta) | the number, arrow, delta and every age transition |
-| chart points from 3 h before the earlier of the latest reading and `writtenAt` | every chart the timeline can draw starts there or later; points that drop out below it change nothing |
+| chart points in `chartWindows` (the 3 h before `writtenAt`, and the 3 h up to an older latest reading) | every chart a timeline built from the snapshot can draw lies inside them. A point of the previous key outside the current windows is no change (`reloadReason` compares the previous points inside the current windows): no timeline entry dated from now on can draw it, so the moving 3-hour window doesn't cause a reload every few minutes (review n3) |
 | sensor state, reduced (`WidgetSensorKey`) | searching / connecting / authenticating / active / Bluetooth unavailable / a transient failure are one value (readings judged by age); warm-up (with its end), grace period (with its end), expired, error (code, text), an alerting failure (kind, message), calibration needed, calibration rejected, not paired are each distinct |
 | accent, `isReplay` | colours, the DEBUG REPLAY marker |
 | reading dated after its snapshot (beyond 60 s) | the clock-moved-back check |
+| `currentSensor`, `latestSensorSerial` | an earlier sensor's reading is hidden (review m1) |
+| the app's `TimeZone.current` and `Locale.current` identifiers | day labels and midnight entries are computed in the zone the timeline was built in (review m4); a change reloads at the next publish (at most one wake later) |
 
 The first publish of the process (no key yet) reloads, and so does the first one after the app
 comes to the foreground (`LiveAppServices.handleForeground` calls `reloadOnNextPublish()`). A
@@ -195,10 +216,22 @@ the same scheme in `App/Info.plist` `CFBundleURLTypes`). The app selects the Now
   change, chart anchoring, reload policy (midnight entries don't move it).
 - `WidgetReloadKeyTests`: state churn and rewrites don't reload; a new reading, expired, warm-up
   (and its end), grace period, error, alerting failures, calibration, not paired, accent, replay,
-  chart history and the clock check do; points leaving below the chart floor don't; log text.
+  chart history, the clock check, the current sensor and the time zone or locale do; points leaving
+  the chart windows don't (also with no reading, n3); log text.
+- `WidgetReloadPropertyTests.test_S5_noReloadOnlyWhenTheWidgetWouldShowTheSame` (review m2): for
+  every sensor state × latest reading × current sensor × write offset × chart variant, whenever
+  `reloadReason` skips the reload, the timeline built from the earlier snapshot renders the same as
+  the later one's (display, day label, accent, replay, earlier-sensor flag, anchored chart points)
+  at times from the later write to 3 days on; a negative control shows the check can fail.
+- `WidgetCurrentSensorTests` (review m1): `test_S5_earlierSensorReadingIsHiddenWhilePairingANewSensor`,
+  `…DuringTheNewSensorsWarmUp`, `test_S5_warmUpRelaunchWithTransientStatesKeepsShowingWarmUp`,
+  `test_S5_sameSensorRelaunchStillShowsItsLastReading`, `test_S5_snapshotWithoutCurrentSensorIsShownAsBefore`,
+  `test_S5_hiddenEarlierSensorReadingIsNotLatched`; `WidgetSnapshotTests` also
+  `test_monthOldLatestReadingKeepsOnlyItsOwnThreeHoursAndTheLastThree` (m6).
 - App: `WidgetReloadPolicyTests` (the publisher reloads only when the key changes, through an
-  injected reload call; one log line per reload; the foreground reload; a failed write never
-  reloads).
+  injected reload call; one log line per reload; the foreground reload; a time zone change; a new
+  pairing; a failed write never reloads); `LaunchOrderTests.test_S5_foregroundAsksTheWidgetToReloadAtTheNextPublish`
+  (m3) and `test_S5_widgetSnapshotCarriesTheCurrentSensorAndForgetClearsIt` (m1, real composition).
 - Previews for every family × state, light and dark, plus a stale / last-reading set per family:
   `Widgets/Sources/WidgetPreviews.swift`.
 - Rendered (`ScreenshotTests.test_renderWidgets`): `docs/screenshots/widget-medium-*.png`
