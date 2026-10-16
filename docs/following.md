@@ -7,8 +7,8 @@ lows, you must switch to LoopFollow (section 2).**
 
 ## 1. Nightscout website (to look, not to be alarmed)
 
-Open Michael's Nightscout site, **https://diabetes.mzarras.com**, with the follower link he sends
-you (it contains a read-only token). It shows the current value, the arrow, and the last hours.
+Open Michael's Nightscout site with the follower link he sends you (it contains the site's address
+and a read-only token). It shows the current value, the arrow, and the last hours.
 Keep the tab or home-screen bookmark open; the page updates itself.
 
 - A reading below the sensor's range shows as **LOW**, above it as **HIGH** — never as a number.
@@ -78,7 +78,7 @@ it anywhere else). Nightscout's default roles cannot create entries except `admi
    in the URL (`lib/authorization/index.js:76-96, 194-200`).
 
 **Follower links**: create a subject per follower (or one shared) with role `readable` and send
-them `https://diabetes.mzarras.com/?token=<that subject's token>`. Revoke it by deleting the
+them `https://<your-nightscout-site>/?token=<that subject's token>`. Revoke it by deleting the
 subject.
 
 **Alarms (PROGRESS D29).** glucose sends LOW as sgv 39 and HIGH as 401: Nightscout displays them

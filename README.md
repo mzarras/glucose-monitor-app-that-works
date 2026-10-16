@@ -11,8 +11,10 @@ Build from source only. GPL-3.0.
 > insulin delivery system: if you build and run it, what it does is your responsibility. Check
 > readings that don't match how you feel with a fingerstick meter.
 
-**Status:** under construction (`PROGRESS.md`). The automated gates pass; the app has **not yet been
-validated with a live sensor** (`docs/setup.md` §5). The app is called "glucose" (D52); "Sensor" is the working name of the project, its targets and packages.
+**Status:** tested with a live G7 sensor in **listen mode**, following the Dexcom app's own
+connection on the same phone. Testing continues in **primary mode** with the Dexcom app fully
+deleted: pairing, the Trio handoff and the Nightscout and Dexcom Share uploads, over a full sensor
+session (`docs/setup.md` §5). The automated gates pass (`PROGRESS.md`). The app is called "glucose" (D52); "Sensor" is the working name of the project, its targets and packages.
 
 ## What it is, and what it isn't
 
