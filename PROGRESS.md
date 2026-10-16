@@ -180,6 +180,7 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 ### 2026-10-16 — Phase 6: widget keeps the last reading (D61); repository public
 - Repository published at https://github.com/mzarras/glucose-monitor-app-that-works (`main` only; owner's Nightscout URL removed from the tree; README status: tested live in listen mode, primary-mode testing continues with the Dexcom app deleted; README Predict entry).
 - p6-widget (WS5): 29f46c3 (D61 display + reload dedupe), safety review PASS (m1–m7, n1–n4) → owner decisions m1 hide earlier sensor's reading, m5 inline time only, stale VoiceOver without trend word → 59c552d (m1–m6, n3 fixed), certify `.build-logs/20261016-120746` PASS, `--verify-certify` OK; re-review PASS (nits n5–n8 accepted; n1, n2, n4 left). Merged into integration.
+- Installed 2026-10-16 12:35: Release from `main` af04213 (zero warnings; bundle ID, display name "glucose", feed host set, no ReplayKit/fixture symbols) over the previous build (data kept) and launched, on the new sensor in primary mode with the Dexcom app deleted.
 
 ### 2026-10-08 — Phase 5 merged, on `main`, installed
 - integration 65ce57d = merge of p5-final 9d8b495; certify on 65ce57d all gates PASS, `--verify-certify` OK (742 s). `main` 9aed642 (no-ff merge of 65ce57d, identical tree). Release built from `main` with zero warnings, checked (bundle ID, display name, feed host set, no fixture/ReplayKit symbols), installed on Michael's iPhone 15 Pro and launched.
