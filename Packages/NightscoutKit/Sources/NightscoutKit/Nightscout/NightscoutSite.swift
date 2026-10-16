@@ -1,5 +1,5 @@
 // Original to Sensor (no ported code).
-// The owner's Nightscout site (PROGRESS D6: https://diabetes.mzarras.com, entered at runtime).
+// The user's Nightscout site (PROGRESS D6), entered at runtime.
 
 import Foundation
 

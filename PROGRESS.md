@@ -10,8 +10,8 @@ Orchestrator log for the build described in `HANDOFF.md`. Only the orchestrator 
 | 1 — Parallel build | done (2026-09-23): all 7 workstreams merged into `integration`; gates 1–3 PASS |
 | 2 — Integration | **done (2026-10-06)**: Phase 2 + follow-ups (D43) merged into `integration`; all reviews PASS; all six §10 gates pass; **`main` = 4cce67f** (first merge since bootstrap) |
 | 3 — Hardening | **done (2026-10-06)**: audit + failure-mode pass + listen mode (D45–D51) merged (b38429b); all reviews PASS; gates 1–4 PASS on 3e11c21 (docs-only after) |
-| 4 — Device build | **done**; latest install 2026-10-07: `main` 767671f (vibrate-only alerts D53/D54, services n1/n2) installed over the previous build (data kept). Launch needs the phone unlocked: Michael opens the app once to resume listening. |
-| 5 — Predict tab, navigation, live volume (D55–D57) | **in progress (2026-10-08)**: p5-alerts (WS4), p5-forecast (WS7, new `ForecastKit`), p5-nav (WS5) in parallel → p5-stage → p5-predict (WS5) |
+| 4 — Device build | **done**; latest install **2026-10-08 22:01: `main` 9aed642** (Phase 5: Predict tab, Now · Predict · Trends · Settings, live alarm volume in Settings, D55 alarm-audio fixes) installed over the previous build (data kept) and launched. Release, signed with the team; feed host set from the gitignored Signing.xcconfig. |
+| 5 — Predict tab, navigation, live volume, tooling (D55–D60) | **done (2026-10-08)**: integration 65ce57d (certify PASS + `--verify-certify` OK, `.build-logs/20261008-214643`); **`main` = 9aed642** (tree identical to 65ce57d); installed on the phone. |
 
 ### Workstreams (Phase 1)
 
@@ -40,7 +40,7 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 | D3 | Integrate against `mzarras/Trio` `main` @ `29350e31a` (v0.8.4 merge). Any Trio patch goes on a new **local** branch in the fork, never pushed without asking. | §13 Q3. |
 | D4 | Critical Alerts built in fully from the start. The entitlement itself is a switch (`SENSOR_APP_ENTITLEMENTS` in `Config/Signing.xcconfig`) because signing fails until Apple grants it to the team. Code always requests `.criticalAlert` authorization (harmless without the entitlement) and falls back to Time Sensitive + audio playback. | §13 Q4. Apple grants the entitlement per team; Michael must apply. |
 | D5 | Deployment target iOS 17.0 (matches Trio). | §13 Q5. |
-| D6 | Nightscout: `https://diabetes.mzarras.com`; token supplied later, entered at runtime only (Keychain). This app uploads CGM entries; Trio's CGM upload off (WS6 confirms feasibility). No writes to the live site during development — mock server only. | §13 Q6. |
+| D6 | Nightscout: the owner's own site (URL kept out of the repository); token supplied later, entered at runtime only (Keychain). This app uploads CGM entries; Trio's CGM upload off (WS6 confirms feasibility). No writes to the live site during development — mock server only. | §13 Q6. |
 | D7 | Dexcom Share upload **in v1 and turned on** for Michael (region US). Credentials entered in-app only (Keychain). The uploader still ships as a setting; onboarding offers it with US preselected. | §13 Q7 (changes handoff's "off by default" for this build). |
 | D8 | Persistence: GRDB 7.11.1, pinned exactly. | §4.4 recommendation; deterministic background writes, fast range queries. |
 | D9 | Contract additions beyond §4.3 (all in `GlucoseCore`): `SensorState.bluetoothUnavailable(BluetoothIssue)`, `SensorSession`, `CGMSource.currentSession`, `LiveReadingGate` (S2/S6 check every consumer calls), `TrendArrow` (single §7.5 threshold constant + Nightscout names), `GlucoseBand`/`GlucoseThresholds`, `GlucoseReadingRepository`, `DiagnosticLog`, `GlucoseUnit`; `Codable`/`Hashable` on the core types. | S5 needs BLE state; S2 needs session bounds downstream; shared vocabulary keeps UI, stats, uploads and Trio consistent. |
@@ -159,12 +159,25 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 - Residual P1c: with another G7 app installed, confirm `otherAppRejected` surfaces (D35).
 - Change the phone's time manually during an urgent-low snooze (rollback detection with the monotonic clock, WS4); AlarmKit: 31 alarms at the 2-min floor, wake 30 s before / 3 s after a repeat, revoke alarm permission with repeats pending.
 
+## Backlog from Phase 5 reviews (none blocking)
+
+- **Gate (check.sh, next gate change):** a `-disable-upcoming-feature MemberImportVisibility` flag passes the SE-0444 check (add it to `FORECAST_FLAG_RE`); the `ForecastInstant(wall:` check scans only App/Sources and one spelling (scan App/, match `.init(wall:`, or make `init(wall:monotonic:)` DEBUG/`@_spi` in ForecastKit with a compile-out check); the `OTHER_SWIFT_FLAGS` way of enabling SE-0444 always fails (bare-string dump); `certify_requirements` should refuse to silently drop variable-led labels and the selftest should run the drop-each loop; stray `:;` in the SE-0444 FAIL text; unchecked pass-3 reset; run-script build phases not inspected; xcconfig-assembled flags caught only by the certify build-log grep; a per-worktree lock for two runs in one worktree; a cleaner for `.derived/fast-*`.
+- **ForecastKit / feed:** HTTP `Date` (+`Age`) as the receipt wall time for a phone clock already wrong at arrival; `OrefForecast` is a public type with no public route (make internal until `oref_generated_at` exists); oref display once the feed publishes `oref_generated_at` (D58).
+- **Predict:** metrics-fetch generation guard untested (correct by reading); freshness line wraps mid-phrase at the default text size.
+- **AlertEngine:** `mediaServicesWereResetNotification` handler (pre-existing, D17); "one repeat interval" wording when AlarmKit becomes available mid-episode; `@_spi(Testing)` for the player's test-only API.
+- **p5-nav:** HANDOFF §7.3 updated for D56 (done at merge); `docs/safety-review.md:148` is a dated Phase 3 audit that still lists the old volume banner (cite D55 in the next audit).
+- **Device checks to add to Michael's list (docs/alerts.md §10 item 12 f–i, docs/setup.md):** alarm started during a call or Siri keeps sounding after it ends; opening the app during a long call resumes an interrupted urgent-low loop afterwards; the idle monitoring session doesn't take a Bluetooth/CarPlay route; volume buttons change media volume while the app is open; Predict shows a forecast within about a minute of opening, "couldn't refresh" in airplane mode, then "out of date" 15 min after the last model run.
+
 ## Open questions for Michael
 
 - Critical Alerts entitlement: optional (D17). Applying is free but approval for a build-from-source app is unlikely; if ever granted, flip `SENSOR_APP_ENTITLEMENTS` (D4).
 - Nightscout token (read + write), when ready — enter it in the app, not in chat or files.
 
 ## Phase log
+
+### 2026-10-08 — Phase 5 merged, on `main`, installed
+- integration 65ce57d = merge of p5-final 9d8b495; certify on 65ce57d all gates PASS, `--verify-certify` OK (742 s). `main` 9aed642 (no-ff merge of 65ce57d, identical tree). Release built from `main` with zero warnings, checked (bundle ID, display name, feed host set, no fixture/ReplayKit symbols), installed on Michael's iPhone 15 Pro and launched.
+- Cleanup (Michael approved): 41 project worktrees removed (branches kept), ~41 GB freed; history-rebuild backup refs deleted. Simulators other than the pool were left alone.
 
 ### 2026-10-08 — Phase 5 reviews (after a machine restart)
 - The Mac restarted at ~19:46 UTC with three reviews and the p5-predict build in flight (none had a result); all four relaunched from their original briefs. Stray simulator shut down; the interrupted reviewer's simulator deleted.

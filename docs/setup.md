@@ -922,7 +922,7 @@ Dexcom account, and the Dexcom app one reinstall away).
 - [ ] For each issue: Settings › Data › **Export diagnostics** (also in the Now menu), and the CSV
   export when values or times matter. Read the file before posting it anywhere public (§7.6: it
   holds readings, the sensor's name and serial, and the Nightscout host name). File it as an issue
-  (GitHub once the repository is published) with the build, iOS version, steps, expected and actual.
+  ([GitHub issues](https://github.com/mzarras/glucose-monitor-app-that-works/issues)) with the build, iOS version, steps, expected and actual.
 
 #### Optional, with a spare sensor not used for treatment
 
