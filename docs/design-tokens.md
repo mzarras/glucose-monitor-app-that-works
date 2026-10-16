@@ -56,8 +56,8 @@ compositing onto what is behind it (`SRGBColor.blended(over:opacity:)`,
 
 | Content | Treatment | Worst ratio (light / dark) | Need |
 |---|---|---|---|
-| Stale widget number | `muted` at full opacity (not faded), next to "STALE · 12 min ago" in `low` | 5.06 / 6.69 | 3 (large) |
-| Dimmed widget chart (stale / no data) | whole chart at 0.6 (`Emphasis.dimmedChartOpacity`), no "latest" dot | ink line over band 4.18 / 5.60 | 3 (graphic) |
+| Stale / last-reading widget number (D61) | `muted` at full opacity (not faded), next to "STALE · 12 min ago" or "LAST READING · 2:14 PM" in `low` | 5.06 / 6.69 | 3 (large) |
+| Dimmed widget chart (stale / last reading) | whole chart at 0.6 (`Emphasis.dimmedChartOpacity`), no "latest" dot | ink line over band 4.18 / 5.60 | 3 (graphic) |
 | 3 D overlay, earlier days' lines | `muted` at full opacity, 1 pt (today: ink, 2 pt) | muted over band 4.42 / 5.88 | 3 (graphic) |
 | 3 D overlay, earlier days' LOW/HIGH | labels at full opacity; ticks at 0.85 (`Emphasis.otherDayFlagTickOpacity`) | labels as veryLow/veryHigh; ticks 4.67 / 4.76 | 4.5 text / 3 graphic |
 | Disabled buttons | 35 % | — | exempt (WCAG: inactive controls) |

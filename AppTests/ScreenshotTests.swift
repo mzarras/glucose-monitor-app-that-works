@@ -203,22 +203,31 @@ final class ScreenshotTests: XCTestCase {
                 }
             }
             try render(gallery, name: "widget-medium-states-\(scheme.name)", scheme: scheme, width: 396, height: nil)
-            // Audit m9 (DEBUG): a replayed reading carries REPLAY on the widget.
-            let sample = WidgetSamples.content(.normal, now: live)
-            let replay = WidgetEntryContent(date: sample.date, display: sample.display, recent: sample.recent, accent: sample.accent,
-                                            snapshotWrittenAt: sample.snapshotWrittenAt, isReplay: true)
+            // D61: a reading 20 min old or older stays on screen, muted, with its time and age.
+            let lastReading = VStack(alignment: .leading, spacing: 10) {
+                ForEach([WidgetSamples.State.stale, .lastReading, .lastReadingYesterday, .lastReadingLowFlag], id: \.self) { state in
+                    self.widgetTile(MediumWidgetView(content: WidgetSamples.content(state, now: live)))
+                }
+            }
+            try render(lastReading, name: "widget-medium-last-reading-\(scheme.name)", scheme: scheme, width: 396, height: nil)
+            // Audit m9 (DEBUG): a replayed reading carries REPLAY on the widget (D61: also a last reading).
             let replayTiles = VStack(alignment: .leading, spacing: 10) {
-                self.widgetTile(MediumWidgetView(content: replay))
-                RectangularAccessoryView(content: replay)
-                    .padding(12)
-                    .frame(width: 180, height: 80)
-                    .background(Theme.background)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .padding(.horizontal, 16)
+                ForEach([WidgetSamples.State.normal, .lastReading], id: \.self) { state in
+                    let sample = WidgetSamples.content(state, now: live)
+                    let replay = WidgetEntryContent(date: sample.date, display: sample.display, recent: sample.recent, accent: sample.accent,
+                                                    snapshotWrittenAt: sample.snapshotWrittenAt, isReplay: true)
+                    self.widgetTile(MediumWidgetView(content: replay))
+                    RectangularAccessoryView(content: replay)
+                        .padding(12)
+                        .frame(width: 180, height: 80)
+                        .background(Theme.background)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .padding(.horizontal, 16)
+                }
             }
             try render(replayTiles, name: "widget-replay-debug-\(scheme.name)", scheme: scheme, width: 396, height: nil)
             let small = HStack(spacing: 10) {
-                ForEach([WidgetSamples.State.normal, .lowFlag, .stale, .noData], id: \.self) { state in
+                ForEach([WidgetSamples.State.normal, .lowFlag, .stale, .lastReading, .noData], id: \.self) { state in
                     SmallWidgetView(content: WidgetSamples.content(state, now: live))
                         .padding(16)
                         .frame(width: 170, height: 170)
@@ -228,7 +237,26 @@ final class ScreenshotTests: XCTestCase {
             }
             .padding(16)
             .background(Color(white: scheme == .dark ? 0.2 : 0.75))
-            try render(small, name: "widget-small-\(scheme.name)", scheme: scheme, width: 752, height: 202)
+            try render(small, name: "widget-small-\(scheme.name)", scheme: scheme, width: 922, height: 202)
+            // Lock Screen rectangular (160 × 72 pt on a 6.1" phone) and inline accessories, on the
+            // widget background (the Lock Screen itself renders them in its own vibrant style).
+            let lockScreen = VStack(alignment: .leading, spacing: 10) {
+                ForEach([WidgetSamples.State.normal, .stale, .lastReading, .lastReadingYesterday, .lastReadingLowFlag, .noData], id: \.self) { state in
+                    let content = WidgetSamples.content(state, now: live)
+                    HStack(alignment: .center, spacing: 16) {
+                        RectangularAccessoryView(content: content)
+                            .frame(width: 160, height: 72)
+                        InlineAccessoryText.text(content)
+                            .font(.system(size: 15, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .padding(8)
+                    .background(Theme.background)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+            .padding(16)
+            try render(lockScreen, name: "widget-lock-screen-\(scheme.name)", scheme: scheme, width: 520, height: nil)
         }
     }
 

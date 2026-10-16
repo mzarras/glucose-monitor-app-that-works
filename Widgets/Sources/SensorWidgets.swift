@@ -1,6 +1,6 @@
 // Widget extension (HANDOFF §7.4): one "Glucose" widget in four families — medium (priority),
 // small, Lock Screen rectangular and inline. Reads the snapshot the app writes to the App Group;
-// never computes or guesses a value (S1). Stale and no-data states are scheduled as future
+// never computes or guesses a value (S1). Stale and last-reading states (D61) are scheduled as future
 // timeline entries (S5). Tapping opens the Now screen. Widgets always follow the system
 // appearance.
 //

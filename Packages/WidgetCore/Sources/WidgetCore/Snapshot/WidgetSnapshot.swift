@@ -21,7 +21,9 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
     public let latest: LatestReading?
     /// The CGM source's state when the snapshot was written.
     public let sensorState: SensorState
-    /// Readings from the last 3 hours before `writtenAt`, ascending by date. Real readings only.
+    /// Readings from 3 hours before the earlier of `latest` and `writtenAt` up to `writtenAt`,
+    /// ascending by date. Real readings only. For an old latest reading this is its last 3 hours,
+    /// which the widget charts (D61).
     public let recent: [ChartPoint]
     /// The accent the user picked, so the widget matches the app.
     public let accent: AccentChoice
@@ -68,10 +70,11 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
     ///
     /// - Parameters:
     ///   - latestLive: the repository's `latestLiveReading()` — the current value, its age, delta
-    ///     and staleness come from it, however old it is (so an old reading reads "Last reading
-    ///     4 h ago", not "no reading"). An imported reading here is ignored (S6).
+    ///     and staleness come from it, however old it is (so an old reading is still shown as the
+    ///     last reading with its time, D61, not "no reading"). An imported reading here is ignored (S6).
     ///   - previousLive: the live reading immediately before `latestLive`, for the delta.
-    ///   - recent: stored readings covering the last 3 hours, any source (chart only).
+    ///   - recent: stored readings covering `chartWindowStart(latestLive:now:)` to `now`, any
+    ///     source (chart only).
     public static func make(
         latestLive: GlucoseReading?,
         previousLive: GlucoseReading?,
@@ -85,7 +88,7 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
             guard !reading.source.isImportedHistory, let latest, reading.date < latest.date else { return nil }
             return reading
         }
-        let windowStart = now.addingTimeInterval(-historyWindow)
+        let windowStart = chartWindowStart(latestLive: latest?.date, now: now)
         let points = recent
             .filter { $0.date >= windowStart && $0.date <= now }
             .sorted { $0.date < $1.date }
@@ -98,6 +101,13 @@ public struct WidgetSnapshot: Sendable, Equatable, Codable {
             accent: accent,
             isReplay: latest.map { isReplaySource($0.source) } ?? false
         )
+    }
+
+    /// Where the snapshot's chart history starts: 3 hours before the latest live reading, or before
+    /// `now` if that is earlier (or there is no reading). D61: the widget charts the 3 hours up to
+    /// an old last reading, so the app must hand those over, not just the last 3 hours.
+    public static func chartWindowStart(latestLive: Date?, now: Date) -> Date {
+        min(latestLive ?? now, now).addingTimeInterval(-historyWindow)
     }
 
     /// DEBUG (audit m9): a replay or mock reading. Always false in Release, where those sources

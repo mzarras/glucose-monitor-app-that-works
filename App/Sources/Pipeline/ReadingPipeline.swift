@@ -35,6 +35,7 @@ import Foundation
 import GlucoseCore
 import NightscoutKit
 import TrioBridge
+import WidgetCore
 
 @MainActor
 final class ReadingPipeline {
@@ -533,7 +534,9 @@ final class ReadingPipeline {
     func publishWidget() async {
         guard publishesWidget, let widget = outputs.widget else { return }
         let date = now()
-        let windowStart = date.addingTimeInterval(-3 * 3_600)
+        // The 3 hours before now, or before an older latest reading (D61: the widget charts the
+        // last 3 hours of real data up to it).
+        let windowStart = WidgetSnapshot.chartWindowStart(latestLive: latestLiveReading?.date, now: date)
         let windowEnd = date.addingTimeInterval(LiveReadingGate.futureTolerance)
         var recent = unstored.map(\.reading).filter { $0.date >= windowStart && $0.date < windowEnd }
         if let store {

@@ -128,7 +128,7 @@ path; the storage-failure alert only fires if that takes longer than `AlertLimit
 the G7 source is started again if it could not read its pairing before. **While the store is opening the
 latest reading is unknown** (review B1): no widget snapshot is written and the clock-mismatch latch is
 neither judged nor persisted, so neither can be cleared by a relaunch. If the open fails, the last
-widget snapshot is kept (the widget's own timeline turns it stale and "No data" on time), and the
+widget snapshot is kept (the widget's own timeline turns it stale and then a muted last reading on time, D61), and the
 latch check runs again against the readings waiting for the store, which are then shown as the
 latest — a clock change still latches them (review m4); an older reading never clears a latch. Once the store is open: the latest reading is read, the widget is published, the latch is
 checked, Trio is re-seeded with the last 5 h of stored sensor readings, retention runs if due.

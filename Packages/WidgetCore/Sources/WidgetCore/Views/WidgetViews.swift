@@ -1,9 +1,13 @@
 // Widget layouts (HANDOFF §7.4). They live in WidgetCore, free of WidgetKit, so the app's tests
 // can render them for docs/screenshots; the extension wraps them with WidgetKit chrome.
 //
-// Every view displays one `WidgetEntryContent`: a reading only in `.current` (and dimmed in
-// `.stale`), a message otherwise. Nothing here computes a value (S1). Ages are live relative
-// text (`RelativeAgeText`), so they count up between timeline entries.
+// Every view displays one `WidgetEntryContent`. A number only from `content.widgetReading` (D61):
+//   current       ink / band colour, trend arrow, delta, live age
+//   stale         muted, no arrow, no delta, "STALE · 12 min ago" in the alert colour
+//   last reading  muted, no arrow, no delta, "LAST READING" + its time + live age in the alert
+//                 colour; the chart ends at that reading
+// and a message otherwise. Nothing here computes a value (S1). Ages are live relative text
+// (`LiveAge`), so they count up between timeline entries.
 
 import GlucoseCore
 import SwiftUI
@@ -21,14 +25,25 @@ public struct MediumWidgetView: View {
         HStack(alignment: .center, spacing: 14) {
             WidgetReadingColumn(content: content, heroSize: 60)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            GlucoseTraceChart(
-                points: content.recent,
-                domain: content.date.addingTimeInterval(-WidgetSnapshot.historyWindow)...content.date,
-                latestLive: WidgetStyle.chartLatest(content.display),
-                options: .widget,
-                accessibilityTitle: "Last 3 hours"
-            )
-            .opacity(WidgetStyle.chartOpacity(content.display))
+            VStack(alignment: .trailing, spacing: 2) {
+                GlucoseTraceChart(
+                    points: content.recent,
+                    domain: content.chartDomain,
+                    latestLive: WidgetStyle.chartLatest(content.display),
+                    options: .widget,
+                    accessibilityTitle: content.chartEndsAtReading ? "3 hours up to the last reading" : "Last 3 hours"
+                )
+                .opacity(WidgetStyle.chartOpacity(content.display))
+                // D61: the chart ends at the last reading, not now; its right edge says when.
+                if content.chartEndsAtReading, let shown = content.widgetReading, let day = content.readingDay {
+                    ReadingTimeText.text(shown.reading.date, day: day)
+                        .font(Typography.fixedLabel(size: 9))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .accessibilityHidden(true)
+                }
+            }
             .frame(maxWidth: .infinity)
         }
         .environment(\.accentChoice, content.accent)
@@ -63,30 +78,9 @@ public struct RectangularAccessoryView: View {
     public var body: some View {
         HStack(spacing: 6) {
             VStack(alignment: .leading, spacing: 0) {
-                switch content.display {
-                case .current(let reading), .stale(let reading):
-                    HStack(spacing: 3) {
-                        Text(verbatim: GlucoseText.value(reading.value))
-                            .font(Typography.figure(size: 26))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                        TrendArrowView(arrow: reading.trend, size: 14, lineWidth: 1.5)
-                    }
-                    // Lock Screen colours are the system's; secondary is its dimmed style.
-                    .foregroundStyle(WidgetStyle.isStale(content.display) ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(Text(WidgetStyle.spokenValue(reading, stale: WidgetStyle.isStale(content.display))))
-                    HStack(spacing: 4) {
-                        ReplayMarker(content: content, fontSize: 10)
-                        if case .stale = content.display {
-                            Text("STALE · \(LiveAge.text(since: reading.date, style: .short))")
-                                .font(Typography.fixedLabel(size: 10, medium: true))
-                        } else {
-                            RelativeAgeText(since: reading.date)
-                                .font(Typography.fixedLabel(size: 10))
-                        }
-                    }
-                default:
+                if let shown = content.widgetReading {
+                    reading(shown)
+                } else {
                     Text(verbatim: WidgetStyle.title(content.display))
                         .font(Typography.body(size: 13, weight: .semibold))
                         .lineLimit(1)
@@ -95,17 +89,60 @@ public struct RectangularAccessoryView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if content.display.displayedReading != nil {
+            if content.widgetReading != nil {
+                // Too small for a time label: the text beside it gives the last reading's time.
                 GlucoseTraceChart(
                     points: content.recent,
-                    domain: content.date.addingTimeInterval(-WidgetSnapshot.historyWindow)...content.date,
+                    domain: content.chartDomain,
                     latestLive: nil,
                     options: .sparkline,
-                    accessibilityTitle: "Last 3 hours"
+                    accessibilityTitle: content.chartEndsAtReading ? "3 hours up to the last reading" : "Last 3 hours"
                 )
                 .opacity(WidgetStyle.chartOpacity(content.display))
                 .frame(width: 64)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func reading(_ shown: WidgetReading) -> some View {
+        HStack(spacing: 3) {
+            Text(verbatim: GlucoseText.value(shown.reading.value))
+                // Smaller when a last reading from another day needs a fourth line (its age).
+                .font(Typography.figure(size: shown.age == .last && content.readingDay != .sameDay ? 22 : 26))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+            if let trend = shown.trend {
+                TrendArrowView(arrow: trend, size: 14, lineWidth: 1.5)
+            }
+            // DEBUG: beside an old number (it has no arrow), so the label line below keeps its room.
+            if shown.isMuted { ReplayMarker(content: content, fontSize: 10) }
+        }
+        // Lock Screen colours are the system's; secondary is its dimmed style.
+        .foregroundStyle(shown.isMuted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(shown.isMuted && content.showsReplayMarker
+                            ? Text("Replay, not the sensor. \(WidgetStyle.spokenText(shown, day: content.readingDay))")
+                            : WidgetStyle.spokenText(shown, day: content.readingDay))
+        HStack(spacing: 4) {
+            if !shown.isMuted { ReplayMarker(content: content, fontSize: 10) }
+            switch shown.age {
+            case .current:
+                RelativeAgeText(since: shown.reading.date)
+                    .font(Typography.fixedLabel(size: 10))
+            case .stale:
+                Text("STALE · \(LiveAge.text(since: shown.reading.date, style: .short))")
+                    .font(Typography.fixedLabel(size: 10, medium: true))
+            case .last:
+                Text(verbatim: WidgetStyle.lastReadingLabel)
+                    .font(Typography.fixedLabel(size: 10, medium: true))
+                    .accessibilityHidden(true)
+            }
+        }
+        if shown.age == .last {
+            LastReadingTimeLines(date: shown.reading.date, day: content.readingDay ?? .sameDay, ageStyle: .short)
+                .font(Typography.fixedLabel(size: 10))
+                .accessibilityHidden(true)
         }
     }
 }
@@ -113,7 +150,8 @@ public struct RectangularAccessoryView: View {
 // MARK: - Lock Screen inline
 
 public enum InlineAccessoryText {
-    /// "105 → · 3m" and short messages. Inline widgets show a single line of text only.
+    /// "105 → · 3m", "Stale 105 · 12m", "Last 105 · 2:14 PM" and short messages. Inline widgets
+    /// show a single line of text only.
     public static func text(_ content: WidgetEntryContent) -> Text {
         if content.showsReplayMarker {
             return Text(verbatim: "\(WidgetStyle.replayLabel) ") + valueText(content)
@@ -122,16 +160,19 @@ public enum InlineAccessoryText {
     }
 
     private static func valueText(_ content: WidgetEntryContent) -> Text {
-        switch content.display {
-        case .current(let reading):
-            let value = inlineValue(reading)
-            return Text("\(value) · \(LiveAge.text(since: reading.date, style: .short))")
-        case .stale(let reading):
-            return Text("Stale \(inlineValue(reading)) · \(LiveAge.text(since: reading.date, style: .short))")
-        case .noData(let last):
-            if let last {
-                return Text("No data · \(LiveAge.text(since: last.date, style: .short))")
+        if let shown = content.widgetReading {
+            switch shown.age {
+            case .current:
+                return Text("\(inlineValue(shown)) · \(LiveAge.text(since: shown.reading.date, style: .short))")
+            case .stale:
+                return Text("Stale \(inlineValue(shown)) · \(LiveAge.text(since: shown.reading.date, style: .short))")
+            case .last:
+                let time = ReadingTimeText.text(shown.reading.date, day: content.readingDay ?? .sameDay)
+                return Text("Last \(inlineValue(shown)) · \(time)")
             }
+        }
+        switch content.display {
+        case .noData:
             return Text("No glucose data")
         case .warmingUp(let endsAt):
             return Text("Warming up · ready \(endsAt, style: .time)")
@@ -145,12 +186,17 @@ public enum InlineAccessoryText {
             return Text("No sensor paired")
         case .clockMismatch:
             return Text("Check phone clock")
+        case .current, .stale:
+            // Unreachable: these always have a `widgetReading`.
+            return Text("No glucose data")
         }
     }
 
-    static func inlineValue(_ reading: LatestReading) -> String {
-        let glyph = TrendText.glyph(reading.trend)
-        let value = GlucoseText.value(reading.value)
+    /// "105 →" while current; just "105" (or "LOW"/"HIGH") once it is not (no arrow, D61).
+    static func inlineValue(_ shown: WidgetReading) -> String {
+        let value = GlucoseText.value(shown.reading.value)
+        guard let trend = shown.trend else { return value }
+        let glyph = TrendText.glyph(trend)
         return glyph.isEmpty ? value : "\(value) \(glyph)"
     }
 }
@@ -164,42 +210,14 @@ struct WidgetReadingColumn: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            switch content.display {
-            case .current(let reading), .stale(let reading):
-                let stale = WidgetStyle.isStale(content.display)
-                HStack(alignment: .center, spacing: 6) {
-                    Text(verbatim: GlucoseText.value(reading.value))
-                        .font(Typography.heroNumeral(size: reading.value.numericMgdl == nil ? heroSize * 0.62 : heroSize))
-                        .heroForeground(stale ? nil : WidgetStyle.heroStyle(reading.value), fallback: stale ? .muted : .ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                    TrendArrowView(arrow: reading.trend, size: 22, lineWidth: 1.8)
-                        .foregroundStyle(stale ? AnyShapeStyle(Theme.muted) : AnyShapeStyle(Theme.accent))
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text(WidgetStyle.spokenValue(reading, stale: stale)))
-
-                Text(verbatim: GlucoseText.flagCaption(reading.value) ?? GlucoseText.unit)
-                    .font(Typography.fixedLabel(size: 10))
-                    .foregroundStyle(Theme.ink)
-                if let delta = reading.delta {
-                    Text(verbatim: DeltaText.text(delta))
-                        .font(Typography.fixedLabel(size: 10))
-                        .foregroundStyle(Theme.muted)
-                        .accessibilityLabel(Text(DeltaText.spoken(delta)))
-                }
-                ReplayMarker(content: content, fontSize: 10)
-                    .foregroundStyle(Theme.alert)
-                if case .stale = content.display {
-                    Text("STALE · \(LiveAge.text(since: reading.date)) ago")
-                        .font(Typography.fixedLabel(size: 10, medium: true))
-                        .foregroundStyle(Theme.alert)
-                } else {
-                    RelativeAgeText(since: reading.date)
-                        .font(Typography.fixedLabel(size: 10))
-                        .foregroundStyle(Theme.muted)
-                }
-            default:
+            if let shown = content.widgetReading {
+                // A last reading's element also speaks its time and age ("Last reading 112
+                // milligrams per deciliter at 2:14 PM, 47 min ago"); its label lines are hidden.
+                number(shown)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(WidgetStyle.spokenText(shown, day: content.readingDay))
+                caption(shown)
+            } else {
                 Text(verbatim: WidgetStyle.title(content.display))
                     .font(Typography.figure(size: 24))
                     .foregroundStyle(Theme.ink)
@@ -208,6 +226,85 @@ struct WidgetReadingColumn: View {
                 WidgetDetailText(content: content, fontSize: 11)
                     .foregroundStyle(Theme.muted)
                     .lineLimit(3)
+            }
+        }
+    }
+
+    private func number(_ shown: WidgetReading) -> some View {
+        HStack(alignment: .center, spacing: 6) {
+            Text(verbatim: GlucoseText.value(shown.reading.value))
+                .font(Typography.heroNumeral(size: shown.reading.value.numericMgdl == nil ? heroSize * 0.62 : heroSize))
+                .heroForeground(shown.isMuted ? nil : WidgetStyle.heroStyle(shown.reading.value), fallback: shown.isMuted ? .muted : .ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+            if let trend = shown.trend {
+                TrendArrowView(arrow: trend, size: 22, lineWidth: 1.8)
+                    .foregroundStyle(Theme.accent)
+            }
+        }
+    }
+
+    /// Unit (or flag caption), delta, replay marker and the age line, under the number.
+    @ViewBuilder
+    private func caption(_ shown: WidgetReading) -> some View {
+        Text(verbatim: GlucoseText.flagCaption(shown.reading.value) ?? GlucoseText.unit)
+            .font(Typography.fixedLabel(size: 10))
+            .foregroundStyle(Theme.ink)
+        if let delta = shown.delta {
+            Text(verbatim: DeltaText.text(delta))
+                .font(Typography.fixedLabel(size: 10))
+                .foregroundStyle(Theme.muted)
+                .accessibilityLabel(Text(DeltaText.spoken(delta)))
+        }
+        ReplayMarker(content: content, fontSize: 10)
+            .foregroundStyle(Theme.alert)
+        switch shown.age {
+        case .current:
+            RelativeAgeText(since: shown.reading.date)
+                .font(Typography.fixedLabel(size: 10))
+                .foregroundStyle(Theme.muted)
+        case .stale:
+            Text("STALE · \(LiveAge.text(since: shown.reading.date)) ago")
+                .font(Typography.fixedLabel(size: 10, medium: true))
+                .foregroundStyle(Theme.alert)
+        case .last:
+            VStack(alignment: .leading, spacing: 1) {
+                Text(verbatim: WidgetStyle.lastReadingLabel)
+                    .font(Typography.fixedLabel(size: 10, medium: true))
+                LastReadingTimeLines(date: shown.reading.date, day: content.readingDay ?? .sameDay, ageStyle: .long)
+                    .font(Typography.fixedLabel(size: 10))
+            }
+            .foregroundStyle(Theme.alert)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+/// A last reading's time and live age (D61): "2:14 PM · 47 min ago" ("2:14 PM · 47m" on the Lock
+/// Screen) on one line; with a day ("Yesterday 11:02 PM", "Sep 21 11:02 PM") the age goes on a
+/// second line ("12 hr, 13 min ago"), so neither is cut off.
+struct LastReadingTimeLines: View {
+    let date: Date
+    let day: ReadingDay
+    let ageStyle: LiveAge.Style
+
+    var body: some View {
+        let time = ReadingTimeText.text(date, day: day)
+        let age = LiveAge.text(since: date, style: ageStyle)
+        if day == .sameDay {
+            Group {
+                if ageStyle == .long {
+                    Text("\(time) · \(age) ago")
+                } else {
+                    Text("\(time) · \(age)")
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+        } else {
+            VStack(alignment: .leading, spacing: 1) {
+                time.lineLimit(1).minimumScaleFactor(0.8)
+                Text("\(age) ago").lineLimit(1).minimumScaleFactor(0.8)
             }
         }
     }
@@ -230,7 +327,7 @@ struct ReplayMarker: View {
     }
 }
 
-/// Second line of a message state: what happened and, where useful, how old the last reading is.
+/// Second line of a message state: what happened and what to do.
 struct WidgetDetailText: View {
     let content: WidgetEntryContent
     let fontSize: CGFloat
@@ -238,12 +335,9 @@ struct WidgetDetailText: View {
     var body: some View {
         Group {
             switch content.display {
-            case .noData(let last):
-                if let last {
-                    Text("Last reading \(LiveAge.text(since: last.date)) ago")
-                } else {
-                    Text(verbatim: "Open the app to check the sensor")
-                }
+            case .noData:
+                // Only without any reading: a reading ≥ 20 min old is a last reading (D61).
+                Text(verbatim: "Open the app to check the sensor")
             case .warmingUp(let endsAt):
                 Text("Ready at \(endsAt, style: .time)")
             case .sensorExpired:
@@ -272,6 +366,9 @@ struct WidgetDetailText: View {
 public enum WidgetStyle {
     /// DEBUG (audit m9): the label on a replayed reading.
     public static let replayLabel = "REPLAY"
+
+    /// D61: the label on a reading 20 min old or older, above its time and age.
+    public static let lastReadingLabel = "LAST READING"
 
     /// A stale number is drawn in the muted colour (not faded by opacity, which would drop it
     /// below 3:1), next to a "STALE · 12 min ago" label, so an old number never looks current.
@@ -316,11 +413,26 @@ public enum WidgetStyle {
         value.band == .inRange ? nil : Theme.band(value.band)
     }
 
-    /// "105 milligrams per deciliter, steady", or "Stale: 105 milligrams per deciliter, steady".
-    /// The age is read separately, from the live text.
-    public static func spokenValue(_ reading: LatestReading, stale: Bool = false) -> String {
-        let value = "\(GlucoseText.spoken(reading.value)), \(TrendText.word(reading.trend))"
-        return stale ? "Stale: \(value)" : value
+    /// VoiceOver for the number:
+    ///   current  "105 milligrams per deciliter, steady" (the age is read from the live text)
+    ///   stale    "Stale: 105 milligrams per deciliter" (no trend word: no arrow either, D61)
+    ///   last     "Last reading 105 milligrams per deciliter" (`spokenText` adds time and age)
+    public static func spokenValue(_ shown: WidgetReading) -> String {
+        let value = GlucoseText.spoken(shown.reading.value)
+        switch shown.age {
+        case .current: return "\(value), \(TrendText.word(shown.reading.trend))"
+        case .stale: return "Stale: \(value)"
+        case .last: return "Last reading \(value)"
+        }
+    }
+
+    /// `spokenValue`, and for a last reading also its time and live age: "Last reading 112
+    /// milligrams per deciliter at 2:14 PM, 47 min ago".
+    public static func spokenText(_ shown: WidgetReading, day: ReadingDay?) -> Text {
+        let value = Text(verbatim: spokenValue(shown))
+        guard shown.age == .last else { return value }
+        let date = shown.reading.date
+        return Text("\(value) \(ReadingTimeText.spoken(date, day: day ?? .sameDay)), \(LiveAge.agoText(since: date))")
     }
 }
 

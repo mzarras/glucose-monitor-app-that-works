@@ -760,6 +760,9 @@ final class LiveAppServices: AppServices {
     func handleForeground(markedByScene: Bool = false) async {
         // Set before any await, so a `handleBackground()` that arrives meanwhile wins (D55).
         if !markedByScene { isInForeground = true }
+        // D61: the first widget publish of this foreground reloads the widget (foreground reloads
+        // are not budgeted), in case a background reload request was throttled.
+        widget?.reloadOnNextPublish()
         await bootstrap()
         guard isBootstrapped else { return }
         // D57: the forecast feed is fetched only from here (never on a Bluetooth wake or a bootstrap),

@@ -351,8 +351,14 @@ final class RecordingWidgetPublisher: AppWidgetPublishing {
     var accent = AccentChoice.default
     private(set) var published: [String?] = []
 
+    private(set) var reloadOnNextPublishCount = 0
+
     func publish(latestLive: GlucoseReading?, previousLive: GlucoseReading?, recent: [GlucoseReading], sensorState: SensorState, now: Date) {
         published.append(latestLive?.id)
+    }
+
+    func reloadOnNextPublish() {
+        reloadOnNextPublishCount += 1
     }
 }
 
