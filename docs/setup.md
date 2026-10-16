@@ -338,9 +338,18 @@ uploads. Unofficial interface; it can break without notice (it then fails loud).
 - Settings › Sharing › Dexcom Share (also offered in onboarding's "Remove the Dexcom app" step):
   **Region US** (D7), **Dexcom account name**, **Password**, **Receiver serial number** › Save, then
   **Upload to Dexcom Share** on. Credentials go to the Keychain.
-- The serial is that of a Dexcom receiver registered to the account (xDrip4iOS calls it "Receiver
-  Serial Number"), not the G7 pairing code. A wrong one reports "the receiver serial number is not
-  assigned to this account".
+- **The serial number must already be registered to your Dexcom account by Dexcom.** The Share
+  server files every upload under a serial that Dexcom has linked to the account and refuses any
+  other ("the receiver serial number is not assigned to this account"). Historically that was the
+  G4 Share receiver's serial, and for G5/G6 the transmitter ID that the Dexcom app registered
+  (xDrip4iOS: "Use the official Dexcom app to register the Transmitter"). It is not the G7 pairing
+  code, and not the G7 sensor serial (that changes with every sensor).
+- **G7 without a Dexcom receiver: unverified.** If you have a G7 receiver, use its serial (on the
+  back of the receiver). Without one, no documented serial is known: it is unclear what, if anything,
+  the Dexcom app registers on the account for a G7, and once the Dexcom app is deleted it can't be
+  looked up there. xDrip4iOS documents Share upload for G5/G6 only. Until this is resolved, plan to
+  move Dexcom Follow followers to your Nightscout site or LoopFollow (`docs/following.md`) before
+  deleting the Dexcom app, and leave Share upload off.
 - A wrong password is retried only every 30 minutes (also across relaunches) so the account isn't
   locked; saving retries at once. Readings older than 8 hours are not sent.
 - Invite any new Dexcom Follow followers in the Dexcom app **before** deleting it.
@@ -857,7 +866,7 @@ Repeat step 3L's items that apply to both modes if anything changed; in addition
   - Expect: "Waiting to upload N" in Sharing; afterwards the entries appear with their original
     times, once.
 - [ ] **Nightscout LOW** (D29), if one happens: Nightscout shows "LOW"; LoopFollow alarms.
-- [ ] **Dexcom Follow** (D30): a follower confirms Dexcom Follow updates; on a LOW/HIGH it shows
+- [ ] **Dexcom Follow** (D30), only if Share upload works (a registered serial, §4.3): a follower confirms Dexcom Follow updates; on a LOW/HIGH it shows
   LOW/HIGH (not 39/401) and alarms. If not, revert to withholding LOW/HIGH (`docs/following.md`) and
   tell followers.
 

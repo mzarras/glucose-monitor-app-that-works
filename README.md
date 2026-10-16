@@ -91,7 +91,10 @@ permissions, disk full, clock and time-zone changes): [`docs/failure-modes.md`](
   Trio's xDrip4iOS source reads, plus the heartbeat that lets Trio loop in the background. No Trio
   patch.
 - **Followers** ([`docs/following.md`](docs/following.md)): Nightscout upload; Dexcom Share upload
-  (unofficial interface) so Dexcom Follow keeps working. Queued and retried offline.
+  (unofficial interface) for Dexcom Follow. Queued and retried offline. Share upload needs a serial
+  number that Dexcom has registered to your account; with a G7 and no Dexcom receiver there may be
+  none, and that case is unverified (`docs/setup.md` §4.3). Without one, followers use Nightscout or
+  LoopFollow instead.
 - **History import** ([`docs/import.md`](docs/import.md)): from Nightscout or a Dexcom Clarity CSV
   export, for charts and statistics.
 - **Widgets** ([`docs/widgets.md`](docs/widgets.md)): medium, small, and Lock Screen rectangular and
