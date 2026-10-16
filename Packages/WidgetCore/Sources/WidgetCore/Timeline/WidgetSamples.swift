@@ -7,7 +7,9 @@ import GlucoseCore
 
 public enum WidgetSamples {
     public enum State: String, CaseIterable, Identifiable, Sendable {
-        case normal, low, high, lowFlag, highFlag, stale, noData, warmingUp, expired, sensorError, pairingRejected, calibrationNeeded, notPaired, clockMismatch
+        case normal, low, high, lowFlag, highFlag, stale, lastReading, lastReadingYesterday, lastReadingLowFlag, noData, newSensorPairing,
+             newSensorWarmUpRelaunch, warmingUp, expired, sensorError,
+             pairingRejected, calibrationNeeded, notPaired, clockMismatch
         public var id: String { rawValue }
     }
 
@@ -25,12 +27,15 @@ public enum WidgetSamples {
         return .mgdl(Int((82 + 23 * x + 26 * sin(Double.pi * x)).rounded()))
     }
 
-    public static func content(_ state: State, now: Date, accent: AccentChoice = .default) -> WidgetEntryContent {
+    /// - Parameter calendar: local days for the last reading's day label.
+    public static func content(_ state: State, now: Date, accent: AccentChoice = .default, calendar: Calendar = .autoupdatingCurrent) -> WidgetEntryContent {
         var age = 3.0
         var shape: (Double) -> GlucoseValue = mockup
         var trend = TrendArrow.flat
         var sensor = SensorState.active(sessionStart: now.addingTimeInterval(-5 * 86_400), expiresAt: now.addingTimeInterval(4 * 86_400))
         var hasReading = true
+        // D61 (review m1): the sensor the widget may show readings from; nil: as before.
+        var currentSensor: WidgetCurrentSensor?
         switch state {
         case .normal: break
         case .low:
@@ -47,8 +52,28 @@ public enum WidgetSamples {
             shape = { m in m <= 5 ? .aboveRange : m <= 60 ? .mgdl(Int(398 - (m - 5) * 2.5)) : mockup(m) }
         case .stale:
             age = 12
+        case .lastReading:
+            age = 47
+        case .lastReadingYesterday:
+            // 11:02 PM the day before `now` (D61: the label names the day).
+            let yesterday = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now)) ?? now
+            let reading = calendar.date(bySettingHour: 23, minute: 2, second: 0, of: yesterday) ?? now
+            age = now.timeIntervalSince(reading) / 60
+        case .lastReadingLowFlag:
+            age = 52; trend = .fortyFiveDown
+            shape = { m in m <= 10 ? .belowRange : m <= 45 ? .mgdl(Int(41 + (m - 10) * 0.8)) : mockup(m) }
         case .noData:
-            age = 34
+            hasReading = false
+        case .newSensorPairing:
+            // The last reading (47 min ago) is the old sensor's; a new pairing has no sensor yet.
+            age = 47; sensor = .searching
+            currentSensor = WidgetCurrentSensor(serial: nil, sessionStart: nil, warmUpEndsAt: nil)
+        case .newSensorWarmUpRelaunch:
+            // Relaunched during the new sensor's warm-up: still searching, the old sensor's reading
+            // is 40 min old; the stored session says warm-up ends in 50 min.
+            age = 40; sensor = .searching
+            currentSensor = WidgetCurrentSensor(serial: "NEWSENSOR", sessionStart: now.addingTimeInterval(-10 * 60),
+                                                warmUpEndsAt: now.addingTimeInterval(50 * 60))
         case .warmingUp:
             sensor = .warmingUp(endsAt: now.addingTimeInterval(72 * 60)); hasReading = false
         case .expired:
@@ -72,8 +97,9 @@ public enum WidgetSamples {
                 delta: GlucoseDelta.between(latestDate: last.date, latestValue: last.value, previousDate: previous.date, previousValue: previous.value)
             )
         }
-        let snapshot = WidgetSnapshot(writtenAt: latest?.date ?? now, latest: latest, sensorState: sensor, recent: recent, accent: accent)
-        return WidgetTimeline.entries(snapshot: snapshot, now: now)[0]
+        let snapshot = WidgetSnapshot(writtenAt: latest?.date ?? now, latest: latest, sensorState: sensor, recent: recent, accent: accent,
+                                      currentSensor: currentSensor, latestSensorSerial: latest == nil ? nil : "OLDSENSOR")
+        return WidgetTimeline.entries(snapshot: snapshot, now: now, calendar: calendar)[0]
     }
 }
 #endif

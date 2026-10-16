@@ -36,6 +36,16 @@ enum Fixture {
         ChartPoint(date: minutesAgo(minutes), value: value)
     }
 
+    /// Gregorian, UTC: local midnight is 00:00 UTC, so day-label dates are hand-computable.
+    static let utc: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }()
+
+    /// 2026-09-24 00:00:00 UTC, the first midnight after `now` (1_790_166_900 + 41_100 s).
+    static let nextMidnight = Date(timeIntervalSince1970: 1_790_208_000)
+
     static let activeSensor = SensorState.active(
         sessionStart: now.addingTimeInterval(-5 * 86_400),
         expiresAt: now.addingTimeInterval(5 * 86_400)

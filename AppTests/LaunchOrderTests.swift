@@ -221,6 +221,42 @@ final class LaunchOrderTests: XCTestCase {
         XCTAssertTrue(launch.widget.published.allSatisfy { $0 == latest.id }, "every snapshot carries the latest reading: \(launch.widget.published)")
     }
 
+    // MARK: - D61: the widget at foreground and across a new pairing
+
+    /// Review m3: coming to the foreground makes the next widget publish reload (foreground reloads
+    /// are not budgeted), and that publish happens during the foreground work.
+    func test_S5_foregroundAsksTheWidgetToReloadAtTheNextPublish() async throws {
+        let now = Date()
+        let launch = try await makeLaunch(now: now, seed: seedReadings(at: [now.addingTimeInterval(-120)], now: now))
+        let services = launch.services
+        await services.bootstrap()
+        await waitUntil("idle") { services.sensorPipeline.isIdle }
+        XCTAssertEqual(launch.widget.reloadOnNextPublishCount, 0)
+        let publishedBefore = launch.widget.published.count
+
+        await services.handleForeground()
+        defer { services.handleBackground() }
+        XCTAssertEqual(launch.widget.reloadOnNextPublishCount, 1)
+        await waitUntil("a publish after the foreground") { launch.widget.published.count > publishedBefore }
+    }
+
+    /// D61 (review m1), through the real composition: the snapshot carries the paired sensor's
+    /// session; after "Forget sensor" it carries no sensor, so the widget hides the old reading.
+    func test_S5_widgetSnapshotCarriesTheCurrentSensorAndForgetClearsIt() async throws {
+        let now = Date()
+        let launch = try await makeLaunch(now: now, seed: seedReadings(at: [now.addingTimeInterval(-120)], now: now))
+        let services = launch.services
+        await services.bootstrap()
+        await waitUntil("idle") { services.sensorPipeline.isIdle }
+        let expected = WidgetCurrentSensor(serial: launch.session.serial, sessionStart: launch.session.start, warmUpEndsAt: launch.session.warmUpEndsAt)
+        XCTAssertEqual(launch.widget.currentSensors.last, expected)
+
+        await services.forgetSensor()
+        await waitUntil("published after forget") {
+            launch.widget.currentSensors.last == WidgetCurrentSensor(serial: nil, sessionStart: nil, warmUpEndsAt: nil)
+        }
+    }
+
     // MARK: - D43: expiry reminders at foreground
 
     /// Notifications denied while the sensor is paired: the reminders cannot be scheduled. The user
@@ -351,8 +387,19 @@ final class RecordingWidgetPublisher: AppWidgetPublishing {
     var accent = AccentChoice.default
     private(set) var published: [String?] = []
 
-    func publish(latestLive: GlucoseReading?, previousLive: GlucoseReading?, recent: [GlucoseReading], sensorState: SensorState, now: Date) {
+    private(set) var reloadOnNextPublishCount = 0
+
+    /// The current sensor each snapshot carried (D61, review m1).
+    private(set) var currentSensors: [WidgetCurrentSensor?] = []
+
+    func publish(latestLive: GlucoseReading?, previousLive: GlucoseReading?, recent: [GlucoseReading], sensorState: SensorState,
+                 currentSensor: WidgetCurrentSensor?, now: Date) {
         published.append(latestLive?.id)
+        currentSensors.append(currentSensor)
+    }
+
+    func reloadOnNextPublish() {
+        reloadOnNextPublishCount += 1
     }
 }
 

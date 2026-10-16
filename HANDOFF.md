@@ -258,7 +258,7 @@ Widget extension target in `project.yml`, reading a small snapshot the app write
 - **Medium Home Screen widget (priority, the owner's current setup):** left side, hero reading in Newsreader with trend arrow, delta and relative age ("3 min ago"); right side, a 3-hour mini chart with the 70–180 band. Background and colors from §7.1, following system light/dark.
 - **Small Home Screen widget:** reading, arrow, age.
 - **Lock Screen accessories:** rectangular (reading, arrow, age, tiny sparkline) and inline (e.g. "105 → · 3m").
-- **Staleness is explicit (S5):** render the age with a relative date so it keeps counting up without a refresh. Each timeline also includes future entries that switch the widget to a dimmed "stale" state at 10 min and a "no data" state at 20 min, so an old number never looks current.
+- **Staleness is explicit (S5):** render the age with a relative date so it keeps counting up without a refresh. Each timeline also includes future entries that switch the widget to a dimmed "stale" state at 10 min and, from 20 min, the last reading muted without arrow or delta, labelled with its time (D61), so an old number never looks current.
 - **Refresh:** the app calls `WidgetCenter` to reload after each new reading. iOS limits how often widgets refresh when the app is in the background, so the widget can lag behind the app by several minutes at times; measure the real lag on device (§11) and record it in `docs/widgets.md`. If it's too laggy, the fix is a Live Activity (v1.1), which iOS lets update more often.
 - Tapping a widget opens the Now screen.
 - Tests: snapshot-encoding tests, timeline-generation tests for fresh/stale/no-data/LOW/HIGH/warm-up/expired, and SwiftUI previews for every widget size and state in light and dark.
