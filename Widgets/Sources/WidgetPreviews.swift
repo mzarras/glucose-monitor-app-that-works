@@ -45,11 +45,12 @@ import WidgetKit
 private struct WidgetStateGallery: View {
     enum Family { case medium, small, rectangular, inline }
     let family: Family
+    var states: [WidgetSamples.State] = WidgetSamples.State.allCases
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(WidgetSamples.State.allCases) { state in
+                ForEach(states) { state in
                     let content = WidgetSamples.content(state, now: .now)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(verbatim: state.rawValue).font(.caption2).foregroundStyle(.secondary)
@@ -85,4 +86,17 @@ private struct WidgetStateGallery: View {
 #Preview("Rectangular · all states · dark") { WidgetStateGallery(family: .rectangular).environment(\.colorScheme, .dark) }
 #Preview("Inline · all states · light") { WidgetStateGallery(family: .inline).environment(\.colorScheme, .light) }
 #Preview("Inline · all states · dark") { WidgetStateGallery(family: .inline).environment(\.colorScheme, .dark) }
+
+// MARK: D61: stale and last reading (muted, no arrow or delta; time and day), every family
+
+private let ageStates: [WidgetSamples.State] = [.stale, .lastReading, .lastReadingYesterday, .lastReadingLowFlag, .noData]
+
+#Preview("Medium · last reading · light") { WidgetStateGallery(family: .medium, states: ageStates).environment(\.colorScheme, .light) }
+#Preview("Medium · last reading · dark") { WidgetStateGallery(family: .medium, states: ageStates).environment(\.colorScheme, .dark) }
+#Preview("Small · last reading · light") { WidgetStateGallery(family: .small, states: ageStates).environment(\.colorScheme, .light) }
+#Preview("Small · last reading · dark") { WidgetStateGallery(family: .small, states: ageStates).environment(\.colorScheme, .dark) }
+#Preview("Rectangular · last reading · light") { WidgetStateGallery(family: .rectangular, states: ageStates).environment(\.colorScheme, .light) }
+#Preview("Rectangular · last reading · dark") { WidgetStateGallery(family: .rectangular, states: ageStates).environment(\.colorScheme, .dark) }
+#Preview("Inline · last reading · light") { WidgetStateGallery(family: .inline, states: ageStates).environment(\.colorScheme, .light) }
+#Preview("Inline · last reading · dark") { WidgetStateGallery(family: .inline, states: ageStates).environment(\.colorScheme, .dark) }
 #endif

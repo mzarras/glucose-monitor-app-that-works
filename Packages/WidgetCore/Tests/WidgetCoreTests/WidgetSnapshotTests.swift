@@ -155,7 +155,45 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.latest?.date, old.date)
         XCTAssertEqual(snapshot.recent, [])
         let entry = WidgetTimeline.entries(snapshot: snapshot, now: Fixture.now)[0]
-        XCTAssertEqual(entry.display, .noData(last: snapshot.latest), "No data, with the last reading's age")
+        XCTAssertEqual(entry.display, .noData(last: snapshot.latest))
+        // D61: shown as the last reading (muted, with its time), not as current.
+        XCTAssertEqual(entry.widgetReading?.age, .last)
+    }
+
+    /// D61: for an old latest reading the snapshot carries the 3 hours up to that reading (the
+    /// widget charts them), not only the 3 hours before `now`.
+    func test_oldLatestReadingKeepsItsLastThreeHoursForTheChart() {
+        let latest = Fixture.reading(.mgdl(140), minutesAgo: 60)
+        let recent = [
+            Fixture.reading(.mgdl(150), minutesAgo: 241), // before latest − 3 h: dropped
+            Fixture.reading(.mgdl(120), minutesAgo: 240), // exactly latest − 3 h: kept
+            Fixture.reading(.mgdl(130), minutesAgo: 200),
+            latest,
+        ]
+        let snapshot = WidgetSnapshot.make(latestLive: latest, previousLive: nil, recent: recent, sensorState: Fixture.activeSensor, accent: .forest, now: Fixture.now)
+        XCTAssertEqual(snapshot.recent.map(\.date), [Fixture.minutesAgo(240), Fixture.minutesAgo(200), Fixture.minutesAgo(60)])
+        XCTAssertEqual(WidgetSnapshot.chartWindows(latestLive: latest.date, now: Fixture.now), [Fixture.minutesAgo(240)...Fixture.now])
+        // A current reading, a future-dated one, or none: the 3 hours before the earlier of the two.
+        XCTAssertEqual(WidgetSnapshot.chartWindows(latestLive: Fixture.minutesAgo(2), now: Fixture.now), [Fixture.minutesAgo(182)...Fixture.now])
+        XCTAssertEqual(WidgetSnapshot.chartWindows(latestLive: Fixture.minutesAgo(-30), now: Fixture.now), [Fixture.minutesAgo(180)...Fixture.now])
+        XCTAssertEqual(WidgetSnapshot.chartWindows(latestLive: nil, now: Fixture.now), [Fixture.minutesAgo(180)...Fixture.now])
+    }
+
+    /// Review m6: a month-old latest reading adds its own 3 hours, not the month in between, so the
+    /// file stays small on every drain.
+    func test_monthOldLatestReadingKeepsOnlyItsOwnThreeHoursAndTheLastThree() {
+        let month: Double = 30 * 1_440
+        let latest = Fixture.reading(.mgdl(140), minutesAgo: month)
+        // One imported reading every 5 minutes for the whole month, plus the latest itself.
+        let imported = stride(from: month + 240, through: 0, by: -5).map { Fixture.reading(.mgdl(100), minutesAgo: $0, source: .imported(.nightscout)) }
+        let snapshot = WidgetSnapshot.make(latestLive: latest, previousLive: nil, recent: imported + [latest], sensorState: .searching,
+                                           accent: .forest, now: Fixture.now)
+        XCTAssertEqual(WidgetSnapshot.chartWindows(latestLive: latest.date, now: Fixture.now),
+                       [Fixture.minutesAgo(month + 180)...Fixture.minutesAgo(month), Fixture.minutesAgo(180)...Fixture.now])
+        // 37 imported points (every 5 min, both ends included) + the latest in its window; 37 in the last 3 hours.
+        XCTAssertEqual(snapshot.recent.count, 38 + 37)
+        XCTAssertTrue(snapshot.recent.allSatisfy { $0.date >= Fixture.minutesAgo(180) || ($0.date >= Fixture.minutesAgo(month + 180) && $0.date <= latest.date) })
+        XCTAssertEqual(snapshot.recent.map(\.date), snapshot.recent.map(\.date).sorted())
     }
 
     /// Review m3: whatever is in the file, the widget either gets a valid snapshot or nil ("No data").
@@ -198,13 +236,19 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertFalse(none.isReplay)
     }
 
-    /// The marker labels a displayed reading only; a message state ("No data") has no number to mark.
+    /// The marker labels a displayed reading only — current, stale or (D61) a last reading; a
+    /// message state ("No data" without a reading, expired, …) has no number to mark.
     func test_m9_replayMarkerOnlyWithAReading() {
         let reading = Fixture.latest(.mgdl(48), minutesAgo: 1)
-        let current = WidgetEntryContent(date: Fixture.now, display: .current(reading), recent: [], accent: .navy, snapshotWrittenAt: Fixture.now, isReplay: true)
-        let noData = WidgetEntryContent(date: Fixture.now, display: .noData(last: reading), recent: [], accent: .navy, snapshotWrittenAt: Fixture.now, isReplay: true)
-        XCTAssertTrue(current.showsReplayMarker)
-        XCTAssertFalse(noData.showsReplayMarker)
+        func content(_ display: GlucoseDisplayState) -> WidgetEntryContent {
+            WidgetEntryContent(date: Fixture.now, display: display, recent: [], accent: .navy, snapshotWrittenAt: Fixture.now, isReplay: true)
+        }
+        XCTAssertTrue(content(.current(reading)).showsReplayMarker)
+        XCTAssertTrue(content(.stale(reading)).showsReplayMarker)
+        XCTAssertTrue(content(.noData(last: reading)).showsReplayMarker, "D61 (changed): a last reading is a number, so it is marked")
+        XCTAssertFalse(content(.noData(last: nil)).showsReplayMarker)
+        XCTAssertFalse(content(.sensorExpired(last: reading)).showsReplayMarker)
+        XCTAssertFalse(content(.clockMismatch(latest: reading)).showsReplayMarker)
         XCTAssertEqual(WidgetStyle.replayLabel, "REPLAY")
     }
 

@@ -204,6 +204,9 @@ final class LiveAppServices: AppServices {
         // B1: no widget snapshot until the store is open — before that the latest reading is
         // unknown, and a snapshot without it would clear the widget's clock-mismatch latch.
         sensorPipeline.publishesWidget = false
+        // D61 (review m1): the widget hides an earlier sensor's reading once the stored pairing is
+        // another sensor's, or none (a new pairing, Forget sensor, Stop following).
+        sensorPipeline.storedPairing = { [weak self] in self?.storedPairingForWidget ?? .notYetRead }
 
         sensorPipeline.onChange = { [weak self] change in
             if change == .storage {
@@ -437,6 +440,13 @@ final class LiveAppServices: AppServices {
         storedSensorKnown = known
         send(.sensor)
         if serialChanged { await updateG7StoredFloor() }
+        // D61 (review m1): the widget's current sensor changed; publish now, not at the next wake.
+        await activePipeline.publishWidget()
+    }
+
+    /// What the widget may know about the stored pairing: nothing until it has been read.
+    var storedPairingForWidget: StoredPairing {
+        storedSensorKnown ? .read(serial: storedSensorSerial) : .notYetRead
     }
 
     func startG7() async {
@@ -760,6 +770,9 @@ final class LiveAppServices: AppServices {
     func handleForeground(markedByScene: Bool = false) async {
         // Set before any await, so a `handleBackground()` that arrives meanwhile wins (D55).
         if !markedByScene { isInForeground = true }
+        // D61: the first widget publish of this foreground reloads the widget (foreground reloads
+        // are not budgeted), in case a background reload request was throttled.
+        widget?.reloadOnNextPublish()
         await bootstrap()
         guard isBootstrapped else { return }
         // D57: the forecast feed is fetched only from here (never on a Bluetooth wake or a bootstrap),

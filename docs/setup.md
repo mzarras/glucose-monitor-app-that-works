@@ -660,8 +660,8 @@ gap in this app (the Dexcom app keeps its own history).
     cause (walk-away, reboot, force-quit, lost wake, unknown).
 - [ ] **Walk out of range for 30+ minutes** (g7-protocol §13 item 8).
   - Expect: sensor state stays as last reported; missed readings fires 15 minutes after the last
-    reading (vibrate only on silent while suspended, D17); the widget turns stale at 10 min and "No
-    data" at 20. On return: readings resume; no backfill in this app.
+    reading (vibrate only on silent while suspended, D17); the widget turns stale at 10 min and from 20
+    min shows the last reading muted, without arrow or delta, with its time (D61). On return: readings resume; no backfill in this app.
   - Record: alert time and how it sounded; whether the Dexcom app backfilled as usual.
 - [ ] **A staged alert at a background wake, ringer off** (D17 path while backgrounded; alerts.md
   §10.1 with a real wake).
