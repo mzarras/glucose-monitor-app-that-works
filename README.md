@@ -31,7 +31,9 @@ It is:
 It is not:
 
 - an insulin-dosing app. There is no dosing logic of any kind; Trio doses;
-- a predictor: no forecast line, and "urgent low soon" uses only the sensor's reported rate;
+- a predictor of its own: the Predict tab only displays forecasts from an external model you host
+  (below). Forecasts never drive alerts ("urgent low soon" uses only the sensor's reported rate),
+  never reach Trio or the uploads, and are never shown as a reading;
 - for other sensors: G7 15-day, ONE+, Stelo, G6 and Libre are not supported (a 15-day G7 is refused);
 - on the App Store or TestFlight;
 - in v1: Apple Watch, Live Activities, HealthKit, mmol/L, a follower mode.
@@ -77,6 +79,14 @@ permissions, disk full, clock and time-zone changes): [`docs/failure-modes.md`](
   each changeable. Quiet hours (urgent low always sounds). On silent: the app plays the sound itself
   while it is awake for a sensor wake-up; on iOS 26+ urgent low and its repeats can ring as system
   alarms (AlarmKit); Critical Alerts are used if Apple grants the entitlement.
+- **Predict** ([`docs/forecast.md`](docs/forecast.md)): forecasts at +5, +30, +60 and +120
+  minutes from the author's own machine-learning model (Zen Predict), trained on the author's
+  historical glucose data and run every 5 minutes in a private cloud account; the app reads its JSON
+  feed. The model is personal and not part of this repository; to use the tab, point it at a feed of
+  your own in the same format (`ZEN_PREDICT_FEED_HOST`, `docs/setup.md` §4.6). Without a feed host
+  the tab explains how to set one up. Forecasts are labelled as predictions with their model-run
+  time, fetched only while the app is open, never saved, and hidden once a run is more than
+  15 minutes old.
 - **Trio** ([`docs/trio-bridge.md`](docs/trio-bridge.md)): writes valid sensor readings in the format
   Trio's xDrip4iOS source reads, plus the heartbeat that lets Trio loop in the background. No Trio
   patch.
@@ -115,6 +125,7 @@ and Trio (D42). Details: [`docs/architecture.md`](docs/architecture.md),
 | `AlertEngine` | Alert rules, state machine, delivery (notifications, in-app audio, AlarmKit, Critical Alerts), sounds | [`docs/alerts.md`](docs/alerts.md) |
 | `TrioBridge` | Trio's App Group contract and heartbeat keys | [`docs/trio-bridge.md`](docs/trio-bridge.md) |
 | `NightscoutKit` | Nightscout and Dexcom Share uploaders; Nightscout and Clarity CSV importers | [`docs/following.md`](docs/following.md), [`docs/import.md`](docs/import.md) |
+| `ForecastKit` | Fetches and validates the Predict feed; no dependencies, so a forecast can't become a reading (D57) | [`docs/forecast.md`](docs/forecast.md) |
 | `ReplayKit` | DEBUG only: scripted scenarios and Nightscout-export replay | [`docs/replay.md`](docs/replay.md) |
 | `WidgetCore` | Widget snapshot, timelines, display rules and views shared with the app | [`docs/widgets.md`](docs/widgets.md), [`docs/design-tokens.md`](docs/design-tokens.md) |
 
