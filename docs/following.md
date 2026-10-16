@@ -2,8 +2,9 @@
 
 Michael is replacing the Dexcom app on his phone with **glucose**, an open-source app that talks to
 his Dexcom G7 directly. When the Dexcom app goes, Dexcom stops receiving his readings, so glucose
-uploads them itself. You can follow in any of the three ways below. **If you rely on alarms for
-lows, you must switch to LoopFollow (section 2).**
+uploads them itself. Use the Nightscout website (section 1) or LoopFollow (section 2). **If you rely
+on alarms for lows, you must switch to LoopFollow (section 2).** Dexcom Follow (section 3) is not
+being updated for now.
 
 ## 1. Nightscout website (to look, not to be alarmed)
 
@@ -33,8 +34,11 @@ Other follower apps work too, but check how they handle LOW before relying on th
 
 ## 3. Dexcom Follow (unchanged app, unofficial path)
 
-If you already use the Dexcom Follow app, keep it: glucose also uploads to Dexcom Share, which is
-what Dexcom Follow reads. Two caveats:
+**Not available for now.** glucose can upload to Dexcom Share, which is what Dexcom Follow reads,
+but the upload needs a serial number Dexcom has registered to Michael's account, and with a G7 and
+no Dexcom receiver no such number is known yet (`docs/setup.md` §4.3). Until that changes, Dexcom
+Follow shows no new readings after the switch: use the Nightscout website or LoopFollow. If it is
+ever turned on, two caveats apply:
 
 - **Unofficial.** Dexcom does not publish this interface; glucose uses the one the open-source
   community reverse-engineered (from xDrip4iOS). Dexcom can break it at any time without notice.
@@ -94,8 +98,9 @@ Dexcom Follow renders them. In HANDOFF §11 step 4a, with a follower, confirm De
 LOW/HIGH and alarms; if not, revert to withholding LOW/HIGH (`DexcomShareEGV.value(for:)` and
 `DexcomShareUploadDestination.canRepresent`) and update section 3 above.
 
-**Dexcom Share** (PROGRESS D7: on, region US). In glucose's settings enter the Dexcom account name
-and password (Keychain only) and the receiver/upload serial number assigned to the account — not
-the G7 pairing code. Invitations to Dexcom Follow are managed in the Dexcom app; invite anyone new
+**Dexcom Share** (PROGRESS D7, region US; **off for now**). In glucose's settings enter the Dexcom
+account name and password (Keychain only) and a serial number Dexcom has registered to the account —
+not the G7 pairing code or sensor serial. With a G7 and no receiver no such serial is known
+(`docs/setup.md` §4.3), so the one Dexcom Follow follower moves to the Nightscout site. Invitations to Dexcom Follow are managed in the Dexcom app; invite anyone new
 **before** removing it. Wrong credentials are retried only every 30 minutes (also across app
 relaunches) so the account is not locked out; saving new credentials retries at once.
