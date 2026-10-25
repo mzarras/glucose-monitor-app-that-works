@@ -144,7 +144,11 @@ unlock the phone, and to pair again from Settings › Sensor only if it continue
    `52` unanswered (so no `4E` was sent), `.failed(sessionLengthUnknown)` is reported at the
    disconnect instead of leaving the status at "authenticating" (safety review P7); `52` is asked
    again next time.
-5. On the `0x4E` response: notify Backfill (`:1165-1174`), then write the next control request,
+5. On the `0x4E` response: notify Backfill (`:1165-1174`) only if that response set an agreeing
+   sensor clock (status 0, anchor within tolerance; this app's change: a record sent without one
+   could not be dated and would be discarded, and the sensor sends a record only once, so the
+   records are left on the sensor for the next connection; logged as `Backfill not requested`),
+   then write the next control request,
    one at a time, each after the previous response: pending calibration `34`, else calibration
    record `32` (`:1237-1248`).
 6. Backfill records arrive on Backfill; `59` on Write_Control ends them (`:1010-1012`).
@@ -418,7 +422,9 @@ No captured G7 J-PAKE exchange exists in either repository. Tests:
   upload freshness, widgets) must treat a reading dated after "now" as **stale**, not as fresh — it is
   never evidence that data is arriving.
 - Backfill arriving before this connection's `0x4E` waits for an agreeing anchor; records never dated
-  are discarded at disconnect (`CGMG7Transmitter.swift:656-667`).
+  are discarded at disconnect (`CGMG7Transmitter.swift:656-667`). Backfill is not requested on a
+  connection whose `0x4E` set no agreeing anchor (§2.3 step 5), so this happens only if the sensor
+  sends records unasked. Each batch logs `backfill: N record(s) received, M published`.
 - `id = GlucoseReading.sensorID(serial:sensorTimestamp:)`; duplicates by sensor timestamp are
   dropped; a live reading must be strictly newer (in sensor time and in date) than every published
   reading; each backfill batch is published in ascending order with `isBackfill = true`.

@@ -194,6 +194,42 @@ final class G7ControllerTests: XCTestCase {
         XCTAssertEqual(backfill.count, 8)
         XCTAssertTrue(backfill.allSatisfy(\.isBackfill))
         XCTAssertEqual(backfill.map(\.date), backfill.map(\.date).sorted())
+        XCTAssertTrue(harness.log.messages.contains("G7: backfill: 8 record(s) received, 8 published"), "\(harness.log.messages)")
+    }
+
+    /// A `0x4E` that sets no agreeing clock (a status reply, or a sensor clock that disagrees with the
+    /// session start, e.g. after the phone died and came back with its clock off) does not subscribe
+    /// to Backfill. Before, the sensor's records were held undated and discarded at disconnect, and
+    /// the G7 sends a record only once, so the gap never filled. Now they stay on the sensor and are
+    /// published on the next connection whose clock agrees.
+    func test_S3_backfillWaitsForAnAgreeingClock() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(123))
+        harness.clock.advance(45 * 60)
+        let gapEnd = harness.sensorClock
+        let gap = (1...8).map { Fixture.backfill(timestamp: gapEnd - 5 - UInt32($0 * 300), glucose: UInt16(100 + $0)) }
+        func requestedBackfill(_ link: FakeLink) -> Bool { link.events.contains("notify:backfill") }
+
+        let statusReply = harness.connection(glucose: Fixture.glucose(status: 0x80, sensorClock: gapEnd, age: 5, glucose: 140, state: 0x06), backfill: gap)
+        XCTAssertFalse(requestedBackfill(statusReply), "a status reply sets no clock")
+
+        harness.clock.advance(300)
+        let mismatch = harness.connection(glucose: Fixture.glucose(sensorClock: harness.sensorClock + 600, age: 5, glucose: 141, state: 0x06), backfill: gap)
+        XCTAssertFalse(requestedBackfill(mismatch), "a disagreeing sensor clock sets no clock")
+        XCTAssertEqual(harness.readings.count, 1, "nothing published from either connection")
+        XCTAssertFalse(harness.log.messages.contains { $0.contains("without an agreeing sensor clock") }, "no record was discarded")
+        XCTAssertEqual(harness.log.messages.filter { $0.contains("Backfill not requested") }.count, 2)
+
+        harness.clock.advance(300)
+        let good = harness.connection(glucose: harness.currentGlucose(142), backfill: gap)
+        XCTAssertTrue(requestedBackfill(good))
+        let published = Array(harness.readings.dropFirst())
+        XCTAssertEqual(published.first?.value, .mgdl(142))
+        let backfill = Array(published.dropFirst())
+        XCTAssertEqual(backfill.count, 8, "the whole gap arrives once the clock agrees")
+        XCTAssertTrue(backfill.allSatisfy(\.isBackfill))
+        XCTAssertEqual(backfill.map(\.date), backfill.map(\.date).sorted())
+        XCTAssertTrue(harness.log.messages.contains("G7: backfill: 8 record(s) received, 8 published"), "\(harness.log.messages)")
     }
 }
 

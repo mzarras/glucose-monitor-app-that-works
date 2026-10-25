@@ -135,6 +135,8 @@ final class G7ReadingPipeline {
     private var published: [G7ReadingMark] = []
     private var pendingBackfillFrames: [Data] = []
     private var backfillBatch: [UInt32: GlucoseReading] = [:]
+    /// Backfill frames received since the last flush, for the diagnostic summary.
+    private var backfillFramesReceived = 0
     private let log: (String) -> Void
 
     init(
@@ -157,6 +159,11 @@ final class G7ReadingPipeline {
 
     var sessionEnded: Bool { sessionEnd != nil }
 
+    /// Backfill may be requested on this connection: its `0x4E` set an agreeing clock, so every
+    /// record the sensor sends can be dated. Without it the records would be held and discarded at
+    /// disconnect, and the G7 does not send a record again once it has sent it.
+    var canDateBackfill: Bool { clock != nil && !isUnsupportedSensor && !sessionEnded }
+
     /// The newest published reading (persisted by the controller).
     var newestReading: G7ReadingMark? { published.last }
 
@@ -172,6 +179,7 @@ final class G7ReadingPipeline {
         clock = nil
         pendingBackfillFrames.removeAll()
         backfillBatch.removeAll()
+        backfillFramesReceived = 0
     }
 
     /// The connection turned out not to be ours (a `05` rejection after authenticating, safety review
@@ -181,6 +189,7 @@ final class G7ReadingPipeline {
         if dropped > 0 { log("backfill: \(dropped) record(s) of a rejected connection discarded") }
         pendingBackfillFrames.removeAll()
         backfillBatch.removeAll()
+        backfillFramesReceived = 0
         clock = nil
     }
 
@@ -254,6 +263,7 @@ final class G7ReadingPipeline {
     /// A 9-byte record from the Backfill characteristic.
     func handleBackfillFrame(_ frame: Data, now: Date) {
         guard !isUnsupportedSensor, !sessionEnded else { return }
+        backfillFramesReceived += 1
         if clock == nil {
             pendingBackfillFrames.append(frame)
         } else {
@@ -287,6 +297,10 @@ final class G7ReadingPipeline {
             output.readings.append(reading)
         }
         backfillBatch.removeAll()
+        if backfillFramesReceived > 0 {
+            log("backfill: \(backfillFramesReceived) record(s) received, \(output.readings.count) published")
+            backfillFramesReceived = 0
+        }
         if republished > 0 {
             log("backfill: \(republished) record(s) above the stored floor published again (m1)")
         }
