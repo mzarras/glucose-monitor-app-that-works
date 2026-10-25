@@ -310,13 +310,16 @@ enum Fixtures {
             state.lows = LowsSummary(count: 0, meanDurationMinutes: nil, peakWindow: nil)
         case .threeDays:
             state.timeInRange = 80
+            state.rangeBins = RangeBins(veryLow: 1, low: 4, inRange: 80, high: 13, veryHigh: 2)
             state.timeInRangeChange = 2
             state.lows = LowsSummary(count: 1, meanDurationMinutes: 25, peakWindow: nil)
         case .thirtyDays:
             state.dataSufficiency = 64
             state.timeInRange = 76
+            state.rangeBins = RangeBins(veryLow: 1, low: 5, inRange: 76, high: 15, veryHigh: 3)
         case .ninetyDays:
             state.timeInRange = 74
+            state.rangeBins = RangeBins(veryLow: 2, low: 5, inRange: 74, high: 16, veryHigh: 3)
             state.timeInRangeChange = nil
             state.importedData = ImportedDataNote(
                 origins: [.nightscout],

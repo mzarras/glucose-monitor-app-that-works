@@ -61,11 +61,20 @@ enum TrendsText {
         return "\(Int(value.rounded()))%"
     }
 
-    /// Range-bar label percentages: "<1%" for a non-zero bin that rounds to 0, so a real low never
+    /// Range-bar label percentages, rounded together so they add up to 100
+    /// (`RangeBins.displayPercent`): "<1%" for a non-zero bin that rounds to 0, so a real low never
     /// reads as none.
-    static func binPercent(_ value: Double) -> String {
-        if value > 0 && value < 0.5 { return "<1%" }
-        return "\(Int(value.rounded()))%"
+    static func binPercent(_ band: GlucoseBand, in bins: RangeBins) -> String {
+        let shown = bins.displayPercent(for: band)
+        if shown == 0 && bins.percent(for: band) > 0 { return "<1%" }
+        return "\(shown)%"
+    }
+
+    /// The hero time-in-range number. It matches the 70–180 bin of the range bar when there is one,
+    /// so the two never disagree by a rounding point.
+    static func heroPercent(_ state: TrendsViewState) -> Int? {
+        if let bins = state.rangeBins { return bins.displayPercent(for: .inRange) }
+        return state.timeInRange.map { Int($0.rounded()) }
     }
 
     static func mgdl(_ value: Double?) -> String {
@@ -140,8 +149,8 @@ enum TrendsText {
 
     /// VoiceOver for the hero: "78 percent time in range, 70 to 180, up 4 points vs prior 14 days".
     static func heroSpeech(_ state: TrendsViewState) -> String {
-        guard let tir = state.timeInRange else { return "Time in range: no readings in this period" }
-        var text = "\(Int(tir.rounded())) percent time in range, 70 to 180 milligrams per deciliter"
+        guard let tir = heroPercent(state) else { return "Time in range: no readings in this period" }
+        var text = "\(tir) percent time in range, 70 to 180 milligrams per deciliter"
         if let change = state.timeInRangeChange {
             let rounded = Int(change.rounded())
             let direction = rounded > 0 ? "up \(rounded) points" : rounded < 0 ? "down \(-rounded) points" : "no change"
@@ -152,7 +161,7 @@ enum TrendsText {
 
     /// VoiceOver for the range bar.
     static func binsSpeech(_ bins: RangeBins) -> String {
-        "Below 54: \(binPercent(bins.veryLow)). 54 to 69: \(binPercent(bins.low)). 70 to 180: \(binPercent(bins.inRange)). 181 to 250: \(binPercent(bins.high)). Above 250: \(binPercent(bins.veryHigh))."
+        "Below 54: \(binPercent(.veryLow, in: bins)). 54 to 69: \(binPercent(.low, in: bins)). 70 to 180: \(binPercent(.inRange, in: bins)). 181 to 250: \(binPercent(.high, in: bins)). Above 250: \(binPercent(.veryHigh, in: bins))."
     }
 
     /// VoiceOver summary for the AGP chart. A median that is the sensor's LOW/HIGH flag is spoken

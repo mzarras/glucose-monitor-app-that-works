@@ -100,7 +100,7 @@ struct TrendsContent: View {
 
     private var heroNumber: some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
-            Text(verbatim: state.timeInRange.map { String(Int($0.rounded())) } ?? "—")
+            Text(verbatim: TrendsText.heroPercent(state).map(String.init) ?? "—")
                 .font(Typography.statHero(size: 104))
                 .tracking(-2)
             if state.timeInRange != nil {
@@ -271,7 +271,7 @@ struct RangeBarView: View {
     }
 
     private func binPercent(_ band: GlucoseBand) -> some View {
-        Text(verbatim: TrendsText.binPercent(bins.percent(for: band)))
+        Text(verbatim: TrendsText.binPercent(band, in: bins))
             .font(Typography.label(size: 12))
             .foregroundStyle(Theme.ink)
             .lineLimit(1)
