@@ -180,6 +180,13 @@ merged result (with the rules that workstream owns) → next. `integration` merg
 
 ## Phase log
 
+### 2026-11-05 — Phase 7: compact grace banner, 3 D scrub past now, no short-period GMI (D64); backfill and range-bar fixes
+- D64 (2a20bc4): compact grace-period banner and one-line countdown, 3 D overlay scrub past today's last reading, GMI row left out under 14 D.
+- From the owner's phone session (2026-10-25, branches `fix/g7-backfill-after-clock` and `fix/trends-range-rounding`): the same trees recommitted without Claude attribution as dcb1212 (D63, backfill only on a connection whose clock agrees) and b7b5874 (range-bar percentages add up to 100), merged into integration.
+- check.sh 7364337: Swift 6.4 (Xcode 27.1) defaults SwiftPM to swiftbuild, which broke the coverage and S6 object checks ("no profile data", "NO_OBJECTS") for every package; those runs now pass `--build-system native` (deprecated; move to the new layout before SwiftPM removes it). check-selftest.sh: all 105 checks ok.
+- Safety review of main..integration: no code defects (minors: equal tiny bins can read "1%" and "<1%"; the hero TIR and "vs prior" change round separately; no test asserts the grace banner can't be dismissed; the 3 D no-data callout is tested by screenshot only). Certify `.build-logs/20261105-152811` at 7364337 PASS, `--verify-certify` OK. (The first certify run, before the check.sh fix, also failed the Predict-tab UI test once under load 54; it passed on the rerun.)
+- Installed 2026-11-05: Release of 7364337 on the new iPhone (iPhone19,2) over the previous build (data kept) and launched.
+
 ### 2026-10-16 — Phase 6: widget keeps the last reading (D61); repository public
 - Repository published at https://github.com/mzarras/glucose-monitor-app-that-works (`main` only; owner's Nightscout URL removed from the tree; README status: tested live in listen mode, primary-mode testing continues with the Dexcom app deleted; README Predict entry).
 - p6-widget (WS5): 29f46c3 (D61 display + reload dedupe), safety review PASS (m1–m7, n1–n4) → owner decisions m1 hide earlier sensor's reading, m5 inline time only, stale VoiceOver without trend word → 59c552d (m1–m6, n3 fixed), certify `.build-logs/20261016-120746` PASS, `--verify-certify` OK; re-review PASS (nits n5–n8 accepted; n1, n2, n4 left). Merged into integration.
