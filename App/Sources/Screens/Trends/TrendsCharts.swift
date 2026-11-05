@@ -208,7 +208,9 @@ enum AGPChartScale {
 /// other chart (gaps > 15 min break the line, LOW/HIGH are edge markers, S1/S4).
 ///
 /// Scrubbing (press-and-hold, then drag) selects today's nearest real reading (ChartScrub); the
-/// callout also lists the other days' readings at the same time of day, or "no data".
+/// callout also lists the other days' readings at the same time of day, or "no data". Past today's
+/// last reading the scrub keeps going while an earlier day has a reading there: today shows
+/// "No data" and the earlier days their readings.
 struct DayOverlayChart: View {
     let days: [DayTrace]
     @State private var scrubHour: Double?
@@ -359,7 +361,7 @@ struct DayOverlayChart: View {
 
     @ViewBuilder
     private func scrubMarks(proxy: ChartProxy, plot: CGRect, selection: ScrubSelection) -> some View {
-        if let primary, let scrubHour, let callout = ChartScrub.callout(selection, time: { TimeText.time($0) }) {
+        if let primary, let scrubHour, let callout = callout(selection, primary: primary, scrubHour: scrubHour) {
             let hour: Double = selection.reading.map { TimeOfDayAxis.hourOfDay($0.date, dayStart: primary.dayStart, timeZone: primary.timeZone) } ?? scrubHour
             if let x = proxy.position(forX: hour) {
                 Rectangle()
@@ -377,6 +379,15 @@ struct DayOverlayChart: View {
                 PlacedScrubCallout(callout: callout, extraLines: otherDaysLines(primary: primary), x: plot.minX + x, plot: plot)
             }
         }
+    }
+
+    /// The primary trace's callout, or, where it has no reading at all (later today than its last
+    /// reading), "No data" while another day has a reading at that time of day.
+    private func callout(_ primarySelection: ScrubSelection, primary: DayTrace, scrubHour: Double) -> ScrubCallout? {
+        if let callout = ChartScrub.callout(primarySelection, time: { TimeText.time($0) }) { return callout }
+        guard days.contains(where: { $0.dayStart != primary.dayStart && selection(for: $0).reading != nil }) else { return nil }
+        let time = TimeText.time(TimeOfDayAxis.date(atHour: scrubHour, dayStart: primary.dayStart, timeZone: primary.timeZone))
+        return ChartScrub.noDataCallout(label: primary.isToday ? "today" : TimeText.shortDay(primary.dayStart), time: time)
     }
 
     /// "SEP 22 · 98", "SEP 21 · LOW", "SEP 20 · no data" — the other days at the same time of day.

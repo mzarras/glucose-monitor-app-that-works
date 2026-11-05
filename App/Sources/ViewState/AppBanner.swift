@@ -85,6 +85,8 @@ struct AppBanner: Equatable, Identifiable, Sendable {
     let detail: String
     let action: Action?
     let actionTitle: String?
+    /// Two lines with the action beside them, for a banner that stays up for hours (the grace period).
+    var compact = false
 
     var id: Kind { kind }
 }
@@ -491,8 +493,8 @@ enum AppBanners {
             return [AppBanner(
                 kind: .sensorExpiring, severity: .warning,
                 title: "Sensor in grace period",
-                detail: "Readings stop at \(TimeText.time(endsAt, context)). Replace the sensor soon.",
-                action: .openSensorSettings, actionTitle: "Sensor")]
+                detail: "Readings stop at \(TimeText.time(endsAt, context)).",
+                action: .openSensorSettings, actionTitle: "Sensor", compact: true)]
         case .active(_, let expiresAt) where expiresAt.timeIntervalSince(now) <= expiringWithin:
             return [AppBanner(
                 kind: .sensorExpiring, severity: .warning,

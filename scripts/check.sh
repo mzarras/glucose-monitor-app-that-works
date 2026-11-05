@@ -117,6 +117,12 @@ skip()  { SUMMARY="$SUMMARY\nSKIP  $*"; note "SKIP  $*"; }
 
 # SwiftPM scratch path for build $1: fresh under the log directory in certify (deleted at exit),
 # persistent and incremental under .derived/fast-spm in fast mode.
+# Swift 6.4's default SwiftPM build system (swiftbuild) moves the test bundle and the per-file
+# objects that the coverage and S6 compile-out checks read (`--show-bin-path` becomes
+# <scratch>/out/Products/<config>), so those SwiftPM runs keep the native layout. Deprecated in 6.4;
+# move the checks to the new layout before SwiftPM removes it.
+SPM_BUILD_SYSTEM="--build-system native"
+
 spm_scratch() {
     if [ "$CHECK_MODE" = "fast" ]; then echo "$ROOT/.derived/fast-spm/$1"; else echo "$LOGS/spm-$1"; fi
 }
@@ -488,6 +494,7 @@ project_warnings() {
         | grep -v '/SourcePackages/checkouts/' \
         | grep -v '/checkouts/GRDB' \
         | grep -v 'appintentsmetadataprocessor.*Metadata extraction skipped' \
+        | grep -v "'--build-system native' has been deprecated" \
         | sort -u
 }
 
@@ -546,7 +553,7 @@ package_tests() {
     dir="$ROOT/Packages/$pkg"
     log="$LOGS/test-$pkg.log"
     scratch="$(spm_scratch "$pkg")"
-    (cd "$dir" && swift test --enable-code-coverage --scratch-path "$scratch" ${PKG_FILTER:+--filter "$PKG_FILTER"}) > "$log" 2>&1
+    (cd "$dir" && swift test $SPM_BUILD_SYSTEM --enable-code-coverage --scratch-path "$scratch" ${PKG_FILTER:+--filter "$PKG_FILTER"}) > "$log" 2>&1
     status=$?
     warnings="$(project_warnings "$log")"
     count="$(executed_count "$log")"
@@ -566,7 +573,7 @@ package_tests() {
     pass "$pkg tests — $count executed, 0 failures"
 
     # Coverage: llvm-cov over the package's own sources only.
-    bin_dir="$(cd "$dir" && swift build --show-bin-path --scratch-path "$scratch" 2>/dev/null)"
+    bin_dir="$(cd "$dir" && swift build $SPM_BUILD_SYSTEM --show-bin-path --scratch-path "$scratch" 2>/dev/null)"
     profdata="$bin_dir/codecov/default.profdata"
     xctest_bin="$bin_dir/${pkg}PackageTests.xctest/Contents/MacOS/${pkg}PackageTests"
     scope="$dir/$(coverage_scope "$pkg")"
@@ -657,7 +664,7 @@ outside_debug() {
 symbol_count() {
     pkg="$1"; pattern="$2"; config="$3"
     scratch="$(spm_scratch "nm-$pkg-$config")"
-    (cd "$ROOT/Packages/$pkg" && swift build -c "$config" --scratch-path "$scratch") > "$LOGS/nm-$pkg-$config.log" 2>&1 || { echo "BUILD_FAILED"; return; }
+    (cd "$ROOT/Packages/$pkg" && swift build $SPM_BUILD_SYSTEM -c "$config" --scratch-path "$scratch") > "$LOGS/nm-$pkg-$config.log" 2>&1 || { echo "BUILD_FAILED"; return; }
     objs="$(find "$scratch/$config/$pkg.build" -name '*.o' 2>/dev/null)"
     if [ -z "$objs" ]; then echo "NO_OBJECTS"; return; fi
     nm -U $objs 2>/dev/null | grep -c -F -- "$pattern"

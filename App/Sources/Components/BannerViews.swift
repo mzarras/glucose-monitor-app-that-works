@@ -9,31 +9,70 @@ struct BannerView: View {
     let perform: (AppBanner.Action) -> Void
 
     var body: some View {
+        Group {
+            if banner.compact { compactBody } else { fullBody }
+        }
+        .overlay(Rectangle().stroke(Theme.rule, lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(verbatim: "\(banner.severity == .critical ? "Alert" : "Warning"): \(banner.title). \(banner.detail)"))
+    }
+
+    private var fullBody: some View {
         HStack(alignment: .top, spacing: 12) {
-            Rectangle()
-                .fill(banner.severity == .critical ? AnyShapeStyle(Theme.band(.veryLow)) : AnyShapeStyle(Theme.band(.high)))
-                .frame(width: 3)
-                .accessibilityHidden(true)
+            rule
             VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: banner.title)
-                    .font(Typography.body(size: 14, weight: .semibold))
-                    .foregroundStyle(banner.severity == .critical ? AnyShapeStyle(Theme.alert) : AnyShapeStyle(Theme.ink))
-                Text(verbatim: banner.detail)
-                    .font(Typography.body(size: 13))
-                    .foregroundStyle(Theme.ink)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let action = banner.action, let title = banner.actionTitle {
-                    Button(title) { perform(action) }
-                        .buttonStyle(LinkButtonStyle())
-                }
+                title(size: 14)
+                detail(size: 13)
+                actionButton
             }
             Spacer(minLength: 0)
         }
         .padding(.vertical, 10)
         .padding(.trailing, 12)
-        .overlay(Rectangle().stroke(Theme.rule, lineWidth: 1))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(verbatim: "\(banner.severity == .critical ? "Alert" : "Warning"): \(banner.title). \(banner.detail)"))
+    }
+
+    /// Title and detail with the action beside them. The rule is an overlay, not a row member, so
+    /// the banner takes only its own height.
+    private var compactBody: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                title(size: 13)
+                detail(size: 12)
+            }
+            Spacer(minLength: 0)
+            actionButton
+        }
+        .padding(.vertical, 6)
+        .padding(.leading, 15)
+        .padding(.trailing, 12)
+        .overlay(alignment: .leading) { rule }
+    }
+
+    private var rule: some View {
+        Rectangle()
+            .fill(banner.severity == .critical ? AnyShapeStyle(Theme.band(.veryLow)) : AnyShapeStyle(Theme.band(.high)))
+            .frame(width: 3)
+            .accessibilityHidden(true)
+    }
+
+    private func title(size: CGFloat) -> some View {
+        Text(verbatim: banner.title)
+            .font(Typography.body(size: size, weight: .semibold))
+            .foregroundStyle(banner.severity == .critical ? AnyShapeStyle(Theme.alert) : AnyShapeStyle(Theme.ink))
+    }
+
+    private func detail(size: CGFloat) -> some View {
+        Text(verbatim: banner.detail)
+            .font(Typography.body(size: size))
+            .foregroundStyle(Theme.ink)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private var actionButton: some View {
+        if let action = banner.action, let title = banner.actionTitle {
+            Button(title) { perform(action) }
+                .buttonStyle(LinkButtonStyle())
+        }
     }
 }
 

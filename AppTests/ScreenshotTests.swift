@@ -166,6 +166,12 @@ final class ScreenshotTests: XCTestCase {
                 .padding(20)
                 .editorialScreen()
             try render(overlay, name: "trends-3d-scrub-\(scheme.name)", scheme: scheme, height: nil)
+            // Past today's last reading (12:35 PM): today "No data", the earlier days still read out.
+            let pastNow = DayOverlayChart(days: days, initialScrubHour: 17)
+                .frame(width: 350, height: 160)
+                .padding(20)
+                .editorialScreen()
+            try render(pastNow, name: "trends-3d-scrub-past-now-\(scheme.name)", scheme: scheme, height: nil)
         }
     }
 

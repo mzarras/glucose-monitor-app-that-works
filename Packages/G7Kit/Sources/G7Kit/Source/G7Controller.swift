@@ -758,12 +758,17 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         apply(result)
     }
 
+    func cycleCanDateBackfill() -> Bool {
+        pipeline?.canDateBackfill ?? false
+    }
+
     func cycleReceivedBackfillFrame(_ frame: Data) {
         pipeline?.handleBackfillFrame(frame, now: now())
     }
 
     func cycleBackfillFinished() {
         guard let pipeline else { return }
+        log(.ble, "backfill finished (59)")
         apply(pipeline.flushBackfill())
     }
 

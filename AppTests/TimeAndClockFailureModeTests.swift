@@ -238,8 +238,8 @@ final class TimeAndClockFailureModeTests: XCTestCase {
             .first { $0.kind == .sensorExpiring }
         let tokyoBanner = AppBanners.make(sensorState: grace, latestLiveReadingDate: t0, health: healthy, now: t0, context: tokyoContext)
             .first { $0.kind == .sensorExpiring }
-        XCTAssertEqual(nyBanner?.detail, "Readings stop at \(TimeText.time(endsAt, nyContext)). Replace the sensor soon.")
-        XCTAssertEqual(tokyoBanner?.detail, "Readings stop at \(TimeText.time(endsAt, tokyoContext)). Replace the sensor soon.")
+        XCTAssertEqual(nyBanner?.detail, "Readings stop at \(TimeText.time(endsAt, nyContext)).")
+        XCTAssertEqual(tokyoBanner?.detail, "Readings stop at \(TimeText.time(endsAt, tokyoContext)).")
         XCTAssertTrue(TimeText.time(endsAt, nyContext).hasPrefix("3:35"))
         XCTAssertTrue(TimeText.time(endsAt, tokyoContext).hasPrefix("4:35"))
         XCTAssertEqual(GraceCountdown.clock(until: endsAt, now: t0), "7:00:00", "the countdown is a duration")

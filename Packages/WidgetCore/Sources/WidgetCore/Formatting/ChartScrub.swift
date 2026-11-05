@@ -134,6 +134,12 @@ public enum ChartScrub {
         }
     }
 
+    /// The finger is where a trace has no reading at all (past its last reading, or before its
+    /// first): "No data" over `label` and the clock time under the finger ("today · 5:00 PM").
+    public static func noDataCallout(label: String, time: String) -> ScrubCallout {
+        ScrubCallout(headline: "No data", detail: "\(label) · \(time)", time: nil, spoken: "No data \(label) at \(time)")
+    }
+
     /// Default clock-time formatter ("2:15 PM" / "14:15").
     public static func shortTime(_ date: Date) -> String {
         date.formatted(date: .omitted, time: .shortened)

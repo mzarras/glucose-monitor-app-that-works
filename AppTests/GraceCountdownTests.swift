@@ -40,7 +40,7 @@ final class GraceCountdownTests: XCTestCase {
         // duration; the time left is not repeated there.
         let banner = state.banners(now: before, context: testContext).first { $0.kind == .sensorExpiring }
         XCTAssertEqual(banner?.title, "Sensor in grace period")
-        XCTAssertEqual(banner?.detail, "Readings stop at \(TimeText.time(end, testContext)). Replace the sensor soon.")
+        XCTAssertEqual(banner?.detail, "Readings stop at \(TimeText.time(end, testContext)).")
         XCTAssertFalse(banner?.detail.contains("left") ?? true)
 
         XCTAssertNil(GraceCountdown.end(sensorState: grace, now: end), "at zero the countdown goes")

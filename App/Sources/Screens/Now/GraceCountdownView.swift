@@ -1,5 +1,5 @@
 // The grace-period countdown on the Now screen (PROGRESS D43): "GRACE PERIOD" and a live h:mm:ss to
-// the moment readings stop, in the Editorial figure type — the screen's one live countdown (review
+// the moment readings stop, on one line in the Editorial figure type — the screen's one live countdown (review
 // m7: the banner says when readings stop, the SENSOR row the rounded time left). Ticks every second
 // while the app is open (a 1 s TimelineView of its own, so the rest of the screen keeps its 15 s
 // clock). VoiceOver reads it to the minute. At zero the Now screen switches to "Sensor expired"
@@ -16,20 +16,19 @@ struct GraceCountdownView: View {
     var liveClock: (@MainActor () -> Date)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(verbatim: "GRACE PERIOD")
                 .monoLabel(size: 11, medium: true)
                 .foregroundStyle(Theme.ink) // the amber is on the rule only: small text needs 4.5:1 (D32)
             GraceCountdownText(end: end, now: now, liveClock: liveClock) { remaining in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(verbatim: remaining)
-                        .font(Typography.figure(size: 44))
+                        .font(Typography.figure(size: 22))
                         .monospacedDigit()
                         .foregroundStyle(Theme.ink)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
                     Text(verbatim: "left")
-                        .font(Typography.body(size: 14))
+                        .font(Typography.body(size: 13))
                         .foregroundStyle(Theme.muted)
                 }
             }

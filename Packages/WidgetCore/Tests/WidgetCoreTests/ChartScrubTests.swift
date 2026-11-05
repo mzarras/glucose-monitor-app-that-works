@@ -122,6 +122,11 @@ final class ChartScrubTests: XCTestCase {
         XCTAssertEqual(callout, ScrubCallout(headline: "105", detail: "mg/dL", time: "t+15", spoken: "105 milligrams per deciliter at t+15"))
         XCTAssertNil(ChartScrub.callout(.none, time: time))
     }
+
+    func test_noDataCallout() {
+        XCTAssertEqual(ChartScrub.noDataCallout(label: "today", time: "5:00 PM"),
+                       ScrubCallout(headline: "No data", detail: "today · 5:00 PM", time: nil, spoken: "No data today at 5:00 PM"))
+    }
 }
 
 final class ScrubCalloutPlacementTests: XCTestCase {
