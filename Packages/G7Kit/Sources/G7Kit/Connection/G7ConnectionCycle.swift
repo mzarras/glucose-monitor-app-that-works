@@ -23,6 +23,8 @@ protocol G7ConnectionCycleDelegate: AnyObject {
     /// A notify/write failed in a way that means the iOS Bluetooth pairing is not in place.
     func cycleLinkFailed(_ error: G7LinkError)
     func cycleReceivedGlucose(_ message: G7GlucoseMessage)
+    /// True once this connection's `0x4E` set an agreeing sensor clock, so backfill can be dated.
+    func cycleCanDateBackfill() -> Bool
     func cycleReceivedBackfillFrame(_ frame: Data)
     func cycleBackfillFinished()
     func cycleReceivedExtendedVersion(_ message: G7ExtendedVersionMessage)
@@ -42,8 +44,10 @@ protocol G7ConnectionCycleDelegate: AnyObject {
 ///    answer (Sensor change: xDrip4iOS asks after the first reading, CGMG7Transmitter.swift:1361-1389,
 ///    which would let a 15-day sensor publish one reading); then write `4E` (GetData) once
 ///    (CGMG7Transmitter.swift:1624-1642);
-/// 3. on the `0x4E` response: notify Backfill (CGMG7Transmitter.swift:1165-1174), then write the
-///    caller's control requests one at a time, each after the previous response;
+/// 3. on the `0x4E` response: notify Backfill (CGMG7Transmitter.swift:1165-1174) if that response set
+///    an agreeing sensor clock (Sensor change: otherwise the records could not be dated and would be
+///    lost, so they are left on the sensor), then write the caller's control requests one at a time,
+///    each after the previous response;
 /// 4. backfill records arrive on Backfill, `59` on Write_Control ends them.
 /// Nothing from Write_Control or Backfill is forwarded before authentication completes, nor after a
 /// `05` rejection ends it (S2).
@@ -198,7 +202,16 @@ final class G7ConnectionCycle: G7AuthSessionDelegate {
                 return
             }
             delegate?.cycleReceivedGlucose(message)
-            if !link.isNotifying(.backfill) { link.setNotify(true, for: .backfill) }
+            // Backfill only once its records can be dated: the G7 sends a record once, so records
+            // sent on a connection without an agreeing clock would be discarded and never come back.
+            // Not subscribing leaves them on the sensor for the next connection.
+            if !link.isNotifying(.backfill) {
+                if delegate?.cycleCanDateBackfill() == true {
+                    link.setNotify(true, for: .backfill)
+                } else {
+                    delegate?.cycleLog("connection: Backfill not requested (no agreeing sensor clock on this connection); left on the sensor")
+                }
+            }
             sendNextControlRequest()
         case .extendedVersion:
             awaitingControlResponse = nil
