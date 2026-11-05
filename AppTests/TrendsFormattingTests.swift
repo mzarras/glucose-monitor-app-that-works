@@ -13,7 +13,10 @@ final class TrendsFormattingTests: XCTestCase {
     func test_gmiOnlyFor14DaysAndLonger() {
         let gmi = 3.31 + 0.02392 * 128
         for period in [TrendsPeriod.oneDay, .threeDays, .sevenDays] {
-            XCTAssertEqual(TrendsText.gmi(gmi, period: period), "needs 14 days", "\(period)")
+            XCTAssertFalse(TrendsText.showsGMI(period), "\(period): no GMI row below 14 days")
+        }
+        for period in [TrendsPeriod.fourteenDays, .thirtyDays, .ninetyDays] {
+            XCTAssertTrue(TrendsText.showsGMI(period), "\(period)")
         }
         XCTAssertEqual(TrendsText.gmi(gmi, period: .fourteenDays), "6.4%")
         XCTAssertEqual(TrendsText.gmi(gmi, period: .ninetyDays), "6.4%")

@@ -288,8 +288,10 @@ struct MetricRowsView: View {
             Hairline(strong: true)
             row("Time in tight range", note: "70–140", value: TrendsText.percent(state.tightRange))
             row("Mean glucose", note: nil, value: TrendsText.mgdl(state.meanMgdl), unit: state.meanMgdl == nil ? nil : "mg/dL")
-            row("GMI", note: TrendsText.gmiNote(period: state.period, coverage: state.dataSufficiency),
-                value: TrendsText.gmi(state.gmiPercent, period: state.period), valueIsNote: state.period.days < TrendsText.gmiMinimumDays)
+            if TrendsText.showsGMI(state.period) {
+                row("GMI", note: TrendsText.gmiNote(period: state.period, coverage: state.dataSufficiency),
+                    value: TrendsText.gmi(state.gmiPercent, period: state.period))
+            }
             row("Variability", note: "CV, target under 36%", value: TrendsText.percent(state.cvPercent))
             if let lows = state.lows {
                 row("Lows", note: TrendsText.lowsNote(lows), value: String(lows.count), unit: TrendsText.lowsDuration(lows))
@@ -306,17 +308,17 @@ struct MetricRowsView: View {
 
     /// Title (and note) left, value right when they fit on one line each; otherwise the value goes
     /// under the title, so nothing is truncated or broken mid-word at large text sizes.
-    private func row(_ title: String, note: String?, value: String, unit: String? = nil, valueIsNote: Bool = false, isLast: Bool = false) -> some View {
+    private func row(_ title: String, note: String?, value: String, unit: String? = nil, isLast: Bool = false) -> some View {
         VStack(spacing: 0) {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     titleBlock(title, note: note).fixedSize()
                     Spacer(minLength: 8)
-                    valueBlock(value, unit: unit, valueIsNote: valueIsNote).fixedSize()
+                    valueBlock(value, unit: unit).fixedSize()
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     titleBlock(title, note: note)
-                    valueBlock(value, unit: unit, valueIsNote: valueIsNote)
+                    valueBlock(value, unit: unit)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -339,15 +341,9 @@ struct MetricRowsView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func valueBlock(_ value: String, unit: String?, valueIsNote: Bool) -> some View {
+    private func valueBlock(_ value: String, unit: String?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            if valueIsNote {
-                Text(verbatim: value)
-                    .font(Typography.label(size: 11))
-                    .foregroundStyle(Theme.muted)
-            } else {
-                Text(verbatim: value).font(Typography.title(size: 22))
-            }
+            Text(verbatim: value).font(Typography.title(size: 22))
             if let unit {
                 Text(verbatim: unit)
                     .font(Typography.label(size: 11))

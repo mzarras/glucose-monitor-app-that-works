@@ -73,10 +73,14 @@ enum TrendsText {
         return "\(Int(value.rounded()))"
     }
 
-    /// GMI only for 14 D and longer; below that "needs 14 days" (HANDOFF §7.3.2).
+    /// The GMI row is shown only for 14 D and longer; below that it is left out (HANDOFF §7.3.2, D64).
+    static func showsGMI(_ period: TrendsPeriod) -> Bool {
+        period.days >= gmiMinimumDays
+    }
+
+    /// "6.4%", or "—" with no value (or below 14 D, where the row isn't shown).
     static func gmi(_ value: Double?, period: TrendsPeriod) -> String {
-        guard period.days >= gmiMinimumDays else { return "needs \(gmiMinimumDays) days" }
-        guard let value else { return "—" }
+        guard period.days >= gmiMinimumDays, let value else { return "—" }
         return String(format: "%.1f%%", value)
     }
 

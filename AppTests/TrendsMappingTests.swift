@@ -30,7 +30,7 @@ final class TrendsMappingTests: XCTestCase {
         for period in [TrendsPeriod.oneDay, .threeDays, .sevenDays] {
             let state = trends(period, readings)
             XCTAssertNil(state.gmiPercent, "\(period)")
-            XCTAssertEqual(TrendsText.gmi(state.gmiPercent, period: period), "needs 14 days")
+            XCTAssertFalse(TrendsText.showsGMI(period), "\(period): no GMI row")
         }
         for period in [TrendsPeriod.fourteenDays, .thirtyDays, .ninetyDays] {
             let state = trends(period, readings)
