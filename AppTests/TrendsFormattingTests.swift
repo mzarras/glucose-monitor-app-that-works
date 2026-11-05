@@ -32,6 +32,54 @@ final class TrendsFormattingTests: XCTestCase {
         }
     }
 
+    func test_rangeBinsAddUpTo100() {
+        // Rounded one by one these read 2 + 3 + 91 + 6 + 0 = 102 %.
+        let bins = RangeBins(veryLow: 1.5, low: 2.5, inRange: 90.5, high: 5.5, veryHigh: 0)
+        XCTAssertEqual(GlucoseBand.allCases.map { bins.displayPercent(for: $0) }, [2, 3, 90, 5, 0],
+                       "ties go to the lower band")
+        // Rounded one by one these read 0 + 2 + 90 + 6 + 0 = 98 %. The five .4 remainders tie (up to
+        // floating-point noise), so the two lowest bands get the missing points.
+        let screenshot = RangeBins(veryLow: 0.4, low: 2.4, inRange: 90.4, high: 6.4, veryHigh: 0.4)
+        XCTAssertEqual(GlucoseBand.allCases.map { screenshot.displayPercent(for: $0) }, [1, 3, 90, 6, 0])
+        XCTAssertEqual(GlucoseBand.allCases.map { TrendsText.binPercent($0, in: screenshot) }, ["1%", "3%", "90%", "6%", "<1%"])
+
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<2_000 {
+            let raw = (0..<5).map { _ in Bool.random(using: &generator) ? 0 : pow(Double.random(in: 0...1, using: &generator), 3) }
+            let total = raw.reduce(0, +)
+            guard total > 0 else { continue }
+            let percents = raw.map { $0 * 100 / total }
+            let bins = RangeBins(veryLow: percents[0], low: percents[1], inRange: percents[2], high: percents[3], veryHigh: percents[4])
+            let shown = GlucoseBand.allCases.map { bins.displayPercent(for: $0) }
+            let hidden = zip(percents, shown).contains { $0 > 0 && $1 == 0 }
+            XCTAssertTrue(shown.reduce(0, +) == 100 || (shown.reduce(0, +) == 99 && hidden), "\(percents) -> \(shown)")
+            for (value, display) in zip(percents, shown) {
+                XCTAssertLessThan(abs(Double(display) - value), 1, "\(percents) -> \(shown)")
+                if value == 0 { XCTAssertEqual(display, 0) }
+            }
+        }
+    }
+
+    func test_rangeBinsNeverRead100WithAnotherBinNonZero() {
+        let bins = RangeBins(veryLow: 0.3, low: 0, inRange: 99.7, high: 0, veryHigh: 0)
+        XCTAssertEqual(TrendsText.binPercent(.inRange, in: bins), "99%")
+        XCTAssertEqual(TrendsText.binPercent(.veryLow, in: bins), "<1%")
+        let all = RangeBins(veryLow: 0, low: 0, inRange: 100, high: 0, veryHigh: 0)
+        XCTAssertEqual(TrendsText.binPercent(.inRange, in: all), "100%")
+        XCTAssertEqual(TrendsText.binPercent(.low, in: all), "0%")
+        XCTAssertEqual(RangeBins(veryLow: 0, low: 0, inRange: 0, high: 0, veryHigh: 0).displayPercent(for: .inRange), 0)
+    }
+
+    func test_heroMatchesTheInRangeBin() {
+        var state = TrendsViewState.empty(period: .sevenDays)
+        XCTAssertNil(TrendsText.heroPercent(state))
+        state.timeInRange = 90.5
+        XCTAssertEqual(TrendsText.heroPercent(state), 91, "no bins: plain rounding")
+        state.rangeBins = RangeBins(veryLow: 1.5, low: 2.5, inRange: 90.5, high: 5.5, veryHigh: 0)
+        XCTAssertEqual(TrendsText.heroPercent(state), 90, "with bins: the same number as the 70–180 bin")
+        XCTAssertTrue(TrendsText.heroSpeech(state).hasPrefix("90 percent time in range"))
+    }
+
     func test_comparisonWithPriorPeriod() {
         XCTAssertEqual(TrendsText.change(4, period: .fourteenDays), "+4 pts vs prior 14d")
         XCTAssertEqual(TrendsText.change(-3, period: .oneDay), "\u{2212}3 pts vs yesterday")
@@ -46,9 +94,10 @@ final class TrendsFormattingTests: XCTestCase {
     func test_numbersAndLabels() {
         XCTAssertEqual(TrendsText.percent(61.4), "61%")
         XCTAssertEqual(TrendsText.percent(nil), "—")
-        XCTAssertEqual(TrendsText.binPercent(0), "0%")
-        XCTAssertEqual(TrendsText.binPercent(0.3), "<1%", "a real low never reads as none")
-        XCTAssertEqual(TrendsText.binPercent(77.6), "78%")
+        let bins = RangeBins(veryLow: 0.3, low: 2.1, inRange: 77.6, high: 20, veryHigh: 0)
+        XCTAssertEqual(TrendsText.binPercent(.veryHigh, in: bins), "0%")
+        XCTAssertEqual(TrendsText.binPercent(.veryLow, in: bins), "<1%", "a real low never reads as none")
+        XCTAssertEqual(TrendsText.binPercent(.inRange, in: bins), "78%")
         XCTAssertEqual(TrendsText.mgdl(127.6), "128")
         XCTAssertEqual(TrendsText.streak(11 * 3_600 + 20 * 60), "11h 20m")
         XCTAssertEqual(TrendsText.hourRange(2, 5), "2–5 AM")
