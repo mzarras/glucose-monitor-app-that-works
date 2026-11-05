@@ -93,6 +93,32 @@ struct RangeBins: Equatable, Sendable {
         case .veryHigh: return veryHigh
         }
     }
+
+    /// The whole percentage shown for `band`. Rounding each bin on its own can total 99 or 101, so
+    /// the bins are rounded together (largest remainder): the shown values add up to 100 whenever
+    /// any bin is non-zero. A bin that is exactly 0 always shows 0, and no bin shows 100 while
+    /// another bin is non-zero (that bin shows "<1%", TrendsText.binPercent).
+    func displayPercent(for band: GlucoseBand) -> Int {
+        let bands = GlucoseBand.allCases
+        let values = bands.map { max(0, percent(for: $0)) }
+        let total = values.reduce(0, +)
+        guard total > 0 else { return 0 }
+        // Normalised so the bins total exactly 100 before rounding (the inputs can drift by a
+        // floating-point hair).
+        let scaled = values.map { $0 * 100 / total }
+        var shown = scaled.map { Int($0.rounded(.down)) }
+        let missing = max(0, 100 - shown.reduce(0, +))
+        // Largest fractional part first; ties go to the lower band so a low is never rounded away
+        // in favour of a high. Compared to 1e-9 so floating-point noise does not break a tie.
+        let remainders = bands.indices.map { ((scaled[$0] - Double(shown[$0])) * 1e9).rounded() }
+        let order = bands.indices
+            .filter { scaled[$0] > 0 }
+            .sorted { (remainders[$0], -$0) > (remainders[$1], -$1) }
+        for index in order.prefix(missing) { shown[index] += 1 }
+        let nonZero = values.filter { $0 > 0 }.count
+        if nonZero > 1, let full = shown.firstIndex(of: 100) { shown[full] = 99 }
+        return shown[bands.firstIndex(of: band) ?? 0]
+    }
 }
 
 enum DailyProfile: Equatable, Sendable {
