@@ -666,9 +666,15 @@ final class G7ControllerSafetyTests: XCTestCase {
         XCTAssertTrue(harness.log.messages.contains { $0.contains("1 record(s) above the stored floor published again (m1)") }, "r3")
         XCTAssertEqual(harness.record?.newestReading?.date, afterRelaunch[0].date, "the newest mark follows the live reading")
 
-        let (_, withoutFloor, _) = try run(reportFloor: false)
+        let r1Timestamp = try XCTUnwrap(G7Controller.sensorTimestamp(of: delivered[0], serial: delivered[0].sensorSerial))
+        XCTAssertEqual(harness.sensor.backfillRequests.last?.start, r1Timestamp, "D65: the request starts at the stored floor")
+
+        // Without the floor G7Kit knows only r3 (its persisted mark): nothing after it is missing, so
+        // nothing is asked for and r1-r3 do not come back.
+        let (_, withoutFloor, withoutHarness) = try run(reportFloor: false)
         XCTAssertFalse(withoutFloor.contains { $0.id == delivered[2].id }, "without the floor the persisted newest mark blocks r3")
-        XCTAssertEqual(withoutFloor.count, 3)
+        XCTAssertEqual(withoutFloor.map(\.value), [.mgdl(123)])
+        XCTAssertEqual(withoutHarness.sensor.backfillRequests.count, 1, "only the pairing connection's default window")
     }
 
     /// Audit m1: the floor applies only to the sensor it names; a reading of another sensor (a
@@ -755,7 +761,10 @@ final class G7ControllerSafetyTests: XCTestCase {
         let harness = ControllerHarness()
         let first = try harness.pair(glucose: harness.currentGlucose(120))
         let firstControl = first.allWrites.filter { $0.characteristic == .writeControl }.map(\.data)
-        XCTAssertEqual(firstControl, [Data([0x52]), Data([0x4E])])
+        // D65: a fresh pairing knows no earlier reading, so it asks for the last 3 h of backfill last.
+        XCTAssertEqual(Array(firstControl.prefix(2)), [Data([0x52]), Data([0x4E])])
+        XCTAssertEqual(firstControl.count, 3)
+        XCTAssertTrue(G7ControlRequest.isBackfillRequest(firstControl[2]), "\(firstControl)")
         harness.clock.advance(300)
         let second = harness.connection(glucose: harness.currentGlucose(121))
         XCTAssertEqual(second.allWrites.filter { $0.characteristic == .writeControl }.map(\.data), [Data([0x4E])])

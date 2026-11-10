@@ -240,6 +240,35 @@ final class G7CalibrationEndToEndTests: XCTestCase {
         XCTAssertFalse(harness.readings.contains { $0.value == .mgdl(187) })
     }
 
+    /// D65 (review m3): in one connection after a gap, the calibration command and record go first
+    /// and the backfill request last, each after the previous response; a failed backfill request
+    /// write neither disconnects nor touches calibration.
+    func test_backfillRequestGoesAfterCalibrationAndItsFailureIsHarmless() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(123))
+        harness.clock.advance(20 * 60 - 120)
+        try harness.controller.submitCalibration(CalibrationRequest(mgdl: 187, takenAt: harness.clock.now))
+        harness.clock.advance(120)
+        let sensorTime = harness.sensorClock - 120
+        harness.sensor.calibrationResponse = Data([0x34, 0x00, 0x00, 0x00])
+        var record: [UInt8] = [0x32, 0x00, 0x01] + G7Bytes.littleEndian(UInt32(116)) + G7Bytes.littleEndian(UInt16(187))
+        record += G7Bytes.littleEndian(sensorTime) + [0x03, 0x01, 0x02] + G7Bytes.littleEndian(sensorTime + 60)
+        harness.sensor.boundsResponse = Data(record)
+        let link = harness.connection(glucose: harness.currentGlucose(126))
+        let opcodes = link.allWrites.filter { $0.characteristic == .writeControl }.map { $0.data.first }
+        XCTAssertEqual(opcodes, [0x4E, 0x34, 0x32, 0x59], "calibration, its record, then the backfill request")
+        XCTAssertEqual(harness.calibrations.map(\.status), [.queued, .sent, .accepted])
+
+        harness.clock.advance(20 * 60)
+        let failing = harness.connection(glucose: harness.currentGlucose(130), configureLink: { link in
+            link.refusesWrite = { G7ControlRequest.isBackfillRequest($0) }
+        })
+        XCTAssertEqual(failing.disconnectCount, 0, "a failed backfill request does not drop the link")
+        XCTAssertEqual(harness.calibrations.map(\.status), [.queued, .sent, .accepted], "calibration untouched")
+        XCTAssertEqual(harness.readings.last?.value, .mgdl(130))
+        XCTAssertTrue(harness.log.messages.contains { $0.hasPrefix("G7: control write 59") && $0.hasSuffix("failed") }, "\(harness.log.messages)")
+    }
+
     func test_calibrationRefusedBeforePairingAndDuringWarmUp() throws {
         let unpaired = ControllerHarness()
         XCTAssertThrowsError(try unpaired.controller.submitCalibration(CalibrationRequest(mgdl: 100, takenAt: unpaired.clock.now))) {

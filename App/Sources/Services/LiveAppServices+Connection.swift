@@ -214,5 +214,32 @@ extension LiveAppServices {
         } catch {
             log(.store, "latest stored reading not read for G7Kit's backfill floor: \(error)")
         }
+        // D65: the oldest gap of the last day, so the next backfill request asks the sensor for it.
+        do {
+            let now = now()
+            let recent = try await store.readings(from: now.addingTimeInterval(-Self.storedGapWindow), to: now.addingTimeInterval(60))
+            await g7.setStoredGapStarts(Self.storedGapStarts(in: recent, serial: serial), forSerial: serial)
+        } catch {
+            log(.store, "recent readings not read for G7Kit's backfill gap: \(error)")
+        }
+    }
+
+    /// D65: how far back stored gaps are looked for; the G7 is asked for at most 24 h of backfill
+    /// (G7ReadingPipeline.maximumBackfillWindow).
+    nonisolated static let storedGapWindow: TimeInterval = 86_400
+
+    /// D65: readings of one sensor are 300 s apart; a longer step than this means at least one is
+    /// missing (G7ReadingPipeline.backfillGapThreshold).
+    nonisolated static let storedGapThreshold: TimeInterval = 450
+
+    /// D65: for each gap among `serial`'s stored live readings in `readings` (ascending by date), the
+    /// newest reading before it, oldest first; empty when there is no gap. Only gaps between two
+    /// stored readings count: before the first one is warm-up or another sensor, after the last one
+    /// is the current connection's business.
+    nonisolated static func storedGapStarts(in readings: [GlucoseReading], serial: String) -> [GlucoseReading] {
+        let ours = readings.filter { $0.source == .sensor && $0.sensorSerial == serial }
+        return zip(ours, ours.dropFirst())
+            .filter { earlier, later in later.date.timeIntervalSince(earlier.date) > storedGapThreshold }
+            .map(\.0)
     }
 }

@@ -126,6 +126,9 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     private var lastPipelineFailure: SensorFailure.Kind?
     /// Audit m1: what the app has durably stored, per sensor serial (only the latest call is kept).
     private var backfillFloor: (serial: String, floor: G7ReadingPipeline.BackfillFloor)?
+    /// D65: per sensor serial, the newest stored reading before each stored gap of the last 24 h, as
+    /// ascending sensor timestamps. Only the latest call is kept.
+    private var storedGapStarts: (serial: String, sensorTimestamps: [UInt32])?
     /// Listen mode: the observed connection, the system-connected sensor being attached while no
     /// sensor is followed yet, and connections that ended without an observed authentication.
     private var listenCycle: G7ListenCycle?
@@ -414,10 +417,34 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         return timestamp
     }
 
-    /// A floor applies only to the pipeline of the same serial (never across sensors or sessions).
+    /// D65: the app reports, for each gap among the stored readings of sensor `serial` in the last
+    /// 24 h, the newest stored reading before it (empty: no gap). The next backfill request reaches
+    /// back to the oldest one the sensor has not answered for in this process, so a gap left by an
+    /// earlier outage, relaunch or interrupted request is asked for again. Readings of another
+    /// sensor, or whose id is not this sensor's `GlucoseReading.sensorID`, are ignored (logged).
+    func setStoredGapStarts(_ readings: [GlucoseReading], serial: String) {
+        var timestamps: [UInt32] = []
+        for reading in readings {
+            guard reading.sensorSerial == serial, let timestamp = Self.sensorTimestamp(of: reading, serial: serial) else {
+                log(.sensor, "backfill gap: reading \(reading.id) is not a reading of \(serial); ignored")
+                continue
+            }
+            timestamps.append(timestamp)
+        }
+        timestamps.sort()
+        if storedGapStarts?.serial != serial || storedGapStarts?.sensorTimestamps != timestamps {
+            let listed = timestamps.isEmpty ? "none" : "after sensor time " + timestamps.map(String.init).joined(separator: ", ")
+            log(.sensor, "backfill gaps for \(serial): \(listed)")
+        }
+        storedGapStarts = (serial, timestamps)
+        applyBackfillFloor()
+    }
+
+    /// A floor or gap applies only to the pipeline of the same serial (never across sensors or sessions).
     private func applyBackfillFloor() {
         guard let pipeline else { return }
         pipeline.backfillFloor = backfillFloor?.serial == pipeline.serial ? backfillFloor?.floor : nil
+        pipeline.storedGapStarts = storedGapStarts?.serial == pipeline.serial ? storedGapStarts?.sensorTimestamps ?? [] : []
     }
 
     // MARK: - Calibration
@@ -769,7 +796,7 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
     func cycleBackfillFinished() {
         guard let pipeline else { return }
         log(.ble, "backfill finished (59)")
-        apply(pipeline.flushBackfill())
+        apply(pipeline.backfillFinished())
     }
 
     func cycleReceivedExtendedVersion(_ message: G7ExtendedVersionMessage) {
@@ -801,11 +828,15 @@ final class G7Controller: G7ConnectionCycleDelegate, G7ListenCycleDelegate {
         calibration.handleBounds(record)
     }
 
-    /// Calibration work after the reading (CGMG7Transmitter.swift:1237-1248); `52` is requested
+    /// Calibration work after the reading (CGMG7Transmitter.swift:1237-1248), then the backfill
+    /// request (D65) last, since the sensor may take a while to send the records; `52` is requested
     /// before GetData instead (G7ConnectionCycle). Battery/firmware requests are not ported.
     func cycleNextControlRequest() -> Data? {
         guard let pipeline, let clock = pipeline.clock, !pipeline.isUnsupportedSensor, !pipeline.sessionEnded else { return nil }
-        return calibration.nextCommand(clock: clock, now: now())
+        if let command = calibration.nextCommand(clock: clock, now: now()) { return command }
+        guard let range = pipeline.nextBackfillRequest() else { return nil }
+        log(.ble, "backfill: requesting sensor time \(range.start)-\(range.end) (\((range.end - range.start) / 60) min)")
+        return G7ControlRequest.backfill(fromSensorTime: range.start, to: range.end)
     }
 
     /// A failed calibration write is queued again and the connection dropped (CGMG7Transmitter.swift:793-807).

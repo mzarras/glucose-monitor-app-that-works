@@ -205,10 +205,19 @@ public final class G7CGMSource: CalibratingCGMSource, @unchecked Sendable {
     /// again even if they were delivered before (e.g. delivered while the store was failing, then the
     /// app was terminated), with the same id and date as the first delivery and `isBackfill = true`;
     /// dedupe by id. A floor that is too low only causes such duplicates; without any call, nothing
-    /// already delivered is re-published. The G7 decides which records it backfills (there is no
-    /// backfill request), so only records it sends again are recovered (docs/g7-protocol.md §5.6).
+    /// already delivered is re-published. The floor is also where the next backfill request starts at
+    /// the latest (D65, docs/g7-protocol.md §5.6-5.7).
     public func setLatestStoredReading(_ reading: GlucoseReading?, forSerial serial: String) async {
         await onQueue { self.controller.setLatestStoredReading(reading, serial: serial) }
+    }
+
+    /// D65: tell G7Kit, for each gap in sensor `serial`'s stored readings of the last 24 h, the
+    /// newest stored reading before it (empty: no gap). Call it with `setLatestStoredReading`. The
+    /// next backfill request reaches back to the oldest gap the sensor has not answered for in this
+    /// process, so it resends what it still holds of a gap an earlier connection, relaunch or
+    /// interrupted request left; readings already stored come back as duplicates, dropped by id.
+    public func setStoredGapStarts(_ readings: [GlucoseReading], forSerial serial: String) async {
+        await onQueue { self.controller.setStoredGapStarts(readings, serial: serial) }
     }
 
     /// Stops, deletes the pairing code and key, and reports `.notPaired`.

@@ -64,5 +64,7 @@ enum G7Opcode: UInt8 {
     case extendedVersion = 0x52
     /// Sent by the sensor on Write_Control when backfill is complete.
     /// DexcomTransmitterOpCode.swift:69-70, CGMG7Transmitter.swift:1010-1012.
+    /// Also the backfill request `59 || start(4) || end(4)` (D65; G7ControlRequest.backfill, from
+    /// LoopKit G7SensorKit G7Sensor.swift:647-649).
     case backfillFinished = 0x59
 }

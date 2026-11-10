@@ -127,6 +127,8 @@ final class FakeLink: G7Link {
     var scheduled: [(delay: TimeInterval, action: () -> Void)] = []
     var disconnectCount = 0
     var acceptWrites = true
+    /// Writes this returns true for fail as if the peripheral had gone (D65 tests).
+    var refusesWrite: ((Data) -> Bool)?
     /// Subscriptions and delivered values in order ("notify:<characteristic>",
     /// "value:<characteristic>:<hex>"), for checks on what came before what.
     var events: [String] = []
@@ -145,7 +147,7 @@ final class FakeLink: G7Link {
     }
 
     func write(_ data: Data, to characteristic: G7Characteristic, withResponse: Bool) -> Bool {
-        guard acceptWrites else { return false }
+        guard acceptWrites, refusesWrite?(data) != true else { return false }
         writes.append((data, characteristic, withResponse))
         allWrites.append((data, characteristic))
         return true
