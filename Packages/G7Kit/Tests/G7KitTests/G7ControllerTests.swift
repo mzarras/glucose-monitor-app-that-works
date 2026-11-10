@@ -197,6 +197,66 @@ final class G7ControllerTests: XCTestCase {
         XCTAssertTrue(harness.log.messages.contains("G7: backfill: 8 record(s) received, 8 published"), "\(harness.log.messages)")
     }
 
+    /// D65: in primary mode the G7 sends backfill only when asked. After a 40-minute outage the
+    /// connection asks with `59 || start || end` (start: the last reading before the gap; end: this
+    /// connection's sensor clock), written last on Write_Control, and the gap is published flagged and
+    /// in order. A connection five minutes after the previous one asks for nothing.
+    func test_S3_backfillIsRequestedForTheGap() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(123))
+        let lastBeforeGap = harness.sensorClock - 5
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(124))
+        let requestsBefore = harness.sensor.backfillRequests.count
+        XCTAssertEqual(requestsBefore, 1, "only the pairing connection's default window")
+
+        harness.clock.advance(40 * 60)
+        let end = harness.sensorClock
+        let previous = lastBeforeGap + 300
+        let gap = (1...7).map { Fixture.backfill(timestamp: end - 5 - UInt32($0 * 300), glucose: UInt16(100 + $0)) }
+        let link = harness.connection(glucose: harness.currentGlucose(140), backfill: gap)
+
+        let control = link.allWrites.filter { $0.characteristic == .writeControl }.map(\.data)
+        XCTAssertEqual(control.last, G7ControlRequest.backfill(fromSensorTime: previous, to: end), "\(control)")
+        XCTAssertEqual(harness.sensor.backfillRequests.count, requestsBefore + 1)
+        let published = Array(harness.readings.suffix(8))
+        XCTAssertEqual(published.first?.value, .mgdl(140))
+        let backfill = Array(published.dropFirst())
+        XCTAssertEqual(backfill.map(\.value), (1...7).reversed().map { GlucoseValue.mgdl(100 + $0) })
+        XCTAssertTrue(backfill.allSatisfy(\.isBackfill))
+        XCTAssertEqual(backfill.map(\.date), backfill.map(\.date).sorted())
+        XCTAssertTrue(harness.log.messages.contains("G7: backfill: requesting sensor time \(previous)-\(end) (40 min)"), "\(harness.log.messages)")
+        XCTAssertTrue(harness.log.messages.contains("G7: backfill: 7 record(s) received, 7 published"), "\(harness.log.messages)")
+    }
+
+    /// D65: a gap an earlier connection left (here the sensor held nothing then) is asked for again
+    /// once the app reports it as a stored gap, even when nothing is missing since the last reading;
+    /// once the sensor has answered for it, not again.
+    func test_S3_storedGapIsRequestedAgainOnce() throws {
+        let harness = ControllerHarness()
+        try harness.pair(glucose: harness.currentGlucose(123))
+        let r1 = try XCTUnwrap(harness.readings.last)
+        let serial = try XCTUnwrap(harness.controller.storedSensorSerial)
+        let gapStart = harness.sensorClock - 5
+        harness.clock.advance(20 * 60)
+        let gapEnd = harness.sensorClock
+        harness.connection(glucose: harness.currentGlucose(130))
+        XCTAssertEqual(harness.readings.count, 2, "the sensor sent nothing for the gap")
+
+        harness.controller.setStoredGapStarts([r1], serial: serial)
+        harness.clock.advance(300)
+        let held = (1...3).map { Fixture.backfill(timestamp: gapEnd - 5 - UInt32($0 * 300), glucose: UInt16(110 + $0)) }
+        harness.connection(glucose: harness.currentGlucose(131), backfill: held)
+        XCTAssertEqual(harness.sensor.backfillRequests.last?.start, gapStart)
+        XCTAssertEqual(harness.readings.filter(\.isBackfill).count, 3)
+
+        let requests = harness.sensor.backfillRequests.count
+        harness.clock.advance(300)
+        harness.connection(glucose: harness.currentGlucose(132), backfill: held)
+        XCTAssertEqual(harness.sensor.backfillRequests.count, requests, "an answered gap start is not asked for again")
+        XCTAssertTrue(harness.log.messages.contains { $0.contains("backfill gaps for \(serial): after sensor time \(gapStart)") }, "\(harness.log.messages)")
+    }
+
     /// A `0x4E` that sets no agreeing clock (a status reply, or a sensor clock that disagrees with the
     /// session start, e.g. after the phone died and came back with its clock off) does not subscribe
     /// to Backfill. Before, the sensor's records were held undated and discarded at disconnect, and
@@ -323,8 +383,9 @@ final class G7CGMSourceTests: XCTestCase {
         XCTAssertEqual(next, [.notPaired])
     }
 
-    /// CGMSource rule: a 288-reading backfill burst (24 h) arrives complete.
-    func test_backfillBurstOf288ReadingsArrivesComplete() async throws {
+    /// CGMSource rule: a 24 h backfill burst arrives complete. D65: the sensor sends what is asked
+    /// for, at most 24 h back, so the burst follows a day without a connection.
+    func test_backfillBurstOf24HoursArrivesComplete() async throws {
         let clock = TestClock()
         let central = FakeCentral()
         let source = makeSource(store: G7InMemoryCredentialStore(), clock: clock, central: central)
@@ -333,14 +394,20 @@ final class G7CGMSourceTests: XCTestCase {
         let sessionStart = clock.now.addingTimeInterval(-5 * 86_400)
         try await source.start(pairingCode: "1234")
         source.withController { $0.bluetoothPowerChanged(.poweredOn); $0.didDiscover(name: "DXCM4F", identifier: identifier) }
+        let pairedAt = UInt32(clock.now.timeIntervalSince(sessionStart))
+        connection(source, sensor: sensor, identifier: identifier,
+                   glucose: Fixture.glucose(sensorClock: pairedAt, age: 5, glucose: 110, state: 0x06))
+        clock.advance(86_400)
         let sensorClock = UInt32(clock.now.timeIntervalSince(sessionStart))
-        let backfill = (1...288).map { Fixture.backfill(timestamp: sensorClock - 5 - UInt32($0 * 300), glucose: UInt16(80 + $0 % 200)) }
+        // Every reading between the two live ones: 287 records, held two to a notification.
+        let backfill = (1...287).map { Fixture.backfill(timestamp: sensorClock - 5 - UInt32($0 * 300), glucose: UInt16(80 + $0 % 200)) }
         connection(source, sensor: sensor, identifier: identifier,
                    glucose: Fixture.glucose(sensorClock: sensorClock, age: 5, glucose: 111, state: 0x06), backfill: backfill)
         let readings = await collect(source.readings, count: 289)
         XCTAssertEqual(readings.count, 289)
-        XCTAssertEqual(readings.filter(\.isBackfill).count, 288)
+        XCTAssertEqual(readings.filter(\.isBackfill).count, 287)
         XCTAssertEqual(Set(readings.map(\.id)).count, 289)
+        XCTAssertEqual(sensor.backfillRequests.last?.end, sensorClock)
         let session = await source.currentSession
         XCTAssertEqual(session?.start, sessionStart)
         let target = await source.heartbeatTarget

@@ -150,8 +150,10 @@ unlock the phone, and to pair again from Settings › Sensor only if it continue
    records are left on the sensor for the next connection; logged as `Backfill not requested`),
    then write the next control request,
    one at a time, each after the previous response: pending calibration `34`, else calibration
-   record `32` (`:1237-1248`).
-6. Backfill records arrive on Backfill; `59` on Write_Control ends them (`:1010-1012`).
+   record `32` (`:1237-1248`), and last the backfill request `59 start end` when a reading may be
+   missing (§5.7, D65; not in xDrip4iOS).
+6. Backfill records arrive on Backfill, up to two per notification; `59` on Write_Control ends them
+   and answers the request (`:1010-1012`; G7SensorKit `G7Sensor.swift:932-935`).
 7. The sensor disconnects; undated backfill is discarded, dated backfill published (`:656-688`).
 
 Nothing received on Write_Control or Backfill is used before authentication completes, nor after a
@@ -326,8 +328,9 @@ No captured G7 J-PAKE exchange exists in either repository. Tests:
 | `4E` | → | WC | 1 | GetData | `CGMG7Transmitter.swift:1633-1641` |
 | `4E` | ← | WC | 19 | see §4.1 | `Generic/DexcomG7GlucoseDataRxMessage.swift:53-129` |
 | `52` | → / ← | WC | 1 / ≥15 | see §4.3 | `CGMG7Transmitter.swift:1373`; `DexcomG7ExtendedVersionMessage.swift:30-41` |
-| backfill | ← | BF | 9 | see §4.2 | `Generic/DexcomG7BackfillMessage.swift:14-45` |
-| `59` | ← | WC | 1 | backfill finished | `CGMG7Transmitter.swift:1010-1012` |
+| backfill | ← | BF | 9 or 18 | one or two records, see §4.2 | `Generic/DexcomG7BackfillMessage.swift:14-45`; two per notification: G7SensorKit `G7Sensor.swift:963-976` |
+| `59` | → | WC | 9 | backfill request: `59 start32LE end32LE`, sensor times (§5.7, D65) | G7SensorKit `G7Sensor.swift:624-659` @ next-dev `2bb6700` |
+| `59` | ← | WC | 1 | backfill finished (answers the request, after the records) | `CGMG7Transmitter.swift:1010-1012`; G7SensorKit `G7Sensor.swift:932-935` |
 | `34` | → / ← | WC | 9 / 4 | §8 | `Generic/DexcomG7CalibrationMessages.swift:8-23`, `:135-165` |
 | `32` | → / ← | WC | 1 / 20 | §8 | `CGMG7Transmitter.swift:1746`; `DexcomG7CalibrationMessages.swift:200-252` |
 
@@ -424,7 +427,8 @@ No captured G7 J-PAKE exchange exists in either repository. Tests:
 - Backfill arriving before this connection's `0x4E` waits for an agreeing anchor; records never dated
   are discarded at disconnect (`CGMG7Transmitter.swift:656-667`). Backfill is not requested on a
   connection whose `0x4E` set no agreeing anchor (§2.3 step 5), so this happens only if the sensor
-  sends records unasked. Each batch logs `backfill: N record(s) received, M published`.
+  sends records unasked. Each batch logs `backfill: N record(s) received, M published`; a request
+  left unanswered at disconnect logs `backfill: no 59 for the request …`.
 - `id = GlucoseReading.sensorID(serial:sensorTimestamp:)`; duplicates by sensor timestamp are
   dropped; a live reading must be strictly newer (in sensor time and in date) than every published
   reading; each backfill batch is published in ascending order with `isBackfill = true`.
@@ -480,11 +484,11 @@ store's insert-or-ignore silently drop a later sensor's readings.
 
 ### 5.6 Backfill floor from the store (audit m1)
 
-**The G7 has no backfill request.** In primary mode neither xDrip4iOS 7.1.0 nor G7SensorKit sends
-one: enabling Backfill notifications after the `0x4E` makes the sensor send the records it chooses,
-then `59` (§2.3; `CGMG7Transmitter.swift:1165-1174`, `:1010-1012`; G7SensorKit
-`G7Sensor.swift:131-136`, `:285-311`). So G7Kit cannot ask for "everything since X". What it controls
-is which received records it publishes.
+~~The G7 has no backfill request.~~ Corrected by D65 (§5.7): the G7 sends history only when asked
+with `59 start end`; xDrip4iOS 7.1.0 (and 7.2.0) never asks, and the G7SensorKit copy this section
+cited (loopandlearn, July 2026) only eavesdropped on the Dexcom app, which does ask. The floor below
+still decides which received records are published, and is also where the request starts at the
+latest.
 
 Problem: G7Kit marks a reading as published when it yields it (and persists the newest mark). If the
 app's store is failing (D42) and iOS terminates the app, readings delivered to alerts and Trio were
@@ -516,6 +520,52 @@ Tests `test_S3_backfillAboveTheStoredFloorIsPublishedAgain`,
 `test_S3_republishedCopyKeepsTheFirstDateOrIsWithheld`,
 `test_S3_crashWithUnstoredReadingsRepublishesFromTheStoredFloor`,
 `test_S3_backfillFloorAppliesOnlyToItsOwnSensor`.
+
+### 5.7 Backfill request (D65)
+
+In primary mode the G7 sends its stored records only when asked. Evidence: on Michael's phone, five
+weeks of primary-mode connections (Oct 6 – Nov 10, 2026) with Backfill notifications enabled after
+every agreeing `0x4E` stored not one backfill record, and the D63 diagnostics showed no record and no
+`59` on the reconnect after a 40-minute outage (2026-11-09 23:06). LoopKit G7SensorKit's direct mode
+(Pete Schwamb, `764e002`, 2026-09-15; next-dev `2bb6700`) writes the request after the reading
+reply: "Nothing else requests them in direct mode, so without this a gap never fills"
+(`G7Sensor.swift:618-623`). Eavesdropping apps (Loop, Trio) see backfill because the Dexcom app
+sends this request and notifications reach every subscriber.
+
+Request, written with response to Write_Control: `59 || start(4, LE) || end(4, LE)`, both sensor
+times in seconds since session start (`G7Sensor.swift:647-649`). The sensor sends the records it
+holds in that range on Backfill, two 9-byte records per notification (the Dexcom app's own backfill,
+as eavesdropping overhears it, and the ONE+ send one; `:963-976`), then `59` on Write_Control
+(`:932-935`). G7SensorKit asks at most 24 h back (`maximumBackfillWindow`, `:157-160`) and 3 h when
+it knows no earlier reading (`backfillWindow`, `:153-155`); the sensor omits what it no longer holds.
+
+G7Kit (G7ReadingPipeline `nextBackfillRequest`, G7Controller `cycleNextControlRequest`):
+- At most one request per connection, only on a connection whose `0x4E` set an agreeing clock (D63),
+  written after any calibration work (the records can take a while).
+- `end` = this connection's `0x4E` sensor clock. `start` = the earliest of: the newest reading
+  published before this connection; the stored floor (§5.6); the oldest of the app's stored gaps of
+  the last 24 h (`setStoredGapStarts`, the newest stored reading before each gap) not yet answered.
+  A floor or gap start counts as answered once a request whose range contains it got its `59` (the
+  sensor sent what it holds; a gap it cannot fill stays a gap), and is given up after two unanswered requests,
+  per process (safety review M1, m2). Nothing known: `end` − 3 h. Clamped to `end` − 24 h, to the end
+  of warm-up, and to the `0x4E` that re-anchored the session start in this process (review m1: earlier
+  readings may carry the old start).
+- No request when ≤ 450 s lie between `start` and this connection's published reading (or `end`
+  when none was published): nothing is missing (readings are 300 s apart; review m4: the reading's
+  age is not a gap).
+- Records go through the unchanged pipeline (§5.1-5.6): dated from the session start, gate, dedupe
+  by sensor timestamp, `isBackfill`. Duplicates of stored readings are dropped by id in the store and
+  never reach Trio, alerts or uploads (App ReadingPipeline delivers only newly stored readings).
+- Diagnostics: `backfill: requesting sensor time S-E (N min)`, `backfill: N record(s) received, M
+  published`, `backfill finished (59)`, `backfill: no 59 for the request S-E before disconnect`,
+  `backfill gaps for <serial>: after sensor time T1, T2, …`.
+
+Verified on device 2026-11-10 (build of D65, sensor DXCMuR): the first wake asked for sensor time
+305608-386012 (1340 min); the sensor sent 269 records two to a notification and `59` within about a
+second, before its usual disconnect; 261 were published and the 2026-11-09 22:26-23:06 gap and 11 other
+missing readings of the last 24 h were stored as backfill (the rest deduplicated in the store). The
+gaps left were the sensor's own: their records came in state "Temporary sensor issue" and were not
+published (S2).
 
 ## 6. Session timing
 
@@ -831,8 +881,9 @@ package or folder behind `CGMSource`; nothing G7-specific leaks into GlucoseCore
 
 1. First pairing: iOS pairing prompt appears; Accept continues; Cancel shows the pairing banner and
    the prompt returns at the next wake (§2.4 error codes).
-2. Timestamps: app reading times match the receiver within seconds; a backfilled reading after a
-   30-min walk-away lands exactly on the previously missing times (§5.1).
+2. Backfill (D65, §5.7): the request is answered and stored gaps fill (verified 2026-11-10, §5.7).
+   Still to see: a 15-30 min walk-away (or Bluetooth off) — the reconnect asks for the gap and it
+   fills; backfilled readings land exactly on the previously missing times (§5.1).
 3. **Capture a real LOW and a real HIGH packet**: turn on Settings › Diagnostics › "Record raw glucose
    packets" (D47), then Export diagnostics, and confirm they show as
    LOW/HIGH, not a number, before relying on HIGH → 401 in closed loop (§5.3, D31).

@@ -268,8 +268,10 @@ it — is in `docs/failure-modes.md`.
   stored sensor changes (`LiveAppServices.updateG7StoredFloor`). Backfill records the sensor sends
   above the floor are published again with the same id and date (`isBackfill`), and the store's dedupe
   keeps one copy (`ListenModeServicesTests.test_S5_backfillFloorIsTheLatestStoredReadingAfterHeldReadingsWereLost`).
-  The G7 has no backfill request: it decides which records it sends, so only readings it backfills
-  again are recovered (docs/g7-protocol.md §5.6); listen mode has no backfill at all.
+  The same call also reports the stored gaps of the last 24 h (`G7CGMSource.setStoredGapStarts`,
+  D65), and G7Kit asks the sensor for backfill (`59 start end`) from the earliest of the floor, the
+  oldest gap not yet answered and its last reading before the connection (docs/g7-protocol.md §5.6-5.7); listen mode has no
+  backfill at all.
   Up to 10 000 distinct readings wait (a re-delivered reading is held once); beyond that the oldest
   are dropped, loudly.
 - The simulator Keychain needs a signed host: `scripts/check.sh` signs simulator test runs ad hoc

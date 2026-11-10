@@ -6,7 +6,8 @@
 // authSessionDidAuthenticate :952-967, handleWriteControlValue :995-1016,
 // sendPrimaryGlucoseRequestIfReady :1624-1642) over `G7Link`. Coexistence, battery and firmware
 // requests are not ported. Control requests are sequenced one at a time here; the caller decides
-// which (calibration, calibration record, extended version).
+// which (calibration, calibration record, extended version, and the D65 backfill request, which is
+// not in xDrip4iOS: LoopKit G7SensorKit (MIT) G7Sensor.swift:624-659 @ next-dev 2bb6700).
 
 import Foundation
 
@@ -47,8 +48,9 @@ protocol G7ConnectionCycleDelegate: AnyObject {
 /// 3. on the `0x4E` response: notify Backfill (CGMG7Transmitter.swift:1165-1174) if that response set
 ///    an agreeing sensor clock (Sensor change: otherwise the records could not be dated and would be
 ///    lost, so they are left on the sensor), then write the caller's control requests one at a time,
-///    each after the previous response;
-/// 4. backfill records arrive on Backfill, `59` on Write_Control ends them.
+///    each after the previous response; the last may be the backfill request `59 || start || end`
+///    (D65, G7ControlRequest.backfill; not in xDrip4iOS, which never asks for backfill);
+/// 4. backfill records arrive on Backfill, `59` on Write_Control ends them and answers the request.
 /// Nothing from Write_Control or Backfill is forwarded before authentication completes, nor after a
 /// `05` rejection ends it (S2).
 final class G7ConnectionCycle: G7AuthSessionDelegate {
@@ -238,7 +240,12 @@ final class G7ConnectionCycle: G7AuthSessionDelegate {
             }
             sendNextControlRequest()
         case .backfillFinished:
+            // The answer to our `59` request comes after the records (G7SensorKit G7Sensor.swift:932-935).
+            if let request = awaitingControlResponse, G7ControlRequest.isBackfillRequest(request) {
+                awaitingControlResponse = nil
+            }
             delegate?.cycleBackfillFinished()
+            sendNextControlRequest()
         default:
             delegate?.cycleLog("connection: Write_Control \(value.hexString) not used")
         }
