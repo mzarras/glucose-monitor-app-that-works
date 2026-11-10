@@ -27,6 +27,9 @@ protocol SensorDevice: CalibratingCGMSource {
     /// Audit m1: the newest reading durably stored for `serial` (nil: none) — the floor above which
     /// backfill the sensor sends again is published again.
     func setLatestStoredReading(_ reading: GlucoseReading?, forSerial serial: String) async
+    /// D65: for each gap in `serial`'s stored readings of the last 24 h, the newest stored reading
+    /// before it (empty: no gap); backfill requests ask the sensor for them.
+    func setStoredGapStarts(_ readings: [GlucoseReading], forSerial serial: String) async
 }
 
 extension G7CGMSource: SensorDevice {}

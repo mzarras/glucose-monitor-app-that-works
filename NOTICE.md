@@ -19,7 +19,7 @@ names only projects actually used; "reference" means studied and cited, with no 
 
 | Project | License | Used for |
 |---|---|---|
-| [LoopKit G7SensorKit](https://github.com/LoopKit/G7SensorKit) | MIT | G7 message formats, glucose limits, captured packets used as test vectors |
+| [LoopKit G7SensorKit](https://github.com/LoopKit/G7SensorKit) | MIT | G7 message formats (including the `59` backfill request and two records per Backfill notification, from G7SensorKit next-dev `2bb6700`, D65), glucose limits, captured packets used as test vectors |
 | [Juggluco](https://github.com/j-kaltes/Juggluco) | GPL-3.0 | G7 authentication research and client certificate constants, via xDrip4iOS |
 | [xDrip+](https://github.com/NightscoutFoundation/xDrip) (Android) | GPL-3.0 | G7 protocol research |
 | [Mbed TLS](https://github.com/Mbed-TLS/mbedtls) v3.6.2 | Apache-2.0 OR GPL-2.0-or-later | EC J-PAKE self-test vectors used as test data |

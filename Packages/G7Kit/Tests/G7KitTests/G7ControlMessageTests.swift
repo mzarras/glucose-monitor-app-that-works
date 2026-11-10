@@ -94,6 +94,16 @@ final class G7ControlRequestTests: XCTestCase {
         XCTAssertFalse(G7ControlRequest.isBackfillFinished(Data()))
     }
 
+    /// D65: `59 || start || end`, both 4-byte little-endian sensor times (G7SensorKit
+    /// G7Sensor.swift:647-649).
+    func test_backfillRequestLayout() {
+        let request = G7ControlRequest.backfill(fromSensorTime: 0x0004_1E0A, to: 0x0004_2D1B)
+        XCTAssertEqual(request, Data([0x59, 0x0A, 0x1E, 0x04, 0x00, 0x1B, 0x2D, 0x04, 0x00]))
+        XCTAssertTrue(G7ControlRequest.isBackfillRequest(request))
+        XCTAssertFalse(G7ControlRequest.isBackfillRequest(Data([0x59])), "the sensor's end marker is not a request")
+        XCTAssertTrue(G7ControlRequest.isBackfillFinished(Data([0x59])))
+    }
+
     /// xDrip Tests/DexcomG7CalibrationTests.swift:576-581: CRC framing of `4A` and `22`.
     func test_crc16MatchesXDripVectors() {
         XCTAssertEqual(G7CRC16.appending(to: [0x4A]), [0x4A, 0x8E, 0xE9])

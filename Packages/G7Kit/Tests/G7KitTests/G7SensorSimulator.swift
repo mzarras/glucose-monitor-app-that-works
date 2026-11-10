@@ -26,7 +26,12 @@ final class G7SensorSimulator {
     var extendedVersionResponse: Data? = Fixture.tenDayExtendedVersion
     var calibrationResponse: Data?
     var boundsResponse: Data?
+    /// The 9-byte records the sensor holds; it sends those inside a requested range (D65).
     var backfillFrames: [Data] = []
+    /// A G7 packs two records to a Backfill notification (G7SensorKit G7Sensor.swift:963-966).
+    var recordsPerNotification = 2
+    /// Every backfill request range received, for assertions.
+    private(set) var backfillRequests: [(start: UInt32, end: UInt32)] = []
     /// Everything written to Write_Control, for assertions.
     private(set) var controlWrites: [Data] = []
 
@@ -80,6 +85,7 @@ final class G7SensorSimulator {
             case 0x52: return extendedVersionResponse.map { [(.writeControl, $0)] } ?? []
             case 0x34: return calibrationResponse.map { [(.writeControl, $0)] } ?? []
             case 0x32: return boundsResponse.map { [(.writeControl, $0)] } ?? []
+            case 0x59 where bytes.count == 9: return backfill(from: G7Bytes.uint32(bytes, at: 1), to: G7Bytes.uint32(bytes, at: 5))
             default: return []
             }
         case .backfill, .communication:
@@ -87,10 +93,21 @@ final class G7SensorSimulator {
         }
     }
 
-    /// Enabling Backfill notifications makes the sensor send its records, then `59`.
+    /// Enabling notifications sends nothing by itself: on device the G7 sent no backfill on
+    /// subscribe in five weeks (D65); it answers a `59` request.
     func notificationsEnabled(_ characteristic: G7Characteristic) -> [(G7Characteristic, Data)] {
-        guard characteristic == .backfill, sessionAuthenticated else { return [] }
-        return backfillFrames.map { (.backfill, $0) } + [(.writeControl, Data([0x59]))]
+        []
+    }
+
+    /// `59 || start || end`: the held records in [start, end] on Backfill, packed
+    /// `recordsPerNotification` to a notification, then `59` on Write_Control.
+    private func backfill(from start: UInt32, to end: UInt32) -> [(G7Characteristic, Data)] {
+        backfillRequests.append((start, end))
+        let wanted = backfillFrames.filter { (start...end).contains(G7Bytes.uint24([UInt8]($0), at: 0)) }
+        let notifications = stride(from: 0, to: wanted.count, by: recordsPerNotification).map {
+            (G7Characteristic.backfill, wanted[$0..<min($0 + recordsPerNotification, wanted.count)].reduce(Data(), +))
+        }
+        return notifications + [(.writeControl, Data([0x59]))]
     }
 
     // MARK: - Authentication

@@ -49,6 +49,155 @@ final class G7ReadingPipelineTests: XCTestCase {
         XCTAssertTrue(backfilled.isBackfill)
     }
 
+    /// D65: a notification may carry two 9-byte records (a G7 packs two); each is decoded. Any
+    /// length that is not a whole number of records is ignored and logged.
+    func test_S3_backfillNotificationWithTwoRecordsYieldsBoth() throws {
+        let pipeline = makePipeline()
+        pipeline.beginConnection()
+        let now = receivedAt
+        _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 120, state: 0x06)), receivedAt: now)
+        let pair = Fixture.backfill(timestamp: 199_395, glucose: 101) + Fixture.backfill(timestamp: 199_695, glucose: 102)
+        pipeline.handleBackfillFrame(pair, now: now)
+        pipeline.handleBackfillFrame(Data(repeating: 0x01, count: 10), now: now)
+        let output = pipeline.backfillFinished()
+        XCTAssertEqual(output.readings.map(\.value), [.mgdl(101), .mgdl(102)])
+        XCTAssertTrue(output.readings.allSatisfy(\.isBackfill))
+        XCTAssertTrue(logs.contains { $0.contains("notification of unexpected length 10 ignored") }, "\(logs)")
+        XCTAssertTrue(logs.contains("backfill: 2 record(s) received, 2 published"), "\(logs)")
+    }
+
+    /// D65: the request range. Nothing missing (the previous reading is one interval back): no
+    /// request. After a gap: from the newest reading published before this connection to this
+    /// connection's sensor clock, once per connection.
+    func test_S3_backfillRequestCoversOnlyAGap() throws {
+        let pipeline = makePipeline()
+        let t0 = receivedAt.addingTimeInterval(-200_000)
+        pipeline.beginConnection()
+        _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 120, state: 0x06)), receivedAt: arrival(200_000, t0: t0))
+        XCTAssertNotNil(pipeline.nextBackfillRequest(), "nothing known before this reading: the default 3 h")
+        _ = pipeline.endConnection()
+
+        pipeline.beginConnection()
+        _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_300, age: 5, glucose: 121, state: 0x06)), receivedAt: arrival(200_300, t0: t0))
+        XCTAssertNil(pipeline.nextBackfillRequest(), "the previous reading is 300 s back: nothing missing")
+        _ = pipeline.endConnection()
+
+        pipeline.beginConnection()
+        _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 202_700, age: 5, glucose: 122, state: 0x06)), receivedAt: arrival(202_700, t0: t0))
+        let request = try XCTUnwrap(pipeline.nextBackfillRequest())
+        XCTAssertEqual(request.start, 200_295, "the newest reading published before this connection")
+        XCTAssertEqual(request.end, 202_700, "this connection's sensor clock")
+        XCTAssertNil(pipeline.nextBackfillRequest(), "one request per connection")
+        _ = pipeline.endConnection()
+        XCTAssertTrue(logs.contains("backfill: no 59 for the request 200295-202700 before disconnect"), "\(logs)")
+    }
+
+    /// D65: never more than 24 h back, never before warm-up ends, and no request on a connection
+    /// whose clock does not agree (D63).
+    func test_S3_backfillRequestIsBounded() throws {
+        let early = makePipeline()
+        let t0 = receivedAt.addingTimeInterval(-3_000)
+        early.beginConnection()
+        _ = early.handleGlucose(glucose(Fixture.glucose(sensorClock: 3_000, age: 5, glucose: 120, state: 0x06)), receivedAt: arrival(3_000, t0: t0))
+        XCTAssertEqual(early.nextBackfillRequest()?.start, 1_620, "not before warm-up ends")
+
+        let late = makePipeline()
+        let t1 = receivedAt.addingTimeInterval(-500_000)
+        late.beginConnection()
+        _ = late.handleGlucose(glucose(Fixture.glucose(sensorClock: 300_000, age: 5, glucose: 120, state: 0x06)), receivedAt: arrival(300_000, t0: t1))
+        _ = late.endConnection()
+        late.beginConnection()
+        _ = late.handleGlucose(glucose(Fixture.glucose(sensorClock: 500_000, age: 5, glucose: 121, state: 0x06)), receivedAt: arrival(500_000, t0: t1))
+        XCTAssertEqual(late.nextBackfillRequest()?.start, 500_000 - 86_400, "at most 24 h back")
+        _ = late.endConnection()
+
+        late.beginConnection()
+        let status = Fixture.glucose(status: 0x80, sensorClock: 500_300, age: 5, glucose: 122, state: 0x06)
+        _ = late.handleGlucose(glucose(status), receivedAt: arrival(500_300, t0: t1))
+        XCTAssertNil(late.nextBackfillRequest(), "a status reply sets no clock")
+    }
+
+    /// D65 (review M1): the oldest stored gap is asked for until the sensor answers a request
+    /// covering it (`59`), at most twice unanswered; once answered it is not asked for again (a gap
+    /// the sensor cannot fill stays a gap), and the next gap is asked for.
+    func test_S3_storedGapsAreAskedForUntilAnswered() throws {
+        let pipeline = makePipeline()
+        let t0 = receivedAt.addingTimeInterval(-200_000)
+        var clock: UInt32 = 199_700
+        func connect(asked expected: UInt32?, answer: Bool, _ message: String, line: UInt = #line) {
+            pipeline.beginConnection()
+            _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: 120, state: 0x06)), receivedAt: arrival(clock, t0: t0))
+            XCTAssertEqual(pipeline.nextBackfillRequest()?.start, expected, message, line: line)
+            if answer { _ = pipeline.backfillFinished() }
+            _ = pipeline.endConnection()
+            clock += 300
+        }
+        connect(asked: 188_900, answer: true, "nothing known: the default 3 h window, answered")
+        pipeline.storedGapStarts = [150_000, 170_000]
+        connect(asked: 150_000, answer: false, "the oldest gap; the link drops before 59")
+        connect(asked: 150_000, answer: false, "asked again: not answered")
+        connect(asked: 170_000, answer: true, "given up after two unanswered requests; the next gap, answered")
+        connect(asked: nil, answer: false, "both handled; nothing missing since the last reading")
+        pipeline.storedGapStarts = [150_000, 170_000, 190_000]
+        connect(asked: 190_000, answer: true, "a new gap is asked for")
+    }
+
+    /// D65: an answered request answers every gap start inside its range, so the gaps after the
+    /// oldest one are not asked for again one by one (seen on device: five 22 h requests in a row).
+    func test_S3_answeredRequestAnswersEveryGapInside() throws {
+        let pipeline = makePipeline()
+        let t0 = receivedAt.addingTimeInterval(-200_000)
+        var clock: UInt32 = 199_700
+        pipeline.beginConnection()
+        _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: 120, state: 0x06)), receivedAt: arrival(clock, t0: t0))
+        _ = pipeline.endConnection()
+        pipeline.storedGapStarts = [150_000, 160_000, 170_000]
+        for expected: UInt32? in [150_000, nil, nil] {
+            clock += 300
+            pipeline.beginConnection()
+            _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: 121, state: 0x06)), receivedAt: arrival(clock, t0: t0))
+            XCTAssertEqual(pipeline.nextBackfillRequest()?.start, expected)
+            _ = pipeline.backfillFinished()
+            _ = pipeline.endConnection()
+        }
+    }
+
+    /// Review m1: after a re-anchor in this process, no request reaches before the re-anchoring
+    /// `0x4E`: readings before it may carry the old start, and a record there would get the new one.
+    func test_S3_backfillRequestStartsNoEarlierThanAReanchor() throws {
+        let pipeline = makePipeline()
+        let t0 = receivedAt.addingTimeInterval(-200_000)
+        pipeline.beginConnection()
+        _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_000, age: 5, glucose: 120, state: 0x06)), receivedAt: arrival(200_000, t0: t0))
+        _ = pipeline.endConnection()
+        // The phone clock moved 120 s: two agreeing anchors re-anchor the session start.
+        for clock: UInt32 in [200_300, 200_600] {
+            pipeline.beginConnection()
+            _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: 121, state: 0x06)), receivedAt: arrival(clock, t0: t0).addingTimeInterval(120))
+            _ = pipeline.endConnection()
+        }
+        XCTAssertTrue(logs.contains { $0.contains("re-anchored") }, "\(logs)")
+        pipeline.storedGapStarts = [150_000]
+        pipeline.beginConnection()
+        _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 201_800, age: 5, glucose: 122, state: 0x06)), receivedAt: arrival(201_800, t0: t0).addingTimeInterval(120))
+        XCTAssertEqual(pipeline.nextBackfillRequest()?.start, 200_600, "not before the re-anchoring 0x4E")
+    }
+
+    /// Review m4: the gap is measured to this connection's reading, not to the sensor clock, so an
+    /// old reading in the `0x4E` (age 200 s) does not make every connection ask.
+    func test_S3_readingAgeIsNotAGap() throws {
+        let pipeline = makePipeline()
+        let t0 = receivedAt.addingTimeInterval(-200_000)
+        for clock: UInt32 in [200_000, 200_300] {
+            pipeline.beginConnection()
+            _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: clock, age: 5, glucose: 120, state: 0x06)), receivedAt: arrival(clock, t0: t0))
+            _ = pipeline.endConnection()
+        }
+        pipeline.beginConnection()
+        _ = pipeline.handleGlucose(glucose(Fixture.glucose(sensorClock: 200_800, age: 200, glucose: 121, state: 0x06)), receivedAt: arrival(200_800, t0: t0))
+        XCTAssertNil(pipeline.nextBackfillRequest(), "the reading is 300 s after the previous one")
+    }
+
     /// Session start = receipt time − sensor clock; reading date = start + (clock − age).
     func test_S3_timestampsAreDerivedFromTheSensorClock() throws {
         let pipeline = makePipeline()

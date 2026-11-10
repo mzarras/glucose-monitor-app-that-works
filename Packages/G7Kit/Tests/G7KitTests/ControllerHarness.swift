@@ -67,13 +67,14 @@ final class ControllerHarness {
     @discardableResult
     func connection(glucose: Data?, backfill: [Data] = [], failingNotify: [G7Characteristic: G7LinkError] = [:],
                     peripheral: UUID? = nil, disconnect: Bool = true, sensor other: G7SensorSimulator? = nil,
-                    afterWrite: ((Data, G7Characteristic) -> Void)? = nil) -> FakeLink {
+                    afterWrite: ((Data, G7Characteristic) -> Void)? = nil, configureLink: ((FakeLink) -> Void)? = nil) -> FakeLink {
         let peripheral = peripheral ?? identifier
         let sensor = other ?? self.sensor
         sensor.beginConnection()
         sensor.glucoseResponse = glucose
         sensor.backfillFrames = backfill
         let link = FakeLink(identifier: peripheral)
+        configureLink?(link)
         let driver = LinkDriver(link: link, sensor: sensor,
                                 deliverNotify: { [unowned self] in controller.notificationStateChanged(for: $0, isNotifying: $1, error: $2) },
                                 deliverValue: { [unowned self] in controller.valueUpdated(for: $0, value: $1) })

@@ -484,6 +484,7 @@ final class ScriptedSensorDevice: SensorDevice, @unchecked Sendable {
     private var failsToSetMode = false
     private var recording: [Bool] = []
     private var floors: [(reading: GlucoseReading?, serial: String)] = []
+    private var gapStarts: [(readings: [GlucoseReading], serial: String)] = []
 
     /// Starts in `mode` (what `G7Configuration.mode` would say).
     func configure(mode: G7ConnectionMode) { lock.withLock { currentMode = mode } }
@@ -511,6 +512,11 @@ final class ScriptedSensorDevice: SensorDevice, @unchecked Sendable {
     var latestStoredReadingCalls: [(reading: GlucoseReading?, serial: String)] { lock.withLock { floors } }
     func setLatestStoredReading(_ reading: GlucoseReading?, forSerial serial: String) async {
         lock.withLock { floors.append((reading, serial)) }
+    }
+    /// Every `setStoredGapStarts` call, in order (D65).
+    var storedGapStartsCalls: [(readings: [GlucoseReading], serial: String)] { lock.withLock { gapStarts } }
+    func setStoredGapStarts(_ readings: [GlucoseReading], forSerial serial: String) async {
+        lock.withLock { gapStarts.append((readings, serial)) }
     }
     var acceptedCalibrationRange: ClosedRange<Int> { 40...400 }
     func submitCalibration(_ request: CalibrationRequest) async throws(CalibrationRefusal) {}

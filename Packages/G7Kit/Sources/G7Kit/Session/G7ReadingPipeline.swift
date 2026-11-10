@@ -6,6 +6,8 @@
 // appendBackfillMessage :2129-2140, flushBackfillDeliveringToDelegate :2142-2155) rewritten as a
 // pure type with the S1-S4 rules below. Not ported: the "six identical values" filter (:1135-1141,
 // see docs/g7-protocol.md "What was stripped"); Core Data / UserDefaults / delegate plumbing.
+// Added (D65), not in xDrip4iOS: the backfill request range and two records per Backfill
+// notification, after LoopKit G7SensorKit (MIT) G7Sensor.swift:618-659, :963-976 @ next-dev 2bb6700.
 
 import Foundation
 import GlucoseCore
@@ -71,12 +73,22 @@ import GlucoseCore
 /// again even if this pipeline already published it (it was delivered but may never have been
 /// stored, e.g. a failing store and then app termination), with the same id and date as the first
 /// delivery (only `isBackfill` may differ); the store and Trio dedupe by id. Everything else applies
-/// unchanged (gate, session, latch). The G7 has no backfill request: it decides which records it
-/// sends, so only records it sends again can be re-published (docs/g7-protocol.md §5.6).
+/// unchanged (gate, session, latch).
+///
+/// Backfill request (D65, docs/g7-protocol.md §5.7). In primary mode the G7 sends history only when
+/// asked with `59 || start || end` (LoopKit G7SensorKit G7Sensor.swift:618-659; xDrip4iOS 7.1.0
+/// never asks, so a gap never filled). `nextBackfillRequest()` gives at most one range per
+/// connection, only on a connection whose clock agrees: from the earliest of the newest reading
+/// published before this connection, the stored floor, and the app's oldest stored gap not yet
+/// answered, to this connection's sensor clock, at most 24 h back, not before warm-up ends and not
+/// before a re-anchor in this process; nil when nothing between the start and this connection's
+/// reading can be missing. A floor or gap start counts as answered once a request covering it got
+/// its `59`, and is given up after `maximumAttemptsPerStart` unanswered requests (review M1, m2).
 ///
 /// Backfill records arriving before this connection's `0x4E` are held raw until the clock is checked;
-/// undatable records are discarded at disconnect (CGMG7Transmitter.swift:656-667). Each batch is
-/// published in ascending sensor-timestamp order, flagged `isBackfill`.
+/// undatable records are discarded at disconnect (CGMG7Transmitter.swift:656-667). A notification
+/// may carry several 9-byte records (a G7 packs two; G7SensorKit G7Sensor.swift:963-976). Each batch
+/// is published in ascending sensor-timestamp order, flagged `isBackfill`.
 final class G7ReadingPipeline {
     struct Output: Equatable {
         var readings: [GlucoseReading] = []
@@ -98,6 +110,23 @@ final class G7ReadingPipeline {
     /// relaunch could let one later report latch the end. One hour is about 12 wakes; a real end is
     /// reported at every wake, so this delays a latch by at most one wake after a long outage.
     static let endConfirmationWindow: UInt32 = 3_600
+
+    /// D65: the furthest back a backfill request reaches (G7SensorKit G7Sensor.swift:157-160,
+    /// `maximumBackfillWindow`); the sensor omits what it no longer holds.
+    static let maximumBackfillWindow: UInt32 = 86_400
+
+    /// D65: with nothing published and nothing stored (a fresh pairing), ask for this much
+    /// (G7SensorKit G7Sensor.swift:153-155, `backfillWindow`).
+    static let defaultBackfillWindow: UInt32 = 3 * 3_600
+
+    /// D65: a range longer than this between the start and this connection's sensor clock may hold a
+    /// missing reading (readings are 300 s apart; 450 s leaves room for the reading's age and jitter).
+    /// Shorter: nothing is missing and no request is sent.
+    static let backfillGapThreshold: UInt32 = 450
+
+    /// D65 (review M1): a floor or gap start is asked for at most this many times without a `59`
+    /// answer, so a sensor that never answers is not asked for 24 h at every wake.
+    static let maximumAttemptsPerStart = 2
 
     let serial: String
     /// Reported by the sensor in `0x52`; nil until then (no reading is published without it).
@@ -124,6 +153,22 @@ final class G7ReadingPipeline {
     /// Set by the controller from the app's store (m1). nil: already-published records are never
     /// re-published (the behaviour without a store).
     var backfillFloor: BackfillFloor?
+    /// D65, set by the controller from the app's store: for each gap among the stored readings of
+    /// the last 24 h, the sensor timestamp of the newest stored reading before it, ascending.
+    var storedGapStarts: [UInt32] = []
+    /// Floor and gap starts covered by a request whose `59` arrived in this process: the sensor sent
+    /// what it holds there, so they are not asked for again (a gap it cannot fill stays a gap).
+    private var answeredStarts: Set<UInt32> = []
+    /// Requests sent per floor or gap start without a `59` (link dropped, write failed).
+    private var unansweredAttempts: [UInt32: Int] = [:]
+    /// The range asked for on this connection (at most one), the floor and gap starts it covers, and
+    /// whether its `59` arrived.
+    private var backfillRequestThisConnection: (start: UInt32, end: UInt32, covers: [UInt32])?
+    private var backfillRequestFinished = false
+    /// Review m1: the sensor clock of the `0x4E` that re-anchored the session start in this process.
+    /// Readings for earlier sensor times may have been dated with the old start, so no request
+    /// reaches before it (a record there would get the new start and land off its neighbours).
+    private var reanchoredAtSensorClock: UInt32?
     /// Published during the current connection: never re-published in the same connection (the app
     /// has had no chance to store them yet, so the floor cannot be above them).
     private var publishedThisConnection: Set<UInt32> = []
@@ -135,8 +180,8 @@ final class G7ReadingPipeline {
     private var published: [G7ReadingMark] = []
     private var pendingBackfillFrames: [Data] = []
     private var backfillBatch: [UInt32: GlucoseReading] = [:]
-    /// Backfill frames received since the last flush, for the diagnostic summary.
-    private var backfillFramesReceived = 0
+    /// Backfill records received since the last flush, for the diagnostic summary.
+    private var backfillRecordsReceived = 0
     private let log: (String) -> Void
 
     init(
@@ -179,7 +224,9 @@ final class G7ReadingPipeline {
         clock = nil
         pendingBackfillFrames.removeAll()
         backfillBatch.removeAll()
-        backfillFramesReceived = 0
+        backfillRecordsReceived = 0
+        backfillRequestThisConnection = nil
+        backfillRequestFinished = false
     }
 
     /// The connection turned out not to be ours (a `05` rejection after authenticating, safety review
@@ -189,7 +236,7 @@ final class G7ReadingPipeline {
         if dropped > 0 { log("backfill: \(dropped) record(s) of a rejected connection discarded") }
         pendingBackfillFrames.removeAll()
         backfillBatch.removeAll()
-        backfillFramesReceived = 0
+        backfillRecordsReceived = 0
         clock = nil
     }
 
@@ -225,10 +272,12 @@ final class G7ReadingPipeline {
             return output
         }
         let startEstablished = sessionStart != nil
+        let startBefore = sessionStart
         guard acceptAnchor(anchor.sessionStart), let start = sessionStart else {
             output.state = .failed(G7FailureReason.sensorClockMismatch)
             return output
         }
+        if startEstablished, startBefore != start { reanchoredAtSensorClock = message.sensorClock }
         clock = anchor
         let mapped = sensorState(message.algorithmState, start: start, parameters: parameters, now: receivedAt)
         // Anchored: this packet's sensor clock agrees with a start established before it, so
@@ -260,15 +309,78 @@ final class G7ReadingPipeline {
         return output
     }
 
-    /// A 9-byte record from the Backfill characteristic.
+    /// One Backfill notification: one or more 9-byte records (a G7 packs two to a notification;
+    /// G7SensorKit G7Sensor.swift:963-976). Any other length is not a record frame.
     func handleBackfillFrame(_ frame: Data, now: Date) {
         guard !isUnsupportedSensor, !sessionEnded else { return }
-        backfillFramesReceived += 1
-        if clock == nil {
-            pendingBackfillFrames.append(frame)
-        } else {
-            decodeBackfill(frame, now: now)
+        let length = G7BackfillMessage.length
+        guard !frame.isEmpty, frame.count % length == 0 else {
+            log("backfill: notification of unexpected length \(frame.count) ignored: \(frame.hexString)")
+            return
         }
+        for offset in stride(from: 0, to: frame.count, by: length) {
+            let record = Data(frame[frame.startIndex + offset ..< frame.startIndex + offset + length])
+            backfillRecordsReceived += 1
+            if clock == nil {
+                pendingBackfillFrames.append(record)
+            } else {
+                decodeBackfill(record, now: now)
+            }
+        }
+    }
+
+    /// D65: the sensor-time range to ask the sensor for on this connection, or nil (see "Backfill
+    /// request" in the type documentation). At most one per connection; call after this
+    /// connection's `0x4E`.
+    func nextBackfillRequest() -> (start: UInt32, end: UInt32)? {
+        guard canDateBackfill, backfillRequestThisConnection == nil, let clock, let parameters else { return nil }
+        let end = clock.sensorClockAtReceipt
+        func open(_ candidate: UInt32) -> Bool {
+            !answeredStarts.contains(candidate) && unansweredAttempts[candidate, default: 0] < Self.maximumAttemptsPerStart
+        }
+        var candidates: [UInt32] = []
+        var covers: [UInt32] = []
+        // The newest reading published before this connection: everything after it is missing.
+        if let before = published.last(where: { !publishedThisConnection.contains($0.sensorTimestamp) }) {
+            candidates.append(before.sensorTimestamp)
+        }
+        // m1: what was delivered but never stored is above the floor.
+        if case .storedThrough(let stored) = backfillFloor, open(stored) {
+            candidates.append(stored)
+            covers.append(stored)
+        }
+        // The oldest stored gap the sensor has not answered for yet.
+        if let gap = storedGapStarts.first(where: open) {
+            candidates.append(gap)
+            covers.append(gap)
+        }
+        let windowStart = end > Self.maximumBackfillWindow ? end - Self.maximumBackfillWindow : 0
+        let warmUpEnd = UInt32(min(parameters.warmUp, TimeInterval(UInt32.max)))
+        let fallback = end > Self.defaultBackfillWindow ? end - Self.defaultBackfillWindow : 0
+        let start = max(candidates.min() ?? fallback, windowStart, warmUpEnd, reanchoredAtSensorClock ?? 0)
+        // Review m4: measured to this connection's reading (its age is not a gap), else the clock.
+        let reached = published.last(where: { publishedThisConnection.contains($0.sensorTimestamp) })?.sensorTimestamp ?? end
+        guard reached > start, reached - start > Self.backfillGapThreshold, end > start else { return nil }
+        for candidate in covers { unansweredAttempts[candidate, default: 0] += 1 }
+        backfillRequestThisConnection = (start, end, covers)
+        return (start, end)
+    }
+
+    /// `59` on Write_Control: the sensor finished sending backfill.
+    func backfillFinished() -> Output {
+        backfillRequestFinished = true
+        if let request = backfillRequestThisConnection {
+            // Every floor and gap start inside the answered range is answered, not only the ones that
+            // set its start (on device the first answer covered all five gaps, and each was then
+            // asked for again on its own).
+            var answered = request.covers + storedGapStarts.filter { (request.start...request.end).contains($0) }
+            if case .storedThrough(let stored) = backfillFloor, (request.start...request.end).contains(stored) { answered.append(stored) }
+            for candidate in answered {
+                answeredStarts.insert(candidate)
+                unansweredAttempts[candidate] = nil
+            }
+        }
+        return flushBackfill()
     }
 
     /// `0x59` backfill finished: publish the batch in ascending order. A record whose date would break
@@ -297,9 +409,9 @@ final class G7ReadingPipeline {
             output.readings.append(reading)
         }
         backfillBatch.removeAll()
-        if backfillFramesReceived > 0 {
-            log("backfill: \(backfillFramesReceived) record(s) received, \(output.readings.count) published")
-            backfillFramesReceived = 0
+        if backfillRecordsReceived > 0 {
+            log("backfill: \(backfillRecordsReceived) record(s) received, \(output.readings.count) published")
+            backfillRecordsReceived = 0
         }
         if republished > 0 {
             log("backfill: \(republished) record(s) above the stored floor published again (m1)")
@@ -313,6 +425,9 @@ final class G7ReadingPipeline {
 
     /// Disconnect: publish what could be dated, discard the rest (CGMG7Transmitter.swift:656-667).
     func endConnection() -> Output {
+        if let request = backfillRequestThisConnection, !backfillRequestFinished {
+            log("backfill: no 59 for the request \(request.start)-\(request.end) before disconnect")
+        }
         if !pendingBackfillFrames.isEmpty {
             log("backfill: discarded \(pendingBackfillFrames.count) record(s) without an agreeing sensor clock")
             pendingBackfillFrames.removeAll()
